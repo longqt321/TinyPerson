@@ -1,0 +1,48 @@
+# Local environments and generated caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.history/
+
+# Local credentials and machine-specific settings
+.env
+.env.*
+!.env.example
+.modal/
+.aws/
+.ssh/
+.config/
+*credentials*
+*secret*
+*.key
+*.pem
+*.p12
+*.pfx
+*.token
+
+# Datasets, model weights, and experiment artifacts
+data/
+datasets/
+outputs/*
+!outputs/.gitkeep
+runs/
+wandb/
+mlruns/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npy
+*.npz
+*.zip
+*.tar
+*.tar.gz
+*.log
+
+# Local reconstruction document; source files remain the canonical copy
+REPO_BLUEPRINT.md

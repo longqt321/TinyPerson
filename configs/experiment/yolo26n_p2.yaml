@@ -1,0 +1,19 @@
+name: yolo26n_p2
+seed: 42
+model:
+  config: configs/model/yolo26n_p2.yaml
+  pretrained: /mnt/models/pretrained/yolo26n.pt
+data:
+  config: /mnt/data/tinyperson/dataset.yaml
+train:
+  epochs: 100
+  imgsz: 1280
+  batch: 16
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs

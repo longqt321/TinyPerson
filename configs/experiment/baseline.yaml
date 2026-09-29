@@ -1,0 +1,19 @@
+name: baseline
+seed: 42
+model:
+  config: configs/model/yolo26n-no-p5.yaml
+  pretrained: null
+data:
+  config: /mnt/data/tinyperson/data.yaml
+train:
+  epochs: 5
+  imgsz: 1280
+  batch: 16
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs
