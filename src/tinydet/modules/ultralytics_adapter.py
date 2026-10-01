@@ -9,47 +9,42 @@ import inspect
 import math
 from copy import deepcopy
 
-import torch
 from ultralytics.models.yolo.detect import DetectionTrainer
 from ultralytics.nn.tasks import DetectionModel
 from ultralytics.utils import RANK
 from ultralytics.utils.loss import BboxLoss, E2ELoss, v8DetectionLoss
+from ultralytics.utils.tal import TaskAlignedAssigner
 
-from tinydet.modules.nwd import NWDBboxLoss
-from tinydet.modules.rfla import RFLAAssigner
+from tinydet.modules.nwd import NWDBboxLoss, nwd_similarity
+
+
+class NWDTaskAlignedAssigner(TaskAlignedAssigner):
+    """Use pixel-space NWD wherever TAL uses its CIoU overlap."""
+
+    def __init__(self, *args, constant=12.8, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.constant = constant
+
+    def iou_calculation(self, gt_bboxes, pd_bboxes):
+        return nwd_similarity(gt_bboxes, pd_bboxes, self.constant)
 
 
 def validate_modules(options):
     options = {} if options is None else deepcopy(options)
-    if not isinstance(options, dict) or set(options) - {"rfla", "nwd"}:
-        raise ValueError("modules accepts only rfla and nwd mappings")
-    allowed = {
-        "rfla": {"enabled", "topk", "extra_topk", "shrink", "chunk_size", "receptive_fields",
-                 "erf_fraction", "sigma_stride_ratio", "inside_only"},
-        "nwd": {"enabled", "constant", "weight"},
-    }
+    if not isinstance(options, dict) or set(options) - {"nwd_tal", "nwd"}:
+        raise ValueError("modules accepts only nwd_tal and nwd mappings")
+    allowed = {"nwd_tal": {"enabled", "constant"}, "nwd": {"enabled", "constant", "weight"}}
     for name, config in options.items():
         if not isinstance(config, dict) or set(config) - allowed[name]:
             raise ValueError(f"Invalid {name} options; allowed keys: {sorted(allowed[name])}")
         if type(config.get("enabled", False)) is not bool:
             raise ValueError(f"{name}.enabled must be a boolean")
+        constant = config.get("constant", 12.8)
+        if not isinstance(constant, (int, float)) or not math.isfinite(constant) or constant <= 0:
+            raise ValueError(f"{name}.constant must be positive and finite")
     nwd = options.get("nwd", {})
-    if not math.isfinite(nwd.get("constant", 12.8)) or nwd.get("constant", 12.8) <= 0:
-        raise ValueError("nwd.constant must be positive and finite")
     if not 0 <= nwd.get("weight", 1.0) <= 1:
         raise ValueError("nwd.weight must lie in [0, 1]")
-    rfla = options.get("rfla", {})
-    for key, default in (("erf_fraction", 0.5), ("sigma_stride_ratio", 4.0)):
-        if not math.isfinite(rfla.get(key, default)) or rfla.get(key, default) <= 0:
-            raise ValueError(f"rfla.{key} must be positive and finite")
-    fields = rfla.get("receptive_fields")
-    if fields is not None and (not isinstance(fields, list) or not fields or
-                              any(not math.isfinite(x) or x <= 0 for x in fields)):
-        raise ValueError("rfla.receptive_fields must be positive pixel diameters, one per Detect level")
-    if type(rfla.get("inside_only", False)) is not bool:
-        raise ValueError("rfla.inside_only must be a boolean")
-    # Validate assignment options before allocating GPU resources.
-    RFLAAssigner(1, **{key: rfla[key] for key in ("topk", "extra_topk", "shrink", "chunk_size") if key in rfla})
     return options
 
 
@@ -59,33 +54,16 @@ class ModuleDetectionLoss(v8DetectionLoss):
             raise RuntimeError("Unsupported Ultralytics BboxLoss API; tested version is 8.4.164")
         super().__init__(model, tal_topk=tal_topk, tal_topk2=tal_topk2)
         options = validate_modules(model.yaml.get("tinydet_modules", {}))
-        rfla, nwd = options.get("rfla", {}), options.get("nwd", {})
-        self.rfla_options = rfla if rfla.get("enabled", False) else None
-        if self.rfla_options is not None:
-            if self.use_dfl and not rfla.get("inside_only", False):
-                raise ValueError("RFLA outside-GT assignment requires signed box distances (YOLO26 reg_max=1). "
-                                 "For DFL heads set rfla.inside_only=true for the constrained adaptation.")
-            fields = rfla.get("receptive_fields")
-            if fields is not None and len(fields) != len(self.stride):
-                raise ValueError("rfla.receptive_fields must match the number of Detect levels")
-            self.assigner = RFLAAssigner(
-                self.nc, one_to_one=(tal_topk2 == 1 or tal_topk == 1),
-                **{key: rfla[key] for key in ("topk", "extra_topk", "shrink", "chunk_size", "inside_only") if key in rfla},
+        tal, nwd = options.get("nwd_tal", {}), options.get("nwd", {})
+        if tal.get("enabled", False):
+            original = self.assigner
+            self.assigner = NWDTaskAlignedAssigner(
+                topk=original.topk, topk2=original.topk2, num_classes=original.num_classes,
+                alpha=original.alpha, beta=original.beta, stride=original.stride,
+                eps=original.eps, constant=tal.get("constant", 12.8),
             )
         if nwd.get("enabled", False):
             self.bbox_loss = NWDBboxLoss(self.bbox_loss, nwd.get("constant", 12.8), nwd.get("weight", 1.0))
-
-    def get_assigned_targets_and_loss(self, preds, batch):
-        if self.rfla_options is not None:
-            options = self.rfla_options
-            fields = options.get("receptive_fields")
-            sigmas = (torch.tensor(fields, device=self.device) * options.get("erf_fraction", 0.5) / 2
-                      if fields is not None else self.stride * options.get("sigma_stride_ratio", 4.0))
-            self.assigner.sigma = torch.cat([
-                torch.ones(feat.shape[-2] * feat.shape[-1], device=feat.device) * sigma
-                for feat, sigma in zip(preds["feats"], sigmas)
-            ])
-        return super().get_assigned_targets_and_loss(preds, batch)
 
 
 class ModuleDetectionModel(DetectionModel):

@@ -10,7 +10,7 @@ from ultralytics import YOLO
 from tinydet.analysis.frequency import save_frequency
 
 
-def analyze_activations(run: Path, image_path: Path, layer: int = 16) -> Path:
+def analyze_activations(run: Path, image_path: Path, layer: int = 16, *, render: bool = True) -> Path:
     if not torch.cuda.is_available():
         raise RuntimeError("Activation analysis requires Modal GPU")
     if not image_path.is_file():
@@ -36,6 +36,13 @@ def analyze_activations(run: Path, image_path: Path, layer: int = 16) -> Path:
     output = run / "diagnostics" / "activations" / f"layer{layer}"
     output.mkdir(parents=True, exist_ok=True)
     np.save(output / "feature.npy", feature)
+    if render:
+        render_activations(output, layer)
+    return output
+
+
+def render_activations(output: Path, layer: int):
+    feature = np.load(output / "feature.npy")
     plt.imsave(output / "feature.png", feature, cmap="viridis")
-    save_frequency(feature, run / "diagnostics" / "frequency" / f"layer{layer}")
+    save_frequency(feature, output.parent.parent / "frequency" / f"layer{layer}")
     return output

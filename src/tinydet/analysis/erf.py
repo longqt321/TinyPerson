@@ -8,7 +8,7 @@ from PIL import Image
 from ultralytics import YOLO
 
 
-def analyze_erf(run: Path, image_path: Path, layer: int = 16) -> Path:
+def analyze_erf(run: Path, image_path: Path, layer: int = 16, *, render: bool = True) -> Path:
     if not torch.cuda.is_available():
         raise RuntimeError("ERF analysis requires Modal GPU")
     if not image_path.is_file():
@@ -35,5 +35,12 @@ def analyze_erf(run: Path, image_path: Path, layer: int = 16) -> Path:
     output = run / "diagnostics" / "erf"
     output.mkdir(parents=True, exist_ok=True)
     np.save(output / f"layer{layer}.npy", gradient)
+    if render:
+        render_erf(output, layer)
+    return output
+
+
+def render_erf(output: Path, layer: int):
+    gradient = np.load(output / f"layer{layer}.npy")
     plt.imsave(output / f"layer{layer}.png", gradient, cmap="magma")
     return output

@@ -1,0 +1,46 @@
+# One-seed 50-epoch screening; all models start from random initialization.
+seed: 42
+data:
+  config: /mnt/data/tinyperson/data.yaml
+train:
+  epochs: 50
+  patience: 15
+  imgsz: 1280
+  batch: 16
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.5
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  bgr: 0.0
+  mosaic: 1.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+models:
+- name: deep_heavy
+  config: configs/model/yolo26n-deep-heavy.yaml
+- name: baseline
+  config: configs/model/yolo26n.yaml
+- name: moderate_heavy_bottom
+  config: configs/model/yolo26n-moderate-heavy-bottom.yaml
+- name: strong_heavy_bottom
+  config: configs/model/yolo26n-strong-heavy-bottom.yaml

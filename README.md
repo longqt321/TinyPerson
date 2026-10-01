@@ -81,6 +81,10 @@ W&B runs use `latest` for the newest execution of each `config.name` and `histor
 
 Training now records mean box AP at every IoU threshold from 0.50 through 0.95 in steps of 0.05. Each new run saves `metrics/ap_iou.csv` per epoch and sends the same `metrics/AP0.50(B)` through `metrics/AP0.95(B)` series to W&B. Separate `evaluate` calls add `AP0.50` through `AP0.95` to `metrics/val.json` or `metrics/test.json`. These values are averaged over classes from the same Ultralytics validation pass; older CSV files cannot recover the intermediate IoU thresholds without rerunning validation on their checkpoints.
 
-### RFLA / NWD ablation
+### NWD placement ablation
 
-Use `configs/experiment/ablation_rfla_nwd.yaml` for the four-way P3-only baseline/RFLA/NWD/RFLA+NWD comparison. Optional `model.modules` settings select training-only plugins. See [implementation, compatibility limits and commands](docs/RFLA_NWD_ABLATION.md). The Modal image pins Ultralytics 8.4.164 to match the tested loss API and local lockfile.
+Use `configs/experiment/ablation_nwd.yaml` for the four-way P3-only baseline/NWD regression/NWD TAL/NWD full comparison. Optional `model.modules` settings select training-only plugins. See [method and commands](docs/NWD_ABLATION.md). The Modal image pins Ultralytics 8.4.164 to match the tested loss API and local lockfile.
+
+### Heavy-Bottom architecture study
+
+[Study design, checkpoint choices, diagnostics, four architectures, and commands](docs/HEAVY_BOTTOM.md). Phase 1 uses an explicit Modal run `best.pt` or pretrained YOLO26n checkpoint without retraining. Phase 2 is a separate four-model, 50-epoch screening configuration at `configs/experiment/heavy_bottom.yaml`; it is not launched automatically.

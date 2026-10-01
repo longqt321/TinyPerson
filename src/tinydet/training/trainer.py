@@ -1,13 +1,14 @@
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
+from time import monotonic
 
 import torch
 
 from tinydet.models.registry import build_model
 from tinydet.training.iou_logging import log_ap_by_iou
 from tinydet.utils.config import load_config
-from tinydet.utils.experiment import create_run, update_status
+from tinydet.utils.experiment import create_run, metadata, update_status, write_json
 from tinydet.utils.seed import set_seed
 
 
@@ -46,19 +47,29 @@ def train(
                 dir="/tmp",
             )
             print(f"W&B: {wandb_run.url}", flush=True)
-            from tinydet.utils.wandb_runs import tag_latest_runs
-
-            try:
-                tag_latest_runs(wandb.Api(timeout=15), f"{wandb_run.entity}/{wandb_run.project}", config.name)
-            except Exception as exc:
-                print(f"Warning: W&B latest tags could not be refreshed: {exc}", flush=True)
         model.callbacks["on_fit_epoch_end"].insert(0, partial(log_ap_by_iou, wandb_enabled=bool(project)))
         training_options = {}
         if "modules" in config.model:
             from tinydet.modules.ultralytics_adapter import ModuleDetectionTrainer
 
             training_options["trainer"] = partial(ModuleDetectionTrainer, modules=config.model["modules"])
+        started = monotonic()
+        torch.cuda.reset_peak_memory_stats()
         model.train(**training_options, data=str(dataset_config or config.data["config"]), project=str(run), name="training", exist_ok=True, save=True, save_period=-1, seed=config.seed, **{**config.train, "plots": False})
+        # Ultralytics already validates the stripped best.pt at the end of training.
+        # Keep this result for compare; explicit evaluate still performs fresh validation.
+        if Path(model.trainer.best).is_file() and model.trainer.validator.metrics.box.all_ap.size:
+            from tinydet.evaluation.evaluator import metric_summary
+
+            best_metrics = metric_summary(model.trainer.validator.metrics)
+            best_metrics["source"] = "training_final_best"
+            write_json(run / "metrics" / "val.json", best_metrics)
+        details = metadata(run)
+        if wandb_run is not None:
+            details["wandb_project"] = f"{wandb_run.entity}/{wandb_run.project}"
+        details["training_seconds"] = monotonic() - started
+        details["peak_vram_gb"] = torch.cuda.max_memory_allocated() / 2**30
+        write_json(run / "metadata.json", details)
         update_status(run, "TRAINED")
     except Exception as exc:
         update_status(run, "FAILED", str(exc))
