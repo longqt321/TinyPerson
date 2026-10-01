@@ -41,4 +41,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
             raise ValueError(f"Missing {section} fields: {', '.join(sorted(missing))}")
     if raw["train"]["epochs"] <= 0 or raw["train"]["imgsz"] <= 0 or raw["train"]["batch"] <= 0:
         raise ValueError("epochs, imgsz and batch must be positive")
+    if "modules" in raw["model"]:
+        from tinydet.modules.ultralytics_adapter import validate_modules
+
+        raw["model"]["modules"] = validate_modules(raw["model"]["modules"])
     return ExperimentConfig(**{key: raw[key] for key in required})

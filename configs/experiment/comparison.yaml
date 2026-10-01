@@ -1,0 +1,51 @@
+# Shared dataset and training settings. Only model.config changes between runs.
+seed: 42
+data:
+  config: /mnt/data/tinyperson/data.yaml
+train:
+  epochs: 50
+  patience: 15
+  imgsz: 1280
+  batch: 16
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  # Explicit Ultralytics 8.4.164 detection augmentation defaults.
+  # Geometry: rotation/shear/perspective are off; translation and scale are on.
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.5
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  # Color: HSV jitter on; RGB-to-BGR swap off.
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  bgr: 0.0
+  # Image mixing: mosaic on, disabled for the final 10 epochs.
+  mosaic: 1.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  # torch.compile is separate from YAML validation; leave off until GPU-verified.
+  compile: false
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+models:
+  - name: yolo26n
+    config: configs/model/yolo26n.yaml
+  - name: yolo26n_no_p5
+    config: configs/model/yolo26n-no-p5.yaml
+  - name: yolo26n_p2
+    config: configs/model/yolo26n_p2.yaml
+  - name: yolo26n_p3_only
+    config: configs/model/yolo26n-p3-only.yaml

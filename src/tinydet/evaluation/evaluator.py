@@ -4,6 +4,7 @@ import torch
 import yaml
 from ultralytics import YOLO
 
+from tinydet.evaluation.iou_metrics import ap_by_iou
 from tinydet.utils.experiment import write_json
 
 
@@ -31,6 +32,7 @@ def evaluate(run: Path, split: str = "val") -> dict:
         "AP75": result.box.map75,
         "precision": result.box.mp,
         "recall": result.box.mr,
+        **ap_by_iou(result.box),
     }
     write_json(run / "metrics" / f"{split}.json", metrics)
     if split == "test":

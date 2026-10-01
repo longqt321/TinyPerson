@@ -14,4 +14,5 @@ if __name__ == "__main__":
     destination = args.output.joinpath(*parts)
     destination.mkdir(parents=True, exist_ok=True)
     for item in args.include:
-        subprocess.run(["modal", "volume", "get", "tiny-person-runs", f"/{args.run}/{item}", str(destination / item)], check=True)
+        target = destination if item in {"metrics", "diagnostics", "checkpoints"} else destination / item
+        subprocess.run(["modal", "volume", "get", "tiny-person-runs", f"/{args.run}/{item}", str(target)], check=True)

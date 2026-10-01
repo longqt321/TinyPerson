@@ -1,3 +1,4 @@
+import hashlib
 import json
 import platform
 import subprocess
@@ -54,7 +55,7 @@ def create_run(config: ExperimentConfig, source_git: tuple[str, bool] | None = N
     (run / "config.yaml").write_text(yaml.safe_dump(asdict(config), sort_keys=False))
     packages = {name: version(name) for name in ("torch", "torchvision", "ultralytics", "numpy", "opencv-python-headless")}
     gpu = torch.cuda.get_device_name() if torch.cuda.is_available() else None
-    info = {"experiment": config.name, "run_id": run.name, "seed": config.seed, "git_commit": commit, "git_dirty": dirty, "python": platform.python_version(), "torch": packages["torch"], "torchvision": packages["torchvision"], "ultralytics": packages["ultralytics"], "cuda": torch.version.cuda, "gpu": gpu, "dataset": config.data["config"], "started_at": now.isoformat(), "status": "CREATED"}
+    info = {"experiment": config.name, "run_id": run.name, "seed": config.seed, "git_commit": commit, "git_dirty": dirty, "python": platform.python_version(), "torch": packages["torch"], "torchvision": packages["torchvision"], "ultralytics": packages["ultralytics"], "cuda": torch.version.cuda, "gpu": gpu, "dataset": config.data["config"], "model_config_sha256": hashlib.sha256(Path(config.model["config"]).read_bytes()).hexdigest(), "started_at": now.isoformat(), "status": "CREATED"}
     write_json(run / "metadata.json", info)
     (run / "environment.txt").write_text("\n".join([f"python=={platform.python_version()}", *(f"{key}=={value}" for key, value in packages.items()), f"cuda={torch.version.cuda}", f"gpu={gpu}"]) + "\n")
     return run

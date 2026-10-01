@@ -7,3 +7,14 @@ def test_baseline_forward():
     model = build_model({"config": "configs/model/yolo26n.yaml", "pretrained": None})
     result = model.predict(torch.zeros(1, 3, 64, 64), device="cpu", verbose=False)
     assert result[0].orig_shape == (64, 64)
+
+
+def test_truncated_context_models_forward():
+    for path, strides in (
+        ("configs/model/yolo26n-no-p5.yaml", [8.0, 16.0]),
+        ("configs/model/yolo26n-p3-only.yaml", [8.0]),
+    ):
+        model = build_model({"config": path, "pretrained": None})
+        assert model.model.stride.tolist() == strides
+        result = model.predict(torch.zeros(1, 3, 64, 64), device="cpu", verbose=False)
+        assert result[0].orig_shape == (64, 64)

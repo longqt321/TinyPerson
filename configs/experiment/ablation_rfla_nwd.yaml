@@ -1,0 +1,68 @@
+# 2x2 training-module ablation. All four use the same architecture, data and train settings.
+# NWD constant is in input-image pixels; 12.8 is the paper starting point, not tuned for TinyPerson.
+# RFLA TRF=159 pixels includes the P3 regression head; sigma=159*0.5/2=39.75.
+seed: 42
+data:
+  config: /mnt/data/tinyperson/data.yaml
+train:
+  epochs: 100
+  patience: 15
+  imgsz: 1280
+  batch: 16
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  degrees: 10.0
+  translate: 0.1
+  scale: 0.1
+  shear: 0.1
+  perspective: 0.00001
+  flipud: 0.5
+  fliplr: 0.5
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  bgr: 0.0
+  mosaic: 1.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.1
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+models:
+  - name: yolo26n_p3_ablation_baseline
+    config: configs/model/yolo26n-p3-only.yaml
+    modules: {}
+  - name: yolo26n_p3_ablation_rfla
+    config: configs/model/yolo26n-p3-only.yaml
+    modules:
+      rfla: &id001
+        enabled: true
+        receptive_fields:
+          - 159.0
+        erf_fraction: 0.5
+        topk: 3
+        extra_topk: 1
+        shrink: 0.9
+        chunk_size: 32
+        inside_only: false
+  - name: yolo26n_p3_ablation_nwd
+    config: configs/model/yolo26n-p3-only.yaml
+    modules:
+      nwd: &id002
+        enabled: true
+        constant: 12.8
+        weight: 0.5
+  - name: yolo26n_p3_ablation_rfla_nwd
+    config: configs/model/yolo26n-p3-only.yaml
+    modules:
+      rfla: *id001
+      nwd: *id002
