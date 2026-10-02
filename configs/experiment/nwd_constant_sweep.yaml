@@ -1,0 +1,55 @@
+# Phase 1 NWD regression sensitivity screening.
+# The completed C=12.8 seed-42 run is the reference; only the two new constants are trained here.
+# Keep native TAL and all other settings fixed. NWD constants are in input-image pixels.
+seed: 42
+data:
+  config: /mnt/data/tinyperson/data.yaml
+train:
+  epochs: 50
+  patience: 15
+  imgsz: 1280
+  batch: 16
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  degrees: 5.0
+  translate: 0.1
+  scale: 0.1
+  shear: 0.1
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.015
+  hsv_s: 0.3
+  hsv_v: 0.3
+  bgr: 0.0
+  mosaic: 0.5
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.1
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+  cache: true
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+models:
+  - name: nwd_loss_c6_4
+    config: configs/model/yolo26n-p3-only.yaml
+    modules:
+      nwd:
+        enabled: true
+        constant: 6.4
+        weight: 1.0
+  - name: nwd_loss_c25_6
+    config: configs/model/yolo26n-p3-only.yaml
+    modules:
+      nwd:
+        enabled: true
+        constant: 25.6
+        weight: 1.0
