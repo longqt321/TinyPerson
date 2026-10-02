@@ -1,0 +1,49 @@
+# Test whether the P3-only NWD result transfers to the stronger YOLO26n-P2 architecture.
+# Both variants train from scratch with identical settings; only the regression box term changes.
+seed: 42
+data:
+  config: /mnt/data/tinyperson/data.yaml
+train:
+  epochs: 50
+  patience: 15
+  imgsz: 1280
+  batch: 16
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  degrees: 5.0
+  translate: 0.1
+  scale: 0.1
+  shear: 0.1
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.015
+  hsv_s: 0.3
+  hsv_v: 0.3
+  bgr: 0.0
+  mosaic: 0.5
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.1
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+  cache: true
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+models:
+  - name: p2_baseline
+    config: configs/model/yolo26n_p2.yaml
+  - name: p2_nwd_c6_4
+    config: configs/model/yolo26n_p2.yaml
+    modules:
+      nwd:
+        enabled: true
+        constant: 6.4
+        weight: 1.0
