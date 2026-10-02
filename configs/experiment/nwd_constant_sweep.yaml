@@ -1,5 +1,5 @@
 # Phase 1 NWD regression sensitivity screening.
-# The completed C=12.8 seed-42 run is the reference; only the two new constants are trained here.
+# C=6.4, 12.8, and 25.6 have already been screened; this extension probes the lower range.
 # Keep native TAL and all other settings fixed. NWD constants are in input-image pixels.
 seed: 42
 data:
@@ -39,17 +39,17 @@ output:
   root: /mnt/runs
   wandb_project: tiny-person-research
 models:
-  - name: nwd_loss_c6_4
+  - name: nwd_loss_c1_6
     config: configs/model/yolo26n-p3-only.yaml
     modules:
       nwd:
         enabled: true
-        constant: 6.4
+        constant: 1.6
         weight: 1.0
-  - name: nwd_loss_c25_6
+  - name: nwd_loss_c3_2
     config: configs/model/yolo26n-p3-only.yaml
     modules:
       nwd:
         enabled: true
-        constant: 25.6
+        constant: 3.2
         weight: 1.0
