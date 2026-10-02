@@ -1,5 +1,11 @@
 # NWD placement ablation on P3-only YOLO26n
 
+## Experimental scope and compute constraint
+
+The NWD placement ablation and normalization-constant tuning in this research phase were intentionally performed on `yolo26n-p3-only.yaml`, not on the standard YOLO26n or YOLO26n-P2 architecture. This was a screening decision driven by limited GPU availability, training time, and compute budget: the P3-only detector is cheaper to iterate on, allowing the placement ablation and coarse `C` sensitivity study to be completed before spending substantially more resources on the stronger P2 model.
+
+Consequently, every NWD result reported in this document is architecture-specific. A negative result on P3-only YOLO26n must not be stated as evidence that NWD is ineffective on YOLO26n generally, and the selected constant must not be assumed to be globally optimal across detection architectures. The P3-only experiments are used to select a plausible NWD formulation and candidate constant under a constrained screening budget. Transfer to the stronger YOLO26n-P2 architecture is evaluated separately with a controlled P2 baseline-versus-NWD experiment.
+
 Normalized Wasserstein Distance (NWD) is a bounding-box similarity metric. For boxes `(cx, cy, w, h)`, squared distance is `Δcx² + Δcy² + (Δw/2)² + (Δh/2)²`; similarity is `exp(-sqrt(distance)/C)`. We use `C=12.8` input-image pixels. The implementation shares one formula for assignment and regression. This constant is a starting point, not tuned for TinyPerson. See the [original NWD paper](https://arxiv.org/abs/2110.13389).
 
 Ultralytics 8.4.164 calls `TaskAlignedAssigner.iou_calculation` from `get_box_metrics`. Its original overlap is nonnegative CIoU. NWD-TAL substitutes NWD there; TAL still computes `classification_score^0.5 * similarity^6`, filters centers inside GT, selects top-k, resolves conflicts, and normalizes quality-aware target scores. YOLO26 end-to-end loss uses one-to-many top-k 10 and one-to-one top-k 7 then top-k 1. Both branches receive the same metric. TAL receives predicted and GT `xyxy` boxes in input-image pixels, because `v8DetectionLoss.get_assigned_targets_and_loss` multiplies decoded boxes and anchor points by stride before assignment.
@@ -32,7 +38,7 @@ The TAL result is also consistent with the validation box objective: `baseline` 
 
 Combining NWD assignment and NWD regression does not recover the degradation. `nwd_full` is the weakest variant, so the current result provides no evidence of a beneficial interaction between the two NWD placements.
 
-This is a single-seed result and `C=12.8` was not tuned for TinyPerson. The result therefore rejects the tested configuration, not NWD in general. The next controlled experiment should keep native TAL and screen the NWD regression constant before spending compute on multi-seed confirmation. A minimal first sweep is `C ∈ {6.4, 12.8, 25.6}` with architecture, initialization protocol, augmentation, optimizer, L1 term, and evaluation fixed. If NWD regression remains below baseline across that sensitivity check, this branch should be treated as a negative result rather than tuning additional components until a gain appears.
+This is a single-seed, P3-only result and `C=12.8` was not tuned for TinyPerson. The result therefore rejects the tested configuration on this screening architecture, not NWD in general and not NWD on YOLO26n-P2. The next controlled experiment keeps native TAL and screens the NWD regression constant on the same P3-only architecture before spending compute on a stronger detector. The coarse sweep uses `C ∈ {1.6, 3.2, 6.4, 12.8, 25.6}` with architecture, initialization protocol, augmentation, optimizer, L1 term, and evaluation fixed.
 
 Run on Modal only when ready to spend GPU time:
 
