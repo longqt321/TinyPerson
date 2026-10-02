@@ -36,6 +36,10 @@ def finalize(run: Path) -> None:
 
     from ultralytics.utils.plotting import plot_results
 
-    plot_results(file=str(results), save_dir=str(metrics))
+    plot_results(file=str(results))
+
+    plot = training / "results.png"
+    if plot.is_file():
+        shutil.copy2(plot, metrics / "train.png")
 
     update_status(run, "COMPLETED")
