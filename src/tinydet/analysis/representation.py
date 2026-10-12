@@ -24,6 +24,28 @@ from tinydet.analysis.heavy_bottom import (
 )
 
 
+
+def validate_output_directory(allowed_root, candidate):
+    """Keep all generated artifacts beneath a fixed, trusted directory.
+
+    Resolve both paths to reject '..' traversal and existing symlinks leading
+    outside the allowed root. Never use unsanitized CLI/YAML paths as sinks.
+    """
+    root = Path(allowed_root).resolve()
+    target = Path(candidate).resolve()
+    if target == root or root not in target.parents:
+        raise ValueError(f"Diagnostic output must be a subdirectory of {root}")
+    return target
+
+
+def _artifact(base, relative):
+    """Validate every artifact path against the previously accepted output root."""
+    path = (base / relative).resolve()
+    if base not in path.parents:
+        raise ValueError("Artifact path escapes diagnostic output directory")
+    return path
+
+
 def write_csv(path, rows):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,9 +234,12 @@ class FeatureCapture:
             handle.remove()
 
 
-def study(checkpoint, dataset_file, output, cfg):
+def study(checkpoint, dataset_file, output, cfg, *, allowed_output_root=None):
     """GPU/CPU single-process study; outputs compact CSV, plots and report."""
-    checkpoint, dataset_file, output = Path(checkpoint), Path(dataset_file), Path(output)
+    checkpoint, dataset_file = Path(checkpoint), Path(dataset_file)
+    if allowed_output_root is None:
+        raise ValueError("A trusted allowed_output_root is required")
+    output = validate_output_directory(allowed_output_root, output)
     output.mkdir(parents=True, exist_ok=True)
     seed = int(cfg["study"].get("seed", 42))
     rng = np.random.default_rng(seed)
@@ -328,7 +353,7 @@ def study(checkpoint, dataset_file, output, cfg):
                             shift_rows.append({"image": str(path), **row})
     finally:
         collector.close()
-    write_csv(output / "samples.csv", samples)
+    write_csv(_artifact(output, "samples.csv"), samples)
     outputs = {"checkpoint": str(checkpoint), "dataset": str(dataset_file), "split": split,
                "input_size": size, "stages": selected, "device": device,
                "sample_count": len(samples), "image_count": len(by_image),
@@ -356,15 +381,15 @@ def study(checkpoint, dataset_file, output, cfg):
                                    "positives": int(labels[take].sum()),
                                    "negatives": int((1-labels[take]).sum()),
                                    "auprc": average_precision(labels[take], score[take])})
-        write_csv(output / "separability" / "metrics.csv", probe_rows)
+        write_csv(_artifact(output, "separability/metrics.csv"), probe_rows)
         outputs["probe_records"] = len(probe_rows)
-        plot_by_stage(probe_rows, "auprc", output / "separability" / "auprc_by_stage.png")
+        plot_by_stage(probe_rows, "auprc", _artifact(output, "separability/auprc_by_stage.png"))
     if deltas:
-        write_csv(output / "counterfactual" / "feature_delta.csv", deltas)
-        plot_by_stage(deltas, "delta", output / "counterfactual" / "delta_by_stage.png")
+        write_csv(_artifact(output, "counterfactual/feature_delta.csv"), deltas)
+        plot_by_stage(deltas, "delta", _artifact(output, "counterfactual/delta_by_stage.png"))
     if shift_rows:
-        write_csv(output / "shift_stability" / "feature_stability.csv", vector_rows)
-        write_csv(output / "shift_stability" / "predictions.csv", shift_rows)
+        write_csv(_artifact(output, "shift_stability/feature_stability.csv"), vector_rows)
+        write_csv(_artifact(output, "shift_stability/predictions.csv"), shift_rows)
         baseline = {(r["image"], r["gt_id"]): r["detected"]
                     for r in shift_rows if r["dx"] == 0 and r["dy"] == 0}
         flips = []
@@ -373,12 +398,12 @@ def study(checkpoint, dataset_file, output, cfg):
             if key not in baseline:
                 continue
             flips.append({**row, "changed": int(baseline[key] != row["detected"])})
-        write_csv(output / "shift_stability" / "miss_flip_rate.csv", flips)
-        plot_shift(flips, output / "shift_stability" / "phase_heatmap.png")
+        write_csv(_artifact(output, "shift_stability/miss_flip_rate.csv"), flips)
+        plot_shift(flips, _artifact(output, "shift_stability/phase_heatmap.png"))
         outputs["shift_flip_rate_nonzero"] = float(np.mean(
             [r["changed"] for r in flips if r["dx"] or r["dy"]])) if any(
             r["dx"] or r["dy"] for r in flips) else None
-    (output / "metadata.json").write_text(json.dumps(outputs, indent=2) + "\n")
+    (_artifact(output, "metadata.json")).write_text(json.dumps(outputs, indent=2) + "\n")
     report = [
         "# Representation breakdown: exploratory diagnostics",
         "", f"- Checkpoint: {checkpoint}", f"- Dataset split: {split}",
@@ -390,8 +415,8 @@ def study(checkpoint, dataset_file, output, cfg):
         "- Translation sensitivity mixes feature response with detector decisions.",
         "- Do not interpret observed effects as novel without prior-art comparisons.",
     ]
-    (output / "report").mkdir(exist_ok=True)
-    (output / "report" / "findings.md").write_text("\n".join(report) + "\n")
+    _artifact(output, "report").mkdir(exist_ok=True)
+    (_artifact(output, "report/findings.md")).write_text("\n".join(report) + "\n")
     return outputs
 
 
