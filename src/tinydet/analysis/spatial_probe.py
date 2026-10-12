@@ -34,7 +34,7 @@ def source_group(path, kind):
     if kind == "image":
         return str(path.resolve())
     # TinyPerson filenames commonly include V0031 (original video identity).
-    match = re.search(r"(?:^|[_-])V(\\d+)(?:[_-]|$)", path.stem, re.IGNORECASE)
+    match = re.search(r"(?:^|[_-])V(\d+)(?:[_-]|$)", path.stem, re.IGNORECASE)
     if not match:
         raise ValueError(
             f"Cannot derive source video from {path.name}; use --group-by image explicitly"
