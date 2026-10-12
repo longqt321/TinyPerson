@@ -154,3 +154,46 @@ def test_shift_validity_is_per_instance():
     interior = {"box": [20, 20, 30, 30]}
     assert not valid_shift([near_edge, interior], 0, 0, 128)
     assert valid_shift([interior], 0, 0, 128)
+
+
+def test_parse_segmentation_polygon_matches_extents():
+    from tinydet.analysis.representation import parse_yolo_box
+
+    # Real dataset pattern: class + five normalized polygon vertices.
+    values = [0, 0.495494125, 0.8185910703125,
+              0.3424795140625, 0.8185910703125,
+              0.3424795140625, 0.87147388125,
+              0.495494125, 0.87147388125,
+              0.495494125, 0.8185910703125]
+    x1, y1, x2, y2 = parse_yolo_box(values)
+    assert np.allclose([x1, y1, x2, y2],
+                       [0.3424795140625, 0.8185910703125,
+                        0.495494125, 0.87147388125])
+
+
+def test_parse_detection_label_and_reject_malformed():
+    import pytest
+
+    from tinydet.analysis.representation import parse_yolo_box
+
+    assert np.allclose(parse_yolo_box([0, 0.5, 0.5, 0.2, 0.4]),
+                       [0.4, 0.3, 0.6, 0.7])
+    with pytest.raises(ValueError):
+        parse_yolo_box([0, 0.1, 0.2, 0.3, 0.4, 0.5])
+    with pytest.raises(ValueError):
+        parse_yolo_box([0, 0.5, 0.5, 0.6, 1.5])
+
+
+def test_gt_entries_deduplicates_repeated_segments(tmp_path):
+    from tinydet.analysis.representation import gt_entries
+
+    directory = tmp_path / "valid"
+    (directory / "images").mkdir(parents=True)
+    (directory / "labels").mkdir()
+    img = directory / "images" / "test.jpg"
+    label = directory / "labels" / "test.txt"
+    line = "0 0.2 0.3 0.4 0.3 0.4 0.5 0.2 0.5"
+    label.write_text(line + "\n" + line + "\n")
+    objects = gt_entries(img, 640, 640, 2, 0, 0)
+    assert len(objects) == 1
+    assert objects[0]["box"] == [256.0, 384.0, 512.0, 640.0]
