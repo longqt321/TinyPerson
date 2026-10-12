@@ -234,189 +234,281 @@ class FeatureCapture:
             handle.remove()
 
 
-def study(checkpoint, dataset_file, output, cfg, *, allowed_output_root=None):
-    """GPU/CPU single-process study; outputs compact CSV, plots and report."""
-    checkpoint, dataset_file = Path(checkpoint), Path(dataset_file)
-    if allowed_output_root is None:
-        raise ValueError("A trusted allowed_output_root is required")
-    output = validate_output_directory(allowed_output_root, output)
-    output.mkdir(parents=True, exist_ok=True)
-    seed = int(cfg["study"].get("seed", 42))
-    rng = np.random.default_rng(seed)
-    size = int(cfg["data"].get("imgsz", 1280))
-    count = int(cfg["data"].get("sample_count", 400))
-    split = cfg["data"].get("split", "val")
-    stages_requested = cfg["model"].get("stages", ["C2", "C3", "C4", "C5"])
-    enabled = cfg["experiments"]
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    detector = YOLO(str(checkpoint))
-    net = detector.model.to(device).eval()
-    stages = resolve_stages(net)
-    selected = {k: stages[k] for k in stages_requested}
-    collector = FeatureCapture(net, selected)
+def choose_instances(dataset_file, split, size, count, rng):
     dataset = dataset_images(dataset_file, split)
     if not dataset:
         raise ValueError("Dataset split has no images")
     grouped = defaultdict(list)
     for path in dataset:
-        with Image.open(path) as im:
-            width, height = im.size
+        with Image.open(path) as image:
+            width, height = image.size
         scale, left, top = letterbox_geometry(width, height, size)
         for row in gt_entries(path, width, height, scale, left, top):
             grouped[row["size_bin"]].append((path, row))
     for group in grouped.values():
         rng.shuffle(group)
     chosen = []
+    bins = ("0-8", "8-16", "16-32", ">32")
     while len(chosen) < count and any(grouped.values()):
-        for key in ("0-8", "8-16", "16-32", ">32"):
-            if grouped[key] and len(chosen) < count:
-                chosen.append(grouped[key].pop())
+        for size_group in bins:
+            if grouped[size_group] and len(chosen) < count:
+                chosen.append(grouped[size_group].pop())
     by_image = defaultdict(list)
     for path, row in chosen:
         by_image[path].append(row)
-    samples, vector_rows, deltas, shift_rows = [], [], [], []
-    stage_vectors = defaultdict(list)
-    try:
-        for path, targets in by_image.items():
-            with Image.open(path) as im:
-                letterboxed, _, _, _ = letterbox(im.convert("RGB"), size)
-            tensor = input_tensor(letterboxed, device)
-            features = collector.forward(net, tensor)
-            # Exclude all annotated objects from background sampling, not just selected probes.
-            with Image.open(path) as source:
-                source_w, source_h = source.size
-            scale, left, top = letterbox_geometry(source_w, source_h, size)
-            all_gt = gt_entries(path, source_w, source_h, scale, left, top)
-            for row in targets:
-                samples.append({"image": str(path), **row})
-            if enabled.get("separability", {}).get("enabled", True):
-                negatives = background_centers(targets,
-                    int(enabled["separability"].get("background_samples_per_object", 3)),
-                    size, rng, exclusions=all_gt)
-                training_group = split_image(path, seed)
-                for stage, feature in features.items():
-                    for row in targets:
-                        stage_vectors[stage].append((training_group, 1, row["size_bin"],
-                                                      vector_at(feature, center(row["box"]), size)))
-                    for xy in negatives:
-                        stage_vectors[stage].append((training_group, 0, "background",
-                                                      vector_at(feature, xy, size)))
-            if enabled.get("counterfactual", {}).get("enabled", True):
-                # A simple background-fill control, explicitly not a clean causal intervention.
-                for row in targets:
-                    x1, y1, x2, y2 = [int(v) for v in row["box"]]
-                    x1, y1 = max(0, x1), max(0, y1)
-                    x2, y2 = min(size, max(x1 + 1, x2)), min(size, max(y1 + 1, y2))
-                    erased = tensor.clone()
-                    surround = tensor[..., max(0, y1-5):min(size, y2+5),
-                                      max(0, x1-5):min(size, x2+5)]
-                    fill = surround.mean(dim=(-1, -2), keepdim=True)
-                    erased[..., y1:y2, x1:x2] = fill
-                    changed = collector.forward(net, erased)
-                    for stage in features:
-                        deltas.append({"image": str(path), "gt_id": row["gt_id"],
-                                       "size_bin": row["size_bin"], "stage": stage,
-                                       "delta": relative_feature_delta(
-                                           features[stage], changed[stage], row["box"], size),
-                                       "control": "mean_fill_proxy"})
-            if enabled.get("shift_stability", {}).get("enabled", True):
-                offsets = enabled["shift_stability"].get("offsets", [0, 1, 2, 3])
-                for dx in offsets:
-                    for dy in offsets:
-                        if any(not (6 <= row["box"][0] + dx and 6 <= row["box"][1] + dy
-                                   and row["box"][2] + dx < size-6
-                                   and row["box"][3] + dy < size-6) for row in targets):
-                            continue
-                        shifted = shift_tensor(tensor, dx, dy)
-                        # Ultralytics tensor-input prediction: batch BCHW float [0,1].
-                        try:
-                            detected = detection_rows(detector, shifted, targets, (dx, dy), size)
-                        except Exception as exc:
-                            raise RuntimeError("Shift detection inference failed") from exc
-                        shifted_features = collector.forward(net, shifted)
-                        for row in detected:
-                            original = next(item for item in targets
-                                            if item["gt_id"] == row["gt_id"])
-                            original_center = center(original["box"])
-                            shifted_center = (original_center[0] + dx,
-                                              original_center[1] + dy)
-                            for stage in selected:
-                                a = vector_at(features[stage], original_center, size)
-                                b = vector_at(shifted_features[stage], shifted_center, size)
-                                difference = float(np.linalg.norm(a - b) /
-                                                   (np.linalg.norm(a) + 1e-6))
-                                vector_rows.append({"image": str(path), "gt_id": row["gt_id"],
-                                                    "size_bin": row["size_bin"], "stage": stage,
-                                                    "dx": dx, "dy": dy,
-                                                    "relative_change": difference})
-                            shift_rows.append({"image": str(path), **row})
-    finally:
-        collector.close()
-    write_csv(_artifact(output, "samples.csv"), samples)
-    outputs = {"checkpoint": str(checkpoint), "dataset": str(dataset_file), "split": split,
-               "input_size": size, "stages": selected, "device": device,
-               "sample_count": len(samples), "image_count": len(by_image),
-               "counterfactual_validity": "mean-fill proxy; NOT clean object removal"}
-    if stage_vectors:
-        probe_rows = []
-        for stage, items in stage_vectors.items():
-            train = [(label, vector) for group, label, _, vector in items if group == "train"]
-            test = [(label, vector, bin_name) for group, label, bin_name, vector
-                    in items if group == "test"]
-            if len({label for label, _ in train}) < 2 or not test:
+    return by_image
+
+
+def collect_separability(path, targets, all_gt, features, context, vectors):
+    settings = context["enabled"]["separability"]
+    negatives = background_centers(
+        targets, int(settings.get("background_samples_per_object", 3)),
+        context["size"], context["rng"], exclusions=all_gt,
+    )
+    group = split_image(path, context["seed"])
+    for stage, feature in features.items():
+        for target in targets:
+            vectors[stage].append((
+                group, 1, target["size_bin"],
+                vector_at(feature, center(target["box"]), context["size"]),
+            ))
+        for xy in negatives:
+            vectors[stage].append((
+                group, 0, "background", vector_at(feature, xy, context["size"]),
+            ))
+
+
+def collect_counterfactual(path, targets, tensor, features, context, deltas):
+    for target in targets:
+        x1, y1, x2, y2 = (int(value) for value in target["box"])
+        size = context["size"]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(size, max(x1 + 1, x2)), min(size, max(y1 + 1, y2))
+        edited = tensor.clone()
+        neighborhood = tensor[..., max(0, y1 - 5):min(size, y2 + 5),
+                              max(0, x1 - 5):min(size, x2 + 5)]
+        edited[..., y1:y2, x1:x2] = neighborhood.mean(dim=(-1, -2), keepdim=True)
+        changed = context["collector"].forward(context["net"], edited)
+        for stage in features:
+            deltas.append({
+                "image": str(path), "gt_id": target["gt_id"],
+                "size_bin": target["size_bin"], "stage": stage,
+                "delta": relative_feature_delta(
+                    features[stage], changed[stage], target["box"], size,
+                ),
+                "control": "mean_fill_proxy",
+            })
+
+
+def valid_shift(targets, dx, dy, size):
+    return all(
+        6 <= target["box"][0] + dx
+        and 6 <= target["box"][1] + dy
+        and target["box"][2] + dx < size - 6
+        and target["box"][3] + dy < size - 6
+        for target in targets
+    )
+
+
+def collect_shift_vectors(path, targets, features, shifted_features, dx, dy, size, rows):
+    target_by_id = {item["gt_id"]: item for item in targets}
+    for target in targets:
+        original = target_by_id[target["gt_id"]]
+        xy = center(original["box"])
+        shifted_xy = (xy[0] + dx, xy[1] + dy)
+        for stage in features:
+            a = vector_at(features[stage], xy, size)
+            b = vector_at(shifted_features[stage], shifted_xy, size)
+            rows.append({
+                "image": str(path), "gt_id": target["gt_id"],
+                "size_bin": target["size_bin"], "stage": stage,
+                "dx": dx, "dy": dy,
+                "relative_change": float(
+                    np.linalg.norm(a - b) / (np.linalg.norm(a) + 1e-6)
+                ),
+            })
+
+
+def collect_shift_stability(path, targets, tensor, features, context, shift_rows, vector_rows):
+    size = context["size"]
+    offsets = context["enabled"]["shift_stability"].get("offsets", [0, 1, 2, 3])
+    for dx in offsets:
+        for dy in offsets:
+            if not valid_shift(targets, dx, dy, size):
                 continue
-            score = linear_probe([v for _, v in train], [y for y, _ in train],
-                                 [v for _, v, _ in test])
-            labels = np.array([y for y, _, _ in test])
-            for size_group in ("all", "0-8", "8-16", "16-32", ">32"):
-                if size_group == "all":
-                    take = np.ones(len(test), bool)
-                else:
-                    take = np.array([label == 0 or group == size_group
-                                     for label, _, group in test])
-                if not np.any(labels[take] == 1):
-                    continue
-                probe_rows.append({"stage": stage, "size_bin": size_group,
-                                   "positives": int(labels[take].sum()),
-                                   "negatives": int((1-labels[take]).sum()),
-                                   "auprc": average_precision(labels[take], score[take])})
-        write_csv(_artifact(output, "separability/metrics.csv"), probe_rows)
-        outputs["probe_records"] = len(probe_rows)
-        plot_by_stage(probe_rows, "auprc", _artifact(output, "separability/auprc_by_stage.png"))
-    if deltas:
-        write_csv(_artifact(output, "counterfactual/feature_delta.csv"), deltas)
-        plot_by_stage(deltas, "delta", _artifact(output, "counterfactual/delta_by_stage.png"))
-    if shift_rows:
-        write_csv(_artifact(output, "shift_stability/feature_stability.csv"), vector_rows)
-        write_csv(_artifact(output, "shift_stability/predictions.csv"), shift_rows)
-        baseline = {(r["image"], r["gt_id"]): r["detected"]
-                    for r in shift_rows if r["dx"] == 0 and r["dy"] == 0}
-        flips = []
-        for row in shift_rows:
-            key = row["image"], row["gt_id"]
-            if key not in baseline:
+            shifted = shift_tensor(tensor, dx, dy)
+            detected = detection_rows(
+                context["detector"], shifted, targets, (dx, dy), size,
+            )
+            shifted_features = context["collector"].forward(context["net"], shifted)
+            collect_shift_vectors(
+                path, targets, features, shifted_features, dx, dy, size, vector_rows,
+            )
+            shift_rows.extend({"image": str(path), **row} for row in detected)
+
+
+def analyze_image(path, targets, context, collected):
+    size = context["size"]
+    with Image.open(path) as source:
+        width, height = source.size
+        image, _, _, _ = letterbox(source.convert("RGB"), size)
+    tensor = input_tensor(image, context["device"])
+    features = context["collector"].forward(context["net"], tensor)
+    scale, left, top = letterbox_geometry(width, height, size)
+    all_gt = gt_entries(path, width, height, scale, left, top)
+    collected["samples"].extend({"image": str(path), **target} for target in targets)
+    if context["enabled"].get("separability", {}).get("enabled", True):
+        collect_separability(
+            path, targets, all_gt, features, context, collected["stage_vectors"],
+        )
+    if context["enabled"].get("counterfactual", {}).get("enabled", True):
+        collect_counterfactual(
+            path, targets, tensor, features, context, collected["deltas"],
+        )
+    if context["enabled"].get("shift_stability", {}).get("enabled", True):
+        collect_shift_stability(
+            path, targets, tensor, features, context,
+            collected["shift_rows"], collected["vector_rows"],
+        )
+
+
+def probe_metrics(vectors):
+    rows = []
+    for stage, items in vectors.items():
+        training = [(label, feature) for group, label, _, feature in items
+                    if group == "train"]
+        testing = [(label, feature, size_group) for group, label, size_group, feature
+                   in items if group == "test"]
+        if not testing or len({label for label, _ in training}) < 2:
+            continue
+        scores = linear_probe(
+            [feature for _, feature in training],
+            [label for label, _ in training],
+            [feature for _, feature, _ in testing],
+        )
+        labels = np.array([label for label, _, _ in testing])
+        for size_group in ("all", "0-8", "8-16", "16-32", ">32"):
+            mask = np.array([
+                size_group == "all" or label == 0 or group == size_group
+                for label, _, group in testing
+            ])
+            if not (labels[mask] == 1).any():
                 continue
-            flips.append({**row, "changed": int(baseline[key] != row["detected"])})
+            rows.append({
+                "stage": stage, "size_bin": size_group,
+                "positives": int(labels[mask].sum()),
+                "negatives": int((1 - labels[mask]).sum()),
+                "auprc": average_precision(labels[mask], scores[mask]),
+            })
+    return rows
+
+
+def shift_flip_rows(rows):
+    baseline = {
+        (row["image"], row["gt_id"]): row["detected"]
+        for row in rows if row["dx"] == 0 and row["dy"] == 0
+    }
+    return [
+        {**row, "changed": int(baseline[(row["image"], row["gt_id"])] != row["detected"])}
+        for row in rows if (row["image"], row["gt_id"]) in baseline
+    ]
+
+
+def save_results(output, collected, metadata):
+    write_csv(_artifact(output, "samples.csv"), collected["samples"])
+    vectors = collected["stage_vectors"]
+    if vectors:
+        probes = probe_metrics(vectors)
+        write_csv(_artifact(output, "separability/metrics.csv"), probes)
+        metadata["probe_records"] = len(probes)
+        plot_by_stage(probes, "auprc", _artifact(output, "separability/auprc_by_stage.png"))
+    if collected["deltas"]:
+        delta_rows = collected["deltas"]
+        write_csv(_artifact(output, "counterfactual/feature_delta.csv"), delta_rows)
+        plot_by_stage(delta_rows, "delta", _artifact(output, "counterfactual/delta_by_stage.png"))
+    if collected["shift_rows"]:
+        shifted = collected["shift_rows"]
+        write_csv(_artifact(output, "shift_stability/feature_stability.csv"),
+                  collected["vector_rows"])
+        write_csv(_artifact(output, "shift_stability/predictions.csv"), shifted)
+        flips = shift_flip_rows(shifted)
         write_csv(_artifact(output, "shift_stability/miss_flip_rate.csv"), flips)
         plot_shift(flips, _artifact(output, "shift_stability/phase_heatmap.png"))
-        outputs["shift_flip_rate_nonzero"] = float(np.mean(
-            [r["changed"] for r in flips if r["dx"] or r["dy"]])) if any(
-            r["dx"] or r["dy"] for r in flips) else None
-    (_artifact(output, "metadata.json")).write_text(json.dumps(outputs, indent=2) + "\n")
+        nonzero = [row["changed"] for row in flips if row["dx"] or row["dy"]]
+        metadata["shift_flip_rate_nonzero"] = (
+            float(np.mean(nonzero)) if nonzero else None
+        )
+
+
+def save_report(output, metadata):
+    # Report names are fixed; user-supplied paths have already been confined.
     report = [
         "# Representation breakdown: exploratory diagnostics",
-        "", f"- Checkpoint: {checkpoint}", f"- Dataset split: {split}",
-        f"- Input size: {size}", f"- Instances: {len(samples)}",
-        f"- Unique images: {len(by_image)}", "",
+        "", f"- Checkpoint: {metadata['checkpoint']}",
+        f"- Dataset split: {metadata['split']}",
+        f"- Input size: {metadata['input_size']}",
+        f"- Instances: {metadata['sample_count']}",
+        f"- Unique images: {metadata['image_count']}", "",
         "## Important limitations", "",
         "- A linear-probe decline is not proof that information was destroyed.",
         "- Mean-filled object removal is a proxy confounded by edit artifacts.",
         "- Translation sensitivity mixes feature response with detector decisions.",
         "- Do not interpret observed effects as novel without prior-art comparisons.",
     ]
-    _artifact(output, "report").mkdir(exist_ok=True)
-    (_artifact(output, "report/findings.md")).write_text("\n".join(report) + "\n")
-    return outputs
+    report_dir = _artifact(output, "report")
+    report_dir.mkdir(exist_ok=True)
+    _artifact(output, "report/findings.md").write_text("\n".join(report) + "\n")
+    _artifact(output, "metadata.json").write_text(
+        json.dumps(metadata, indent=2) + "\n"
+    )
+
+
+def study(checkpoint, dataset_file, output, cfg, *, allowed_output_root=None):
+    """Run the frozen-feature study with a trusted filesystem boundary."""
+    if allowed_output_root is None:
+        raise ValueError("A trusted allowed_output_root is required")
+    output = validate_output_directory(allowed_output_root, output)
+    output.mkdir(parents=True, exist_ok=True)
+    checkpoint, dataset_file = Path(checkpoint), Path(dataset_file)
+    seed = int(cfg["study"].get("seed", 42))
+    size = int(cfg["data"].get("imgsz", 1280))
+    split = cfg["data"].get("split", "val")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    detector = YOLO(str(checkpoint))
+    net = detector.model.to(device).eval()
+    stages = resolve_stages(net)
+    selected = {key: stages[key] for key in cfg["model"].get(
+        "stages", ["C2", "C3", "C4", "C5"],
+    )}
+    instances = choose_instances(
+        dataset_file, split, size, int(cfg["data"].get("sample_count", 400)),
+        np.random.default_rng(seed),
+    )
+    collected = {
+        "samples": [], "vector_rows": [], "deltas": [], "shift_rows": [],
+        "stage_vectors": defaultdict(list),
+    }
+    collector = FeatureCapture(net, selected)
+    context = {
+        "net": net, "detector": detector, "collector": collector,
+        "size": size, "seed": seed, "device": device,
+        "enabled": cfg["experiments"], "rng": np.random.default_rng(seed),
+    }
+    try:
+        for path, targets in instances.items():
+            analyze_image(path, targets, context, collected)
+    finally:
+        collector.close()
+    metadata = {
+        "checkpoint": str(checkpoint), "dataset": str(dataset_file),
+        "split": split, "input_size": size, "stages": selected,
+        "device": device, "sample_count": len(collected["samples"]),
+        "image_count": len(instances),
+        "counterfactual_validity": "mean-fill proxy; NOT clean object removal",
+    }
+    save_results(output, collected, metadata)
+    save_report(output, metadata)
+    return metadata
 
 
 def plot_by_stage(rows, value, path):
