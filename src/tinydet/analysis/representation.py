@@ -92,23 +92,61 @@ def input_tensor(image, device):
     return torch.from_numpy(pixels.copy()).permute(2, 0, 1).unsqueeze(0).to(device)
 
 
+def parse_yolo_box(values):
+    """Return normalized xyxy from detection or segmentation YOLO annotations.
+
+    Detection: class cx cy w h (5 fields).
+    Segmentation: class x1 y1 x2 y2 x3 y3 ... (>= 3 vertices).
+    """
+    if len(values) == 5:
+        cx, cy, bw, bh = values[1:5]
+        box = [cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]
+    elif len(values) >= 7 and len(values) % 2 == 1:
+        coordinates = np.asarray(values[1:], dtype=float).reshape(-1, 2)
+        box = [
+            float(coordinates[:, 0].min()), float(coordinates[:, 1].min()),
+            float(coordinates[:, 0].max()), float(coordinates[:, 1].max()),
+        ]
+    else:
+        raise ValueError("Malformed YOLO detection/segmentation label")
+    if (not np.isfinite(box).all() or min(box) < 0 or max(box) > 1
+            or box[2] <= box[0] or box[3] <= box[1]):
+        raise ValueError("Invalid normalized YOLO bounding box")
+    return box
+
+
 def gt_entries(path, width, height, scale, left, top):
     labels = label_path(path)
     entries = []
     if not labels.is_file():
         return entries
+    seen = set()
     for i, line in enumerate(labels.read_text().splitlines()):
-        values = [float(x) for x in line.split()]
-        if len(values) < 5 or int(values[0]) != 0:
+        if not line.strip():
             continue
-        cx, cy, bw, bh = values[1:5]
-        box = [(cx - bw / 2) * width, (cy - bh / 2) * height,
-               (cx + bw / 2) * width, (cy + bh / 2) * height]
+        try:
+            values = [float(x) for x in line.split()]
+        except ValueError as exc:
+            raise ValueError(f"Invalid label at {labels}:{i + 1}") from exc
+        if not values or not np.isfinite(values).all():
+            raise ValueError(f"Invalid label at {labels}:{i + 1}")
+        if values[0] != 0:
+            continue
+        # Match Ultralytics' duplicate-row deduplication for repeated labels.
+        signature = tuple(values)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        try:
+            x1, y1, x2, y2 = parse_yolo_box(values)
+        except ValueError as exc:
+            raise ValueError(f"{labels}:{i + 1}: {exc}") from exc
+        box = [x1 * width, y1 * height, x2 * width, y2 * height]
         mapped = map_box(box, scale, left, top)
-        if mapped[2] <= mapped[0] or mapped[3] <= mapped[1]:
-            continue
-        entries.append({"gt_id": i, "box": mapped,
-                        "size_bin": size_bin(mapped[2] - mapped[0], mapped[3] - mapped[1])})
+        entries.append({
+            "gt_id": i, "box": mapped,
+            "size_bin": size_bin(mapped[2] - mapped[0], mapped[3] - mapped[1]),
+        })
     return entries
 
 

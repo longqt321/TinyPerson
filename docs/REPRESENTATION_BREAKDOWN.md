@@ -106,3 +106,18 @@ its warning.
   for all offsets. Zero flips with zero baseline recall do not imply stability.
 - This PR does not implement texture-matched negatives, causal interventions,
   or subpixel feature alignment; those require separate methodological validation.
+
+## Annotation format correction
+
+The TinyTiny_person dataset contains **YOLO segmentation** labels (class followed by
+normalized polygon vertex pairs), not 5-field YOLO detection labels. Earlier
+versions interpreted the first four polygon coordinates as center/width/height;
+this yielded oversized, often off-image ground-truth boxes, a misleading
+size-bin audit, and near-zero IoU in shift diagnostics. Results from those
+versions must not be used for conclusions.
+
+The label parser now converts each segmentation polygon to its min/max vertex
+bounding box, retains 5-field detection support, validates coordinates, and
+skips repeated identical label rows. Re-run diagnostics in a new output folder,
+then compare GT counts against Ultralytics validation and visually overlay
+GT/prediction boxes before interpreting the measurements.
