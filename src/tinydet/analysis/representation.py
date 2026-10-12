@@ -69,7 +69,7 @@ def input_tensor(image, device):
     return torch.from_numpy(pixels.copy()).permute(2, 0, 1).unsqueeze(0).to(device)
 
 
-def gt_entries(path, size, width, height, scale, left, top):
+def gt_entries(path, width, height, scale, left, top):
     labels = label_path(path)
     entries = []
     if not labels.is_file():
@@ -100,7 +100,7 @@ def vector_at(feature, xy, input_size):
     return feature[0, :, iy, ix].detach().float().cpu().numpy()
 
 
-def background_centers(image, gt, count, size, rng, exclusions=None):
+def background_centers(gt, count, size, rng, exclusions=None):
     """Hard-ish local negatives and uniform negatives, all away from GT boxes."""
     boxes = [row["box"] for row in (exclusions if exclusions is not None else gt)]
     centers = []
@@ -183,7 +183,7 @@ def shift_tensor(tensor, dx, dy, fill=114 / 255):
     return shifted
 
 
-def detection_rows(detector, tensor, boxes, offset, names, size):
+def detection_rows(detector, tensor, boxes, offset, size):
     """Match class-0 detections to GT with a fixed confidence threshold."""
     with torch.no_grad():
         result = detector.predict(source=tensor, imgsz=size, conf=0.001,
@@ -262,7 +262,7 @@ def study(checkpoint, dataset_file, output, cfg, *, allowed_output_root=None):
         with Image.open(path) as im:
             width, height = im.size
         scale, left, top = letterbox_geometry(width, height, size)
-        for row in gt_entries(path, size, width, height, scale, left, top):
+        for row in gt_entries(path, width, height, scale, left, top):
             grouped[row["size_bin"]].append((path, row))
     for group in grouped.values():
         rng.shuffle(group)
@@ -286,11 +286,11 @@ def study(checkpoint, dataset_file, output, cfg, *, allowed_output_root=None):
             with Image.open(path) as source:
                 source_w, source_h = source.size
             scale, left, top = letterbox_geometry(source_w, source_h, size)
-            all_gt = gt_entries(path, size, source_w, source_h, scale, left, top)
+            all_gt = gt_entries(path, source_w, source_h, scale, left, top)
             for row in targets:
                 samples.append({"image": str(path), **row})
             if enabled.get("separability", {}).get("enabled", True):
-                negatives = background_centers(letterboxed, targets,
+                negatives = background_centers(targets,
                     int(enabled["separability"].get("background_samples_per_object", 3)),
                     size, rng, exclusions=all_gt)
                 training_group = split_image(path, seed)
@@ -330,8 +330,7 @@ def study(checkpoint, dataset_file, output, cfg, *, allowed_output_root=None):
                         shifted = shift_tensor(tensor, dx, dy)
                         # Ultralytics tensor-input prediction: batch BCHW float [0,1].
                         try:
-                            detected = detection_rows(detector, shifted, targets, (dx, dy),
-                                                      None, size)
+                            detected = detection_rows(detector, shifted, targets, (dx, dy), size)
                         except Exception as exc:
                             raise RuntimeError("Shift detection inference failed") from exc
                         shifted_features = collector.forward(net, shifted)
