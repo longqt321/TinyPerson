@@ -20,7 +20,7 @@ from PIL import Image
 from ultralytics import YOLO
 
 from tinydet.analysis.heavy_bottom import (
-    dataset_images, label_path, letterbox, map_box, resolve_stages, size_bin,
+    dataset_images, label_path, letterbox, letterbox_geometry, map_box, resolve_stages, size_bin,
 )
 
 
@@ -78,9 +78,9 @@ def vector_at(feature, xy, input_size):
     return feature[0, :, iy, ix].detach().float().cpu().numpy()
 
 
-def background_centers(image, gt, count, size, rng):
+def background_centers(image, gt, count, size, rng, exclusions=None):
     """Hard-ish local negatives and uniform negatives, all away from GT boxes."""
-    boxes = [row["box"] for row in gt]
+    boxes = [row["box"] for row in (exclusions if exclusions is not None else gt)]
     centers = []
     for row in gt:
         x, y = center(row["box"])
@@ -236,7 +236,6 @@ def study(checkpoint, dataset_file, output, cfg):
     for path in dataset:
         with Image.open(path) as im:
             width, height = im.size
-        from tinydet.analysis.heavy_bottom import letterbox_geometry
         scale, left, top = letterbox_geometry(width, height, size)
         for row in gt_entries(path, size, width, height, scale, left, top):
             grouped[row["size_bin"]].append((path, row))
@@ -261,15 +260,14 @@ def study(checkpoint, dataset_file, output, cfg):
             # Exclude all annotated objects from background sampling, not just selected probes.
             with Image.open(path) as source:
                 source_w, source_h = source.size
-            from tinydet.analysis.heavy_bottom import letterbox_geometry
             scale, left, top = letterbox_geometry(source_w, source_h, size)
             all_gt = gt_entries(path, size, source_w, source_h, scale, left, top)
             for row in targets:
                 samples.append({"image": str(path), **row})
             if enabled.get("separability", {}).get("enabled", True):
-                negatives = background_centers(letterboxed, all_gt,
+                negatives = background_centers(letterboxed, targets,
                     int(enabled["separability"].get("background_samples_per_object", 3)),
-                    size, rng)
+                    size, rng, exclusions=all_gt)
                 training_group = split_image(path, seed)
                 for stage, feature in features.items():
                     for row in targets:
