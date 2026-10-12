@@ -26,6 +26,22 @@ from tinydet.analysis.representation import (
     FeatureCapture, center, gt_entries, input_tensor, validate_output_directory, write_csv,
 )
 
+def resolve_spatial_checkpoint(run):
+    """Resolve finalized and raw Ultralytics run layouts without mutating artifacts."""
+    run = Path(run)
+    candidates = (
+        run / "checkpoints" / "best.pt",
+        run / "training" / "weights" / "best.pt",
+    )
+    for checkpoint in candidates:
+        if checkpoint.is_file():
+            return checkpoint
+    raise FileNotFoundError(
+        "Could not find a best.pt checkpoint; checked: "
+        + ", ".join(str(path) for path in candidates)
+    )
+
+
 BINS = ("0-8", "8-16", "16-32", ">32")
 METHODS = ("legacy_center", "center", "local_mean_3x3", "roi_align")
 
