@@ -28,7 +28,34 @@ token. Do not automatically fall back to image grouping. If there are too few
 distinct source videos, choose another independent dataset split or report the
 limitation.
 
-## Run
+## Modal GPU execution (recommended)
+
+The experiment uses a single Modal L4 for frozen YOLO26 backbone feature extraction.
+Feature sampling is **batched by image/stage/method** (not one kernel per object).
+The resulting vectors are written to the existing `tiny-person-runs` Volume;
+a separate Modal **CPU-only** worker then fits the scikit-learn probes, evaluates
+average precision, and runs paired group bootstrap. The GPU is released before
+CPU analysis. Nothing retrains the YOLO detector.
+
+```fish
+uv run --extra cpu modal run modal/app.py::spatial_probe \\
+  --run yolo26n/RUN_ID \\
+  --config configs/analysis/spatial_probe.yaml
+```
+
+Replace `yolo26n/RUN_ID` with the **actual Modal run reference** containing
+`checkpoints/best.pt`. This entrypoint reads dataset
+`/mnt/data/tinyperson/data.yaml` from `tiny-person-data` and saves results under
+`/mnt/runs/<run>/diagnostics/spatial_probe_v1/` in `tiny-person-runs`.
+No local model weights or dataset copy is needed for the Modal path.
+The output directory must be empty to avoid accidentally overwriting previous results;
+change `output.folder` to make a second run.
+
+## Local CPU fallback
+
+For a local CPU run, explicitly change `experiment.device: cpu` in the YAML,
+then use the command below. CPU-only extraction at 1280 can take much longer.
+
 
 ```fish
 uv sync --extra cpu --group dev
