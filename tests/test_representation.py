@@ -91,3 +91,33 @@ def test_study_requires_explicit_trusted_root(tmp_path):
 
     with pytest.raises(ValueError, match="allowed_output_root"):
         study(tmp_path / "best.pt", tmp_path / "data.yaml", tmp_path / "outputs" / "trial", {})
+
+
+def test_report_write_is_confined_and_rejects_symlink(tmp_path):
+    import pytest
+
+    from tinydet.analysis.representation import _write_text_artifact
+
+    output = tmp_path / "output"
+    output.mkdir()
+    _write_text_artifact(output, "report", "findings.md", "example")
+    assert (output / "report" / "findings.md").read_text() == "example"
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("protected")
+    (output / "report" / "findings.md").unlink()
+    (output / "report" / "findings.md").symlink_to(outside)
+    with pytest.raises(OSError):
+        _write_text_artifact(output, "report", "findings.md", "overwritten")
+    assert outside.read_text() == "protected"
+
+
+def test_report_writer_rejects_unapproved_artifact(tmp_path):
+    import pytest
+
+    from tinydet.analysis.representation import _write_text_artifact
+
+    with pytest.raises(ValueError):
+        _write_text_artifact(tmp_path, "../", "findings.md", "bad")
+    with pytest.raises(ValueError):
+        _write_text_artifact(tmp_path, "report", "../escape.txt", "bad")
