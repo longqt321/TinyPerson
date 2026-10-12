@@ -471,15 +471,13 @@ def representation_diagnose(run: str, config: str = "configs/analysis/representa
               max_containers=1, volumes=mounts, timeout=3600)
 def _spatial_probe_extract(run: str, config_text: str):
     """GPU-only frozen feature extraction; one L4, no detector training."""
-    from tinydet.analysis.spatial_probe import save_feature_cache
+    from tinydet.analysis.spatial_probe import resolve_spatial_checkpoint, save_feature_cache
     from tinydet.utils.experiment import resolve_run
 
     runs.reload()
     data.reload()
     target = resolve_run(RUN_ROOT, run)
-    checkpoint = target / "checkpoints" / "best.pt"
-    if not checkpoint.is_file():
-        raise FileNotFoundError(checkpoint)
+    checkpoint = resolve_spatial_checkpoint(target)
     dataset = DATA_ROOT / "tinyperson" / "data.yaml"
     if not dataset.is_file():
         raise FileNotFoundError(dataset)

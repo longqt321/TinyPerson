@@ -26,6 +26,21 @@ from tinydet.analysis.representation import (
     FeatureCapture, center, gt_entries, input_tensor, validate_output_directory, write_csv,
 )
 
+def resolve_spatial_checkpoint(run):
+    """Locate best.pt in finalized or raw Ultralytics run artifacts."""
+    run = Path(run)
+    candidates = (
+        run / "checkpoints" / "best.pt",
+        run / "training" / "weights" / "best.pt",
+    )
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise FileNotFoundError(
+        "Could not find best.pt; checked: " + ", ".join(map(str, candidates))
+    )
+
+
 BINS = ("0-8", "8-16", "16-32", ">32")
 METHODS = ("legacy_center", "center", "local_mean_3x3", "roi_align")
 
