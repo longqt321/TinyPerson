@@ -7,6 +7,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -15,7 +16,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import yaml
 from PIL import Image
 from ultralytics import YOLO
 
@@ -44,6 +44,29 @@ def _artifact(base, relative):
     if base not in path.parents:
         raise ValueError("Artifact path escapes diagnostic output directory")
     return path
+
+
+def _write_text_artifact(root, subfolder, filename, contents):
+    """Write to fixed artifact names relative to a validated directory handle.
+
+    File creation uses a directory descriptor and O_NOFOLLOW so an existing
+    destination symlink cannot redirect the write outside the study directory.
+    """
+    if subfolder not in ("", "report") or filename not in (
+        "metadata.json", "findings.md",
+    ):
+        raise ValueError("Unsupported report artifact")
+    destination = _artifact(root, subfolder) if subfolder else root
+    destination.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+    descriptor = os.open(destination, flags)
+    try:
+        output_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+        fd = os.open(filename, output_flags, 0o644, dir_fd=descriptor)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(contents)
+    finally:
+        os.close(descriptor)
 
 
 def write_csv(path, rows):
@@ -464,12 +487,8 @@ def save_report(output, metadata):
         "- Translation sensitivity mixes feature response with detector decisions.",
         "- Do not interpret observed effects as novel without prior-art comparisons.",
     ]
-    report_dir = _artifact(output, "report")
-    report_dir.mkdir(exist_ok=True)
-    _artifact(output, "report/findings.md").write_text("\n".join(report) + "\n")
-    _artifact(output, "metadata.json").write_text(
-        json.dumps(metadata, indent=2) + "\n"
-    )
+    _write_text_artifact(output, "report", "findings.md", "\n".join(report) + "\n")
+    _write_text_artifact(output, "", "metadata.json", json.dumps(metadata, indent=2) + "\n")
 
 
 def study(checkpoint, dataset_file, output, cfg, *, allowed_output_root=None):
