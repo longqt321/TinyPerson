@@ -77,3 +77,14 @@ Start with 50–200 instances to validate the pipeline; counterfactuals and
 shift experiments each trigger additional forward passes. A large full split
 can exceed the one-hour Modal diagnostics limit. Disable unneeded experiments
 in YAML when running larger studies.
+
+## Filesystem security
+
+The local CLI `--output` must resolve to a strict subdirectory of the
+repository's trusted `outputs/` directory. Absolute paths outside that root,
+`..` traversal, and symlink escapes are rejected. Modal diagnostics are limited
+to a subdirectory of the selected run's root in `tiny-person-runs`; YAML
+output paths cannot escape that run. The study validates the output root again
+before creating directories and writing CSV/plots/metadata. These boundaries
+address SonarCloud's CLI-to-filesystem path-traversal flow rather than ignoring
+its warning.
