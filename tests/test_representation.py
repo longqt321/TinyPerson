@@ -9,7 +9,9 @@ from tinydet.analysis.representation import (
 
 
 def test_group_split_is_repeatable():
-    assert split_image("images/one.jpg", 42) == split_image("images/one.jpg", 42)
+    result = split_image("images/one.jpg", 42)
+    assert result in {"train", "test"}
+    assert result == split_image("images/one.jpg", 42)
 
 
 def test_ranking_ap():
@@ -47,7 +49,7 @@ def test_delta_zero_and_nonzero():
 def test_background_sample_avoids_target():
     rng = np.random.default_rng(0)
     boxes = [{"box": [30, 30, 34, 34]}]
-    centers = background_centers(None, boxes, 100, 64, rng)
+    centers = background_centers(boxes, 100, 64, rng)
     assert all(not (27 <= x <= 37 and 27 <= y <= 37) for x, y in centers)
 
 
