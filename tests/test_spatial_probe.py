@@ -73,3 +73,33 @@ def test_batched_sampler_matches_single_sample():
         batch = sample_features(feature, boxes, 64, method)
         singles = np.stack([sample_feature(feature, b, 64, method) for b in boxes])
         np.testing.assert_allclose(batch, singles, rtol=1e-5, atol=1e-5)
+
+
+def test_spatial_checkpoint_prefers_finalized_layout(tmp_path):
+    from tinydet.analysis.spatial_probe import resolve_spatial_checkpoint
+
+    raw = tmp_path / "training" / "weights" / "best.pt"
+    raw.parent.mkdir(parents=True)
+    raw.write_bytes(b"raw")
+    finalized = tmp_path / "checkpoints" / "best.pt"
+    finalized.parent.mkdir()
+    finalized.write_bytes(b"finalized")
+    assert resolve_spatial_checkpoint(tmp_path) == finalized
+
+
+def test_spatial_checkpoint_supports_raw_training_layout(tmp_path):
+    from tinydet.analysis.spatial_probe import resolve_spatial_checkpoint
+
+    raw = tmp_path / "training" / "weights" / "best.pt"
+    raw.parent.mkdir(parents=True)
+    raw.write_bytes(b"raw")
+    assert resolve_spatial_checkpoint(tmp_path) == raw
+
+
+def test_spatial_checkpoint_missing_explains_both_candidates(tmp_path):
+    from tinydet.analysis.spatial_probe import resolve_spatial_checkpoint
+
+    with pytest.raises(FileNotFoundError) as error:
+        resolve_spatial_checkpoint(tmp_path)
+    assert "checkpoints/best.pt" in str(error.value)
+    assert "training/weights/best.pt" in str(error.value)
