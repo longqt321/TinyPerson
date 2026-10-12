@@ -26,5 +26,6 @@ experiments:
   shift_stability:
     enabled: true
     offsets: [0, 1, 2, 3]
+  # Diagnostic recall reported at 0.001, 0.01, 0.05, and 0.25; IoU >= 0.5.
 output:
   folder: diagnostics/representation
