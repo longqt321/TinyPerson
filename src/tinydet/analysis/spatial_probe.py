@@ -3,6 +3,7 @@
 GT ROIAlign is an oracle diagnostic, never an inference-time detector component.
 The probe is trained only on group-disjoint feature vectors.
 """
+import csv
 import json
 import re
 from collections import Counter, defaultdict
@@ -71,6 +72,36 @@ def sample_feature(feature, box, size, method):
     raise ValueError(f"Unknown sampler: {method}")
 
 
+def sample_features(feature, boxes, size, method):
+    """Batch sampler; one PyTorch operator call per stage/method per image."""
+    if not boxes:
+        return np.empty((0, feature.shape[1]), dtype=np.float32)
+    if feature.ndim != 4 or feature.shape[0] != 1:
+        raise ValueError("Expected NCHW feature with batch size 1")
+    _, channels, height, width = feature.shape
+    boxes_tensor = torch.as_tensor(boxes, device=feature.device, dtype=feature.dtype)
+    xy = (boxes_tensor[:, :2] + boxes_tensor[:, 2:]) / 2
+    if method == "legacy_center":
+        ix = (xy[:, 0] * width / size).long().clamp(0, width - 1)
+        iy = (xy[:, 1] * height / size).long().clamp(0, height - 1)
+        out = feature[0, :, iy, ix].T
+    elif method in ("center", "local_mean_3x3"):
+        source = (F.avg_pool2d(feature, 3, stride=1, padding=1)
+                  if method == "local_mean_3x3" else feature)
+        grid = (2 * xy / size - 1).reshape(1, -1, 1, 2)
+        out = F.grid_sample(source, grid, mode="bilinear",
+                            padding_mode="border", align_corners=False)[0, :, :, 0].T
+    elif method == "roi_align":
+        if width != height:
+            raise ValueError("ROIAlign requires square feature map in this experiment")
+        out = roi_align(feature, [boxes_tensor], output_size=(1, 1),
+                        spatial_scale=width / size, sampling_ratio=2,
+                        aligned=True)[:, :, 0, 0]
+    else:
+        raise ValueError(f"Unknown sampler: {method}")
+    return out.detach().float().cpu().numpy().reshape(-1, channels)
+
+
 def overlaps(a, b):
     w = max(0., min(a[2], b[2]) - max(a[0], b[0]))
     h = max(0., min(a[3], b[3]) - max(a[1], b[1]))
@@ -115,6 +146,7 @@ def extract(checkpoint, dataset, split, imgsz, seed, group_by, methods=METHODS,
             tensor = input_tensor(canvas, device)
             features = capture.forward(net, tensor)
             group = source_group(path, group_by)
+            image_boxes = []
             for row in all_gt:
                 negative = matched_negative(row, all_gt, imgsz, rng)
                 if negative is None:
@@ -125,11 +157,12 @@ def extract(checkpoint, dataset, split, imgsz, seed, group_by, methods=METHODS,
                                     "group": group, "gt_id": row["gt_id"],
                                     "size_bin": row["size_bin"], "label": positive,
                                     "x1": box[0], "y1": box[1], "x2": box[2], "y2": box[3]})
-                    for stage, feature in features.items():
-                        for method in methods:
-                            vectors[stage][method].append(
-                                sample_feature(feature, box, imgsz, method)
-                            )
+                    image_boxes.append(box)
+            for stage, feature in features.items():
+                for method in methods:
+                    vectors[stage][method].extend(
+                        sample_features(feature, image_boxes, imgsz, method)
+                    )
             if (index + 1) % 25 == 0:
                 print(f"Extracted {index+1}/{len(paths)} images", flush=True)
     finally:
@@ -282,6 +315,75 @@ def run(checkpoint, dataset, output, config, allowed_output_root):
             "AP of subgroup contrasts depends on negative sampling; compare matched cohorts only.",
             "Feature-map probing is correlational, not causal evidence of information loss.",
         ],
+    }
+    (output / "metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
+    return meta
+
+def save_feature_cache(checkpoint, dataset, output, config, allowed_output_root):
+    """GPU phase: extract vectors and save to volume, with no probe training."""
+    output = validate_output_directory(allowed_output_root, output)
+    if output.exists() and any(output.iterdir()):
+        raise ValueError(f"Output directory not empty: {output}")
+    settings = config.get("experiment", {})
+    device = settings.get("device", "cuda")
+    if device != "cuda" or not torch.cuda.is_available():
+        raise RuntimeError("Modal GPU extraction requires a working CUDA device")
+    output.mkdir(parents=True, exist_ok=True)
+    records, vectors = extract(
+        checkpoint, dataset, settings.get("split", "val"),
+        int(settings.get("imgsz", 1280)), int(settings.get("seed", 42)),
+        settings.get("group_by", "video"),
+        methods=tuple(settings.get("methods", METHODS)),
+        device=device, max_images=settings.get("max_images"),
+    )
+    if not records:
+        raise ValueError("No probe samples")
+    write_csv(output / "samples.csv", records)
+    flattened = {f"{stage}__{method}": arr for stage, values in vectors.items()
+                 for method, arr in values.items()}
+    np.savez_compressed(output / "features.npz", **flattened)
+    (output / "config.yaml").write_text(__import__("yaml").safe_dump(config))
+    return {"instances": len(records) // 2, "images": len({r["image"] for r in records}),
+            "output": str(output)}
+
+
+def finish_feature_cache(output, config, allowed_output_root):
+    """CPU phase: fit probes and bootstrap, no GPU or YOLO dependency in execution."""
+    output = validate_output_directory(allowed_output_root, output)
+    with (output / "samples.csv").open(newline="") as stream:
+        records = list(csv.DictReader(stream))
+    for row in records:
+        row["sample_id"] = int(row["sample_id"])
+        row["gt_id"] = int(row["gt_id"])
+        row["label"] = int(row["label"])
+    vectors = defaultdict(dict)
+    with np.load(output / "features.npz", allow_pickle=False) as archive:
+        for name in archive.files:
+            stage, method = name.split("__", 1)
+            vectors[stage][method] = archive[name]
+    settings = config.get("experiment", {})
+    seed = int(settings.get("seed", 42))
+    train, test, predictions, metrics, contrasts = analyze(
+        records, vectors, seed, float(settings.get("train_fraction", 0.6)),
+        int(settings.get("bootstrap", 1000)),
+    )
+    train_set = set(train.tolist())
+    for i, record in enumerate(records):
+        record["partition"] = "train" if i in train_set else "test"
+    write_csv(output / "samples.csv", records)
+    write_csv(output / "predictions.csv", predictions)
+    write_csv(output / "metrics.csv", metrics)
+    write_csv(output / "paired_deltas.csv", contrasts)
+    meta = {
+        "train_count": len(train), "test_count": len(test),
+        "train_groups": len({records[int(i)]["group"] for i in train}),
+        "test_groups": len({records[int(i)]["group"] for i in test}),
+        "total_instances_in_probe": len(records) // 2,
+        "size_distribution": dict(Counter(r["size_bin"] for r in records if r["label"] == 1)),
+        "stages": list(vectors), "group_by": settings.get("group_by", "video"),
+        "samplers": list(next(iter(vectors.values()))),
+        "device_extraction": settings.get("device", "cuda"),
+        "note": "GT ROIAlign is an oracle diagnostic; AP differences are not causal evidence.",
     }
     (output / "metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
     return meta
