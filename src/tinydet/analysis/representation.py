@@ -100,28 +100,37 @@ def vector_at(feature, xy, input_size):
     return feature[0, :, iy, ix].detach().float().cpu().numpy()
 
 
+def _sample_background_candidate(x, y, radius, index, size, rng):
+    if index % 2:
+        return rng.uniform(0, size), rng.uniform(0, size)
+    angle = rng.uniform(0, 2 * math.pi)
+    distance = rng.uniform(radius * 1.8, radius * 4.0)
+    return x + math.cos(angle) * distance, y + math.sin(angle) * distance
+
+
+def _valid_background_candidate(candidate, size, boxes):
+    x, y = candidate
+    in_image = 2 <= x < size - 2 and 2 <= y < size - 2
+    overlaps = any(
+        x1 - 3 <= x <= x2 + 3 and y1 - 3 <= y <= y2 + 3
+        for x1, y1, x2, y2 in boxes
+    )
+    return in_image and not overlaps
+
+
 def background_centers(gt, count, size, rng, exclusions=None):
-    """Hard-ish local negatives and uniform negatives, all away from GT boxes."""
+    """Draw local and uniform backgrounds, excluding every annotated GT."""
     boxes = [row["box"] for row in (exclusions if exclusions is not None else gt)]
     centers = []
     for row in gt:
         x, y = center(row["box"])
-        radius = max(row["box"][2] - row["box"][0], row["box"][3] - row["box"][1], 8)
-        for t in range(count):
-            if t % 2:
-                candidate = (rng.uniform(0, size), rng.uniform(0, size))
-            else:
-                angle = rng.uniform(0, 2 * math.pi)
-                distance = rng.uniform(radius * 1.8, radius * 4.0)
-                candidate = (x + math.cos(angle) * distance,
-                             y + math.sin(angle) * distance)
-            a, b = candidate
-            if not (2 <= a < size - 2 and 2 <= b < size - 2):
-                continue
-            if any(x1 - 3 <= a <= x2 + 3 and y1 - 3 <= b <= y2 + 3
-                   for x1, y1, x2, y2 in boxes):
-                continue
-            centers.append(candidate)
+        width = row["box"][2] - row["box"][0]
+        height = row["box"][3] - row["box"][1]
+        radius = max(width, height, 8)
+        for index in range(count):
+            candidate = _sample_background_candidate(x, y, radius, index, size, rng)
+            if _valid_background_candidate(candidate, size, boxes):
+                centers.append(candidate)
     return centers
 
 
