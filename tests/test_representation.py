@@ -121,3 +121,36 @@ def test_report_writer_rejects_unapproved_artifact(tmp_path):
         _write_text_artifact(tmp_path, "../", "findings.md", "bad")
     with pytest.raises(ValueError):
         _write_text_artifact(tmp_path, "report", "../escape.txt", "bad")
+
+
+def test_matching_independent_iou_and_confidence():
+    from tinydet.analysis.representation import match_predictions
+
+    boxes = np.array([[0, 0, 10, 10], [30, 30, 40, 40]])
+    result = match_predictions(boxes, np.array([0.03, 0.9]), np.array([0, 0]), [0, 0, 10, 10])
+    assert result["num_predictions"] == 2
+    assert result["max_confidence"] == 0.9
+    assert result["best_iou"] == 1.0
+    assert result["confidence_at_best_iou"] == 0.03
+    assert result["detected_conf_01"] == 1
+    assert result["detected_conf_25"] == 0
+    assert result["best_confidence"] == 0.0
+
+
+def test_matching_ignores_other_classes_and_handles_no_predictions():
+    from tinydet.analysis.representation import match_predictions
+
+    none = match_predictions(np.zeros((0, 4)), [], [], [0, 0, 10, 10])
+    assert none["num_predictions"] == 0
+    assert none["detected_conf_001"] == 0
+    other = match_predictions([[0, 0, 10, 10]], [0.99], [1], [0, 0, 10, 10])
+    assert other["num_predictions"] == 0
+
+
+def test_shift_validity_is_per_instance():
+    from tinydet.analysis.representation import valid_shift
+
+    near_edge = {"box": [0, 0, 8, 8]}
+    interior = {"box": [20, 20, 30, 30]}
+    assert not valid_shift([near_edge, interior], 0, 0, 128)
+    assert valid_shift([interior], 0, 0, 128)
