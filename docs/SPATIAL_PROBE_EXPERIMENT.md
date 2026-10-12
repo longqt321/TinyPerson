@@ -48,6 +48,9 @@ Replace `yolo26n/RUN_ID` with the **actual Modal run reference** containing
 `/mnt/data/tinyperson/data.yaml` from `tiny-person-data` and saves results under
 `/mnt/runs/<run>/diagnostics/spatial_probe_v1/` in `tiny-person-runs`.
 No local model weights or dataset copy is needed for the Modal path.
+Checkpoint discovery checks `checkpoints/best.pt` first and then falls back to
+`training/weights/best.pt` for unfinished/unfinalized Ultralytics run layouts.
+Neither path is moved or modified.
 The output directory must be empty to avoid accidentally overwriting previous results;
 change `output.folder` to make a second run.
 
