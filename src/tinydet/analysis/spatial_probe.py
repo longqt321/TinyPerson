@@ -3,7 +3,6 @@
 GT ROIAlign is an oracle diagnostic, never an inference-time detector component.
 The probe is trained only on group-disjoint feature vectors.
 """
-import csv
 import json
 import re
 from collections import Counter, defaultdict
@@ -21,7 +20,7 @@ from sklearn.preprocessing import StandardScaler
 from torchvision.ops import roi_align
 from ultralytics import YOLO
 
-from tinydet.analysis.heavy_bottom import dataset_images, letterbox, letterbox_geometry, resolve_stages
+from tinydet.analysis.heavy_bottom import dataset_images, letterbox, resolve_stages
 from tinydet.analysis.representation import (
     FeatureCapture, center, gt_entries, input_tensor, validate_output_directory, write_csv,
 )
@@ -261,8 +260,9 @@ def run(checkpoint, dataset, output, config, allowed_output_root):
     train, test, predictions, metrics, contrasts = analyze(
         records, vectors, seed, train_fraction, int(settings.get("bootstrap", 1000))
     )
+    train_set = set(train.tolist())
     for i, record in enumerate(records):
-        record["partition"] = "train" if i in set(train.tolist()) else "test"
+        record["partition"] = "train" if i in train_set else "test"
     write_csv(output / "samples.csv", records)
     write_csv(output / "predictions.csv", predictions)
     write_csv(output / "metrics.csv", metrics)
