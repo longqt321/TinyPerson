@@ -49,3 +49,43 @@ def test_background_sample_avoids_target():
     boxes = [{"box": [30, 30, 34, 34]}]
     centers = background_centers(None, boxes, 100, 64, rng)
     assert all(not (27 <= x <= 37 and 27 <= y <= 37) for x, y in centers)
+
+
+def test_output_confined_to_trusted_root(tmp_path):
+    import pytest
+
+    from tinydet.analysis.representation import validate_output_directory
+
+    root = tmp_path / "outputs"
+    root.mkdir()
+    valid = root / "representation"
+    assert validate_output_directory(root, valid) == valid.resolve()
+    with pytest.raises(ValueError):
+        validate_output_directory(root, root)
+    with pytest.raises(ValueError):
+        validate_output_directory(root, root / ".." / "secrets")
+    with pytest.raises(ValueError):
+        validate_output_directory(root, tmp_path / "outside")
+
+
+def test_symlink_escape_rejected(tmp_path):
+    import pytest
+
+    from tinydet.analysis.representation import validate_output_directory
+
+    root = tmp_path / "outputs"
+    root.mkdir()
+    outside = tmp_path / "private"
+    outside.mkdir()
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        validate_output_directory(root, root / "link" / "report")
+
+
+def test_study_requires_explicit_trusted_root(tmp_path):
+    import pytest
+
+    from tinydet.analysis.representation import study
+
+    with pytest.raises(ValueError, match="allowed_output_root"):
+        study(tmp_path / "best.pt", tmp_path / "data.yaml", tmp_path / "outputs" / "trial", {})
