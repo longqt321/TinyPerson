@@ -464,3 +464,66 @@ def representation_diagnose(run: str, config: str = "configs/analysis/representa
     if not isinstance(settings, dict):
         raise ValueError("Expected YAML configuration mapping")
     print(_representation_diagnose.remote(run, source.read_text()))
+
+
+@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0,
+              scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
+              max_containers=1, volumes=mounts, timeout=3600)
+def _spatial_probe_extract(run: str, config_text: str):
+    """GPU-only frozen feature extraction; one L4, no detector training."""
+    from tinydet.analysis.spatial_probe import save_feature_cache
+    from tinydet.utils.experiment import resolve_run
+
+    runs.reload()
+    data.reload()
+    target = resolve_run(RUN_ROOT, run)
+    checkpoint = target / "checkpoints" / "best.pt"
+    if not checkpoint.is_file():
+        raise FileNotFoundError(checkpoint)
+    dataset = DATA_ROOT / "tinyperson" / "data.yaml"
+    if not dataset.is_file():
+        raise FileNotFoundError(dataset)
+    settings = yaml.safe_load(config_text)
+    folder = settings.get("output", {}).get("folder", "diagnostics/spatial_probe_v1")
+    destination = (target / folder).resolve()
+    if target.resolve() not in destination.parents:
+        raise ValueError("Spatial probe output must be inside the selected run")
+    result = save_feature_cache(checkpoint, dataset, destination, settings,
+                                allowed_output_root=target.resolve())
+    runs.commit()
+    return result
+
+
+@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
+              max_containers=1, scaledown_window=2, volumes={str(RUN_ROOT): runs},
+              timeout=3600)
+def _spatial_probe_finish(run: str, output: str, config_text: str):
+    """CPU-only scikit-learn fitting, AP and group bootstrap; no paid GPU."""
+    from tinydet.analysis.spatial_probe import finish_feature_cache
+    from tinydet.utils.experiment import resolve_run
+
+    runs.reload()
+    target = resolve_run(RUN_ROOT, run)
+    result = finish_feature_cache(Path(output), yaml.safe_load(config_text),
+                                  allowed_output_root=target.resolve())
+    runs.commit()
+    return result
+
+
+@app.local_entrypoint()
+def spatial_probe(run: str, config: str = "configs/analysis/spatial_probe.yaml"):
+    """Frozen spatial sensitivity probe: L4 extraction, CPU-only statistics."""
+    if run.endswith("/RUN_ID"):
+        raise ValueError("Replace RUN_ID with a completed Modal run id")
+    config_file = Path(config)
+    if not config_file.is_file():
+        raise FileNotFoundError(config_file)
+    text = config_file.read_text()
+    settings = yaml.safe_load(text)
+    if not isinstance(settings, dict):
+        raise ValueError("Expected YAML configuration mapping")
+    if settings.get("experiment", {}).get("device") != "cuda":
+        raise ValueError("Modal spatial probe requires experiment.device: cuda")
+    extracted = _spatial_probe_extract.remote(run, text)
+    print(f"GPU extraction: {extracted}", flush=True)
+    print(f"CPU probe metrics: {_spatial_probe_finish.remote(run, extracted['output'], text)}")

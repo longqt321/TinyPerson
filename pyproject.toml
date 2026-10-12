@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "tiny-person-research"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
-dependencies = ["ultralytics>=8.4,<9", "numpy>=1.26,<3", "pandas>=2.2,<3", "PyYAML>=6,<7", "Pillow>=10,<13", "opencv-python-headless>=4.10,<5", "matplotlib>=3.9,<4", "modal>=1,<2"]
+dependencies = ["ultralytics>=8.4,<9", "numpy>=1.26,<3", "pandas>=2.2,<3", "PyYAML>=6,<7", "Pillow>=10,<13", "opencv-python-headless>=4.10,<5", "matplotlib>=3.9,<4", "modal>=1,<2", "scikit-learn>=1.5,<2"]
 
 [project.optional-dependencies]
 cpu = ["torch>=2.7,<3", "torchvision>=0.22,<1"]
