@@ -444,7 +444,8 @@ def _representation_diagnose(run: str, config_text: str):
         raise ValueError("Output folder must be inside the selected run")
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "config.yaml").write_text(config_text)
-    outcome = study(checkpoint, dataset_file, destination, settings)
+    outcome = study(checkpoint, dataset_file, destination, settings,
+                    allowed_output_root=target.resolve())
     runs.commit()
     return {"output": str(destination), "summary": outcome}
 
