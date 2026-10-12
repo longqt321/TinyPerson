@@ -258,10 +258,16 @@ def study(checkpoint, dataset_file, output, cfg):
                 letterboxed, _, _, _ = letterbox(im.convert("RGB"), size)
             tensor = input_tensor(letterboxed, device)
             features = collector.forward(net, tensor)
+            # Exclude all annotated objects from background sampling, not just selected probes.
+            with Image.open(path) as source:
+                source_w, source_h = source.size
+            from tinydet.analysis.heavy_bottom import letterbox_geometry
+            scale, left, top = letterbox_geometry(source_w, source_h, size)
+            all_gt = gt_entries(path, size, source_w, source_h, scale, left, top)
             for row in targets:
                 samples.append({"image": str(path), **row})
             if enabled.get("separability", {}).get("enabled", True):
-                negatives = background_centers(letterboxed, targets,
+                negatives = background_centers(letterboxed, all_gt,
                     int(enabled["separability"].get("background_samples_per_object", 3)),
                     size, rng)
                 training_group = split_image(path, seed)
@@ -305,7 +311,22 @@ def study(checkpoint, dataset_file, output, cfg):
                                                       None, size)
                         except Exception as exc:
                             raise RuntimeError("Shift detection inference failed") from exc
+                        shifted_features = collector.forward(net, shifted)
                         for row in detected:
+                            original = next(item for item in targets
+                                            if item["gt_id"] == row["gt_id"])
+                            original_center = center(original["box"])
+                            shifted_center = (original_center[0] + dx,
+                                              original_center[1] + dy)
+                            for stage in selected:
+                                a = vector_at(features[stage], original_center, size)
+                                b = vector_at(shifted_features[stage], shifted_center, size)
+                                difference = float(np.linalg.norm(a - b) /
+                                                   (np.linalg.norm(a) + 1e-6))
+                                vector_rows.append({"image": str(path), "gt_id": row["gt_id"],
+                                                    "size_bin": row["size_bin"], "stage": stage,
+                                                    "dx": dx, "dy": dy,
+                                                    "relative_change": difference})
                             shift_rows.append({"image": str(path), **row})
     finally:
         collector.close()
@@ -344,6 +365,7 @@ def study(checkpoint, dataset_file, output, cfg):
         write_csv(output / "counterfactual" / "feature_delta.csv", deltas)
         plot_by_stage(deltas, "delta", output / "counterfactual" / "delta_by_stage.png")
     if shift_rows:
+        write_csv(output / "shift_stability" / "feature_stability.csv", vector_rows)
         write_csv(output / "shift_stability" / "predictions.csv", shift_rows)
         baseline = {(r["image"], r["gt_id"]): r["detected"]
                     for r in shift_rows if r["dx"] == 0 and r["dy"] == 0}
