@@ -1,0 +1,30 @@
+# Frozen-feature exploratory study. Does not train YOLO.
+study:
+  name: representation_breakdown
+  seed: 42
+data:
+  config: /mnt/data/tinyperson/data.yaml
+  split: val
+  imgsz: 1280
+  sample_count: 200
+model:
+  source: run
+  freeze: true
+  stages: [C2, C3, C4, C5]
+size:
+  definition: max_side_input_pixels
+  bins: [0, 8, 16, 32]
+experiments:
+  separability:
+    enabled: true
+    background_samples_per_object: 3
+    probe: linear
+    group_split: image
+  counterfactual:
+    enabled: true
+    controls: false  # mean-fill is exploratory, not a validated background control
+  shift_stability:
+    enabled: true
+    offsets: [0, 1, 2, 3]
+output:
+  folder: diagnostics/representation
