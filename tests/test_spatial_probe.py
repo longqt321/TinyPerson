@@ -62,3 +62,14 @@ def test_bootstrap_identical_scores_has_zero_delta():
     scores = np.array([.9, .1, .8, .2])
     low, high = paired_group_bootstrap(rows, scores, scores, 50, 0)
     assert low == 0. and high == 0.
+
+
+def test_batched_sampler_matches_single_sample():
+    from tinydet.analysis.spatial_probe import sample_features
+
+    feature = torch.arange(64., dtype=torch.float32).reshape(1, 1, 8, 8)
+    boxes = [[8., 8., 16., 16.], [24., 24., 40., 40.]]
+    for method in ("legacy_center", "center", "local_mean_3x3", "roi_align"):
+        batch = sample_features(feature, boxes, 64, method)
+        singles = np.stack([sample_feature(feature, b, 64, method) for b in boxes])
+        np.testing.assert_allclose(batch, singles, rtol=1e-5, atol=1e-5)
