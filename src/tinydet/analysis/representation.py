@@ -215,35 +215,62 @@ def shift_tensor(tensor, dx, dy, fill=114 / 255):
     return shifted
 
 
+def match_predictions(predictions, scores, classes, target, dx=0, dy=0):
+    """Retain match diagnostics independently of IoU/confidence thresholds."""
+    target = np.asarray(target, dtype=float) + np.array([dx, dy, dx, dy])
+    overlaps = []
+    person_scores = []
+    for prediction, score, cls in zip(predictions, scores, classes):
+        if int(cls) != 0:
+            continue
+        prediction = np.asarray(prediction, dtype=float)
+        left, top = np.maximum(target[:2], prediction[:2])
+        right, bottom = np.minimum(target[2:], prediction[2:])
+        area = max(0.0, right - left) * max(0.0, bottom - top)
+        target_area = np.prod(np.maximum(target[2:] - target[:2], 0))
+        prediction_area = np.prod(np.maximum(prediction[2:] - prediction[:2], 0))
+        overlaps.append(float(area / max(target_area + prediction_area - area, 1e-9)))
+        person_scores.append(float(score))
+    best = int(np.argmax(overlaps)) if overlaps else None
+    result = {
+        "num_predictions": len(person_scores),
+        "max_confidence": max(person_scores, default=0.0),
+        "best_iou": overlaps[best] if best is not None else 0.0,
+        "confidence_at_best_iou": person_scores[best] if best is not None else 0.0,
+    }
+    for conf, suffix in ((0.001, "001"), (0.01, "01"), (0.05, "05"), (0.25, "25")):
+        eligible = [iou for iou, score in zip(overlaps, person_scores) if score >= conf]
+        result[f"best_iou_at_conf_{suffix}"] = max(eligible, default=0.0)
+        result[f"detected_conf_{suffix}"] = int(any(iou >= 0.5 for iou in eligible))
+    # Legacy fields remain available for existing post-processing.
+    result["detected"] = result["detected_conf_25"]
+    result["best_confidence"] = max(
+        (score for iou, score in zip(overlaps, person_scores)
+         if iou >= 0.5 and score >= 0.25),
+        default=0.0,
+    )
+    return result
+
+
 def detection_rows(detector, tensor, boxes, offset, size):
-    """Match class-0 detections to GT with a fixed confidence threshold."""
+    """Match class-0 detections and record continuous matching diagnostics."""
     with torch.no_grad():
-        result = detector.predict(source=tensor, imgsz=size, conf=0.001,
-                                  iou=0.7, max_det=1000, verbose=False)[0]
+        result = detector.predict(
+            source=tensor, imgsz=size, conf=0.001,
+            iou=0.7, max_det=1000, verbose=False,
+        )[0]
     predictions = result.boxes.xyxy.detach().cpu().numpy()
     scores = result.boxes.conf.detach().cpu().numpy()
     classes = result.boxes.cls.detach().cpu().numpy()
-    records = []
     dx, dy = offset
-    for row in boxes:
-        x1, y1, x2, y2 = row["box"]
-        target = np.array([x1 + dx, y1 + dy, x2 + dx, y2 + dy])
-        overlaps = []
-        for pred, cls in zip(predictions, classes):
-            if int(cls) != 0:
-                overlaps.append(0.0)
-                continue
-            left, top = np.maximum(target[:2], pred[:2])
-            right, bottom = np.minimum(target[2:], pred[2:])
-            area = max(0.0, right-left) * max(0.0, bottom-top)
-            union = np.prod(target[2:] - target[:2]) + np.prod(pred[2:] - pred[:2]) - area
-            overlaps.append(float(area / max(union, 1e-9)))
-        matched = [float(score) for score, overlap in zip(scores, overlaps)
-                   if overlap >= 0.5 and score >= 0.25]
-        records.append({"gt_id": row["gt_id"], "size_bin": row["size_bin"],
-                        "dx": dx, "dy": dy, "detected": int(bool(matched)),
-                        "best_confidence": max(matched, default=0.0)})
-    return records
+    return [
+        {
+            "gt_id": row["gt_id"], "size_bin": row["size_bin"],
+            "dx": dx, "dy": dy,
+            **match_predictions(predictions, scores, classes, row["box"], dx, dy),
+        }
+        for row in boxes
+    ]
 
 
 class FeatureCapture:
@@ -264,6 +291,27 @@ class FeatureCapture:
     def close(self):
         for handle in self.handles:
             handle.remove()
+
+
+def audit_size_distribution(dataset_file, split, size):
+    """Count all valid annotated instances, before stratified sampling."""
+    totals = defaultdict(lambda: {"instances": 0, "images": set()})
+    total_images = 0
+    for path in dataset_images(dataset_file, split):
+        total_images += 1
+        with Image.open(path) as image:
+            width, height = image.size
+        scale, left, top = letterbox_geometry(width, height, size)
+        for row in gt_entries(path, width, height, scale, left, top):
+            group = totals[row["size_bin"]]
+            group["instances"] += 1
+            group["images"].add(str(path))
+    rows = [
+        {"size_bin": bin_name, "instances": totals[bin_name]["instances"],
+         "images": len(totals[bin_name]["images"])}
+        for bin_name in ("0-8", "8-16", "16-32", ">32")
+    ]
+    return rows, total_images
 
 
 def choose_instances(dataset_file, split, size, count, rng):
@@ -364,17 +412,23 @@ def collect_shift_vectors(path, targets, features, shifted_features, dx, dy, siz
 def collect_shift_stability(path, targets, tensor, features, context, shift_rows, vector_rows):
     size = context["size"]
     offsets = context["enabled"]["shift_stability"].get("offsets", [0, 1, 2, 3])
+    # Keep the same per-GT cohort at every offset, without discarding its image.
+    valid_targets = [
+        target for target in targets
+        if all(valid_shift([target], dx, dy, size)
+               for dx in offsets for dy in offsets)
+    ]
+    if not valid_targets:
+        return
     for dx in offsets:
         for dy in offsets:
-            if not valid_shift(targets, dx, dy, size):
-                continue
             shifted = shift_tensor(tensor, dx, dy)
             detected = detection_rows(
-                context["detector"], shifted, targets, (dx, dy), size,
+                context["detector"], shifted, valid_targets, (dx, dy), size,
             )
             shifted_features = context["collector"].forward(context["net"], shifted)
             collect_shift_vectors(
-                path, targets, features, shifted_features, dx, dy, size, vector_rows,
+                path, valid_targets, features, shifted_features, dx, dy, size, vector_rows,
             )
             shift_rows.extend({"image": str(path), **row} for row in detected)
 
@@ -470,6 +524,16 @@ def save_results(output, collected, metadata):
         metadata["shift_flip_rate_nonzero"] = (
             float(np.mean(nonzero)) if nonzero else None
         )
+        baseline = [row for row in shifted if row["dx"] == 0 and row["dy"] == 0]
+        metadata["shift_baseline_recall_conf_25"] = (
+            float(np.mean([row["detected"] for row in baseline])) if baseline else None
+        )
+        metadata["shift_baseline_count"] = len(baseline)
+        for suffix in ("001", "01", "05", "25"):
+            metadata[f"shift_baseline_recall_conf_{suffix}"] = (
+                float(np.mean([row[f"detected_conf_{suffix}"] for row in baseline]))
+                if baseline else None
+            )
 
 
 def save_report(output, metadata):
@@ -508,6 +572,10 @@ def study(checkpoint, dataset_file, output, cfg, *, allowed_output_root=None):
     selected = {key: stages[key] for key in cfg["model"].get(
         "stages", ["C2", "C3", "C4", "C5"],
     )}
+    size_distribution, audited_images = audit_size_distribution(
+        dataset_file, split, size,
+    )
+    write_csv(_artifact(output, "dataset_audit/size_distribution.csv"), size_distribution)
     instances = choose_instances(
         dataset_file, split, size, int(cfg["data"].get("sample_count", 400)),
         np.random.default_rng(seed),
@@ -532,6 +600,13 @@ def study(checkpoint, dataset_file, output, cfg, *, allowed_output_root=None):
         "split": split, "input_size": size, "stages": selected,
         "device": device, "sample_count": len(collected["samples"]),
         "image_count": len(instances),
+        "dataset_image_count": audited_images,
+        "dataset_size_distribution": size_distribution,
+        "selected_size_distribution": {
+            name: sum(row["size_bin"] == name for rows in instances.values() for row in rows)
+            for name in ("0-8", "8-16", "16-32", ">32")
+        },
+        "diagnostics_schema_version": 2,
         "counterfactual_validity": "mean-fill proxy; NOT clean object removal",
     }
     save_results(output, collected, metadata)

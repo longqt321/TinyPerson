@@ -88,3 +88,21 @@ output paths cannot escape that run. The study validates the output root again
 before creating directories and writing CSV/plots/metadata. These boundaries
 address SonarCloud's CLI-to-filesystem path-traversal flow rather than ignoring
 its warning.
+
+## Diagnostic schema v2 (follow-up PR)
+
+- `dataset_audit/size_distribution.csv` counts all valid GT instances by maximum side
+  after 1280-pixel letterboxing. This is an inventory, not COCO size bins.
+- Sampling remains deterministic and round-robin across nonempty bins. A missing
+  tiny bin is explicitly reported rather than synthesized; selected bin counts
+  are written to metadata.
+- `shift_stability/predictions.csv` retains the legacy `detected` and
+  `best_confidence` columns for compatibility. The latter is a thresholded
+  matched score, **not** the unconditional maximum prediction confidence.
+- New fields include `num_predictions`, `max_confidence`, `best_iou`,
+  `confidence_at_best_iou`, `best_iou_at_conf_001/01/05/25`, and
+  `detected_conf_001/01/05/25` (all with IoU >= 0.5).
+- Shift cohort eligibility is per GT, preserving a common set of valid targets
+  for all offsets. Zero flips with zero baseline recall do not imply stability.
+- This PR does not implement texture-matched negatives, causal interventions,
+  or subpixel feature alignment; those require separate methodological validation.
