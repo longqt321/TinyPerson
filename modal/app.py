@@ -418,3 +418,48 @@ def heavy_bottom_size_evaluate(run: str, split: str = "val"):
     _preflight.remote(run, split)
     artifact = _heavy_bottom_size_evaluate.remote(run, split)
     print(_finish_evaluation.remote(run, artifact, split, size_metrics=True))
+
+
+@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0,
+              scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
+              max_containers=1, volumes=mounts, timeout=3600)
+def _representation_diagnose(run: str, config_text: str):
+    """Analyze a completed frozen checkpoint; never initiate YOLO training."""
+    from tinydet.analysis.representation import study
+    from tinydet.utils.experiment import resolve_run
+
+    runs.reload()
+    data.reload()
+    target = resolve_run(RUN_ROOT, run)
+    checkpoint = target / "checkpoints" / "best.pt"
+    if not checkpoint.is_file():
+        raise FileNotFoundError(checkpoint)
+    settings = yaml.safe_load(config_text)
+    dataset_file = Path(settings["data"]["config"])
+    if not dataset_file.is_file():
+        raise FileNotFoundError(dataset_file)
+    folder = settings.get("output", {}).get("folder", "diagnostics/representation")
+    destination = (target / folder).resolve()
+    if target.resolve() not in destination.parents:
+        raise ValueError("Output folder must be inside the selected run")
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "config.yaml").write_text(config_text)
+    outcome = study(checkpoint, dataset_file, destination, settings)
+    runs.commit()
+    return {"output": str(destination), "summary": outcome}
+
+
+@app.local_entrypoint()
+def representation_diagnose(run: str, config: str = "configs/analysis/representation.yaml"):
+    """Run the three frozen-feature studies on one existing checkpoint."""
+    from tinydet.utils.experiment import resolve_run
+
+    if run.endswith("/RUN_ID"):
+        raise ValueError("Replace RUN_ID with an existing Modal run id")
+    source = Path(config)
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    settings = yaml.safe_load(source.read_text())
+    if not isinstance(settings, dict):
+        raise ValueError("Expected YAML configuration mapping")
+    print(_representation_diagnose.remote(run, source.read_text()))
