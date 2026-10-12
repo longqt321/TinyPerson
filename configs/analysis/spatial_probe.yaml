@@ -3,9 +3,11 @@ experiment:
   split: val
   imgsz: 1280
   seed: 42
-  device: cpu
+  device: cuda
   group_by: video  # strict: fails if source video cannot be parsed; change to image explicitly
   train_fraction: 0.6
   methods: [legacy_center, center, local_mean_3x3, roi_align]
   bootstrap: 1000
   max_images: null
+output:
+  folder: diagnostics/spatial_probe_v1
