@@ -17,9 +17,15 @@ jobs:
         run: uv sync --extra cpu --group dev
       - name: Static Python module checks
         run: |
-          uv run --extra cpu python -m compileall -q src/tinydet modal scripts/btrm_smoke.py tests/test_btrm.py
-          uv run --extra cpu ruff check src/tinydet/modules/btrm.py src/tinydet/evaluation/btrm_report.py scripts/btrm_smoke.py tests/test_btrm.py
+          uv run --extra cpu python -m compileall -q src/tinydet modal scripts/btrm_smoke.py scripts/btrm_math_audit.py tests/test_btrm.py tests/test_btrm_math_audit.py tests/test_btrm_diagnostics.py
+          uv run --extra cpu ruff check src/tinydet/modules/btrm.py src/tinydet/evaluation/btrm_report.py src/tinydet/analysis/btrm_math_audit.py src/tinydet/analysis/btrm_feature_diagnostics.py src/tinydet/analysis/btrm_prediction_diagnostics.py src/tinydet/analysis/btrm_diagnostic_report.py scripts/btrm_smoke.py scripts/btrm_math_audit.py tests/test_btrm.py tests/test_btrm_math_audit.py tests/test_btrm_diagnostics.py
       - name: CPU YOLO architecture/checkpoint preflight
         run: uv run --extra cpu python scripts/btrm_smoke.py
       - name: BTRM unit tests
         run: uv run --extra cpu pytest -q tests/test_btrm.py
+      - name: Independent BTRM float64 numerical audit
+        run: uv run --extra cpu python scripts/btrm_math_audit.py --output /tmp/btrm_math_audit.json
+      - name: Mathematical unit tests
+        run: uv run --extra cpu pytest -q tests/test_btrm_math_audit.py
+      - name: Mechanism diagnostic regression tests
+        run: uv run --extra cpu pytest -q tests/test_btrm_diagnostics.py
