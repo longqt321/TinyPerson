@@ -38,7 +38,7 @@ def _pair_report(records: list[dict], arm: str, bin_name: str, threshold: float)
     )
 
 
-def _plots(destination: Path, features: dict, feature_rows: dict, pr_rows: list[dict]):
+def _plots(destination: Path, feature_rows: dict, pr_rows: list[dict]):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -156,8 +156,8 @@ def assemble_report(references: dict[str, Path], destination: Path, split: str =
         "## GT-center versus background: median evidence",
         ("GT centers are oracle sampled. Background negatives are matched within image "
         "but cannot be assumed to be truly empty if annotation is incomplete."),
-        "| Model | Size (px) | GT z (native mode) | BG z (native mode) | GT gate g | BG gate g |",
-        "|---|---|---:|---:|---:|---:|",
+        "| Model | Size (px) | GT z | BG z | GT gate g | BG gate g | ring GT cells (median) |",
+        "|---|---|---:|---:|---:|---:|---:|",
     ])
     for arm in ("btrm_a0", "btrm_a2", "btrm_a3"):
         key = "btrm" if arm == "btrm_a3" else "contrast"
@@ -168,6 +168,9 @@ def assemble_report(references: dict[str, Path], destination: Path, split: str =
                 _group_stat(feature[arm], size, "BG", zcol),
                 _group_stat(feature[arm], size, "GT_center", gcol),
                 _group_stat(feature[arm], size, "BG", gcol),
+                _group_stat(
+                    feature[arm], size, "GT_center", "ring_inside_gt_cell_centers"
+                ),
             ]
             lines.append(f"| {arm} | {size} | " + " | ".join(_fmt(x) for x in stats) + " |")
     lines.extend([
@@ -209,7 +212,7 @@ def assemble_report(references: dict[str, Path], destination: Path, split: str =
         "one-seed diagnostic. All checkpoints remain unchanged."),
     ])
     (destination / "mechanism_report.md").write_text("\n".join(lines) + "\n")
-    _plots(destination, feature, feature_rows, pr_rows)
+    _plots(destination, feature_rows, pr_rows)
     combined = {
         "math": {
             "status": math["status"], "checks": math["checks"],
