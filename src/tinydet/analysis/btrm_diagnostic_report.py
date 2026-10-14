@@ -127,14 +127,14 @@ def assemble_report(references: dict[str, Path], destination: Path, split: str =
     lines = [
         "# BTRM mechanism diagnostics", "",
         "## Gate 1: mathematics and numerical implementation",
-        f"Status: **{math['status']}**; comparisons: {math['checks']}; "
-        f"max absolute error: {math['max_abs_error']:.9g}.",
-        f"Max reported relative error (nonzero oracle): "
+        (f"Status: **{math['status']}**; comparisons: {math['checks']}; "
+        f"max absolute error: {math['max_abs_error']:.9g}."),
+        (f"Max reported relative error (nonzero oracle): "
         f"{math['max_rel_error_nonzero']:.6g}. "
-        "Large *relative* errors near zero can coexist with tiny absolute errors.",
+        "Large *relative* errors near zero can coexist with tiny absolute errors."),
         "The oracle uses independent NumPy float64 least-squares and solve.",
-        "This verifies the specified algebra within tested numerical tolerances, "
-        "NOT the semantic assumption that local gradients correspond to background.",
+        ("This verifies the specified algebra within tested numerical tolerances, "
+        "NOT the semantic assumption that local gradients correspond to background."),
         "",
         "## Gate 2: observed checkpoint modulation",
         "| Arm | Learned alpha (effective gain) | P3 gate parity max abs error | g>=0.95 map fraction (mean) |",
@@ -154,8 +154,8 @@ def assemble_report(references: dict[str, Path], destination: Path, split: str =
         "Note: A0 has no trainable gate. Its computed z/g are counterfactual probes only.",
         "",
         "## GT-center versus background: median evidence",
-        "GT centers are oracle sampled. Background negatives are matched within image "
-        "but cannot be assumed to be truly empty if annotation is incomplete.",
+        ("GT centers are oracle sampled. Background negatives are matched within image "
+        "but cannot be assumed to be truly empty if annotation is incomplete."),
         "| Model | Size (px) | GT z (native mode) | BG z (native mode) | GT gate g | BG gate g |",
         "|---|---|---:|---:|---:|---:|",
     ])
@@ -172,8 +172,8 @@ def assemble_report(references: dict[str, Path], destination: Path, split: str =
             lines.append(f"| {arm} | {size} | " + " | ".join(_fmt(x) for x in stats) + " |")
     lines.extend([
         "", "## Saved detector predictions: confidence threshold diagnostics",
-        "These are the **actual saved detector predictions**; no new inference "
-        "or training is performed for this section.",
+        ("These are the **actual saved detector predictions**; no new inference "
+        "or training is performed for this section."),
         "| Bin | Conf | Model | TP | FP | Precision | Recall | FP/image |",
         "|---|---:|---|---:|---:|---:|---:|---:|",
     ])
@@ -190,23 +190,23 @@ def assemble_report(references: dict[str, Path], destination: Path, split: str =
     change = prediction["tiny_recall_A3_minus_A0_at_0.001"]
     lines.extend([
         "", "## Tiny 0-8px TP difference (A3 versus A0, conf>=0.001)",
-        f"Net TP: {change['delta_TP']:+d}; net FP: {change['delta_FP']:+d}; "
+        (f"Net TP: {change['delta_TP']:+d}; net FP: {change['delta_FP']:+d}; "
         f"newly matched GT: {change['newly_matched_GT']}; "
-        f"previously matched GT lost: {change['previously_matched_GT_lost']}.",
+        f"previously matched GT lost: {change['previously_matched_GT_lost']}."),
         "",
         "## Decision protocol",
-        "1. If math or checkpoint parity fails: **numerical/integration bug**; "
-        "do not interpret model effects.",
-        "2. If the P3 gate is nearly constant/saturated: modulation may have "
-        "lost spatial selectivity; confirm with full per-image CSV and histograms.",
-        "3. If z/g cannot separate GT-center from nearby BG: evidence may not "
-        "be object-specific (or GT/background sampling is noisy).",
-        "4. If recall improves only at conf=0.001 while FP rises strongly or "
+        ("1. If math or checkpoint parity fails: **numerical/integration bug**; "
+        "do not interpret model effects."),
+        ("2. If the P3 gate is nearly constant/saturated: modulation may have "
+        "lost spatial selectivity; confirm with full per-image CSV and histograms."),
+        ("3. If z/g cannot separate GT-center from nearby BG: evidence may not "
+        "be object-specific (or GT/background sampling is noisy)."),
+        ("4. If recall improves only at conf=0.001 while FP rises strongly or "
         "the effect disappears at higher confidence: revisit score ranking "
-        "and calibration, not just recall.",
+        "and calibration, not just recall."),
         "",
-        "No claim of significant mAP improvement is justified from this "
-        "one-seed diagnostic. All checkpoints remain unchanged.",
+        ("No claim of significant mAP improvement is justified from this "
+        "one-seed diagnostic. All checkpoints remain unchanged."),
     ])
     (destination / "mechanism_report.md").write_text("\n".join(lines) + "\n")
     _plots(destination, feature, feature_rows, pr_rows)
