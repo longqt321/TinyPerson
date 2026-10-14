@@ -6,8 +6,11 @@ import torch
 from torch import nn
 
 from tinydet.modules.btrm import (
-    GATE_INDEX, LocalBackgroundEvidence, evidence_score,
-    install_feature_module, validate_feature_module,
+    GATE_INDEX,
+    LocalBackgroundEvidence,
+    evidence_score,
+    install_feature_module,
+    validate_feature_module,
 )
 from tinydet.utils.comparison import load_comparison
 
