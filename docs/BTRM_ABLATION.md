@@ -34,6 +34,31 @@ not three training processes competing for one GPU. No training jobs are started
 by this PR. Three L4s can cost roughly triple the per-minute single-GPU price.
 Each container copies the same TinyPerson data to its own temporary disk.
 
+### Recover after size-evaluation CUDA OOM (no retraining)
+
+For runs trained with the earlier `collect_size_predictions()` code, the
+`source=[str(path) for path in images]` expression accidentally made
+Ultralytics 8.4.164 load **all 322 validation images as one batch**.
+`batch=1` did not affect that input type. This is a prediction-source bug,
+not evidence of BTRM running out of memory during training.
+
+The fix passes a path to a `.txt` manifest of images. Ultralytics uses
+`LoadImagesAndVideos`, respecting `batch=1`. The new
+`--evaluate-only` mode **cannot launch training**. It reuses the exact
+COMPLETED checkpoints/configs and computes only missing metrics and reports.
+
+```fish
+git pull --ff-only
+uv run --extra cpu modal run modal/app.py::compare \
+  --config configs/experiment/ablation_btrm.yaml \
+  --evaluate-only
+```
+
+This should reuse all three trained runs and finish the missing size-wise
+evaluation, then generate `summary.csv`, `deltas.csv`, `report.md`.
+If no completed matching run exists, the command fails rather than
+spending money retraining. Do not edit training or model YAML before recovery.
+
 The YAML fixes 50 epochs, patience 50, input 1280, batch 16,
 AdamW 0.001, seed 42, AMP, deterministic settings, augmentation, and dataset.
 No loss, TAL, NWD, RFLA, P2/P4/P5 architecture or inference threshold
