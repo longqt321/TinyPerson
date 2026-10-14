@@ -7,6 +7,7 @@ from tinydet.analysis.btrm_feature_diagnostics import (
     _feature_summary,
     _random_background,
     _scalar,
+    ring_gt_occupancy_proxy,
 )
 from tinydet.analysis.btrm_prediction_diagnostics import (
     BINS,
@@ -104,3 +105,14 @@ def test_threshold_grid_and_size_bins_are_prespecified():
     assert BINS == ("0-8", "8-16", "16-32", ">32")
     assert THRESHOLDS[0] == .001
     assert .05 in THRESHOLDS
+
+
+def test_ring_inside_gt_box_proxy_responds_to_object_size():
+    # P3 cells are 8px wide when input is 128px and feature map is 16x16.
+    # A 3px GT cannot occupy ring neighbor cell centers, a 30px GT can.
+    assert ring_gt_occupancy_proxy(
+        [63., 63., 66., 66.], 64.5, 64.5, 16, 16, 128
+    ) == 0
+    assert ring_gt_occupancy_proxy(
+        [50., 50., 80., 80.], 65., 65., 16, 16, 128
+    ) >= 4
