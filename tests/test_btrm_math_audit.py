@@ -50,3 +50,25 @@ def test_projection_cannot_increase_evidence_for_same_input():
         a = evidence_score(x, "contrast", radius=radius)
         b = evidence_score(x, "btrm", radius=radius)
         assert torch.all(b <= a + 1e-4)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_mixed_precision_feature_input_uses_identical_fp32_internal_score(dtype):
+    """CPU emulation of AMP inputs; module computes scores in FP32."""
+    from tinydet.modules.btrm import LocalBackgroundEvidence
+
+    x = torch.randn(1, 16, 13, 13).to(dtype)
+    actual_score = evidence_score(x, "btrm")
+    expected_score = evidence_score(x.float(), "btrm")
+    assert actual_score.dtype == torch.float32
+    assert torch.equal(actual_score, expected_score)
+    gate = LocalBackgroundEvidence("btrm")
+    with torch.no_grad():
+        gate.alpha_raw.fill_(.35)
+    inp = x.detach().clone().requires_grad_(True)
+    output = gate(inp)
+    assert output.dtype == dtype
+    assert torch.isfinite(output).all()
+    output.float().square().mean().backward()
+    assert torch.isfinite(inp.grad).all()
+    assert torch.isfinite(gate.alpha_raw.grad)
