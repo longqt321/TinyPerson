@@ -85,7 +85,8 @@ def test_score_sampling_uses_bchw_without_rescaling_errors():
 def test_summary_exposes_the_actual_sat_fraction_and_gain():
     records = [
         {"group": "GT_center", "size_bin": "0-8",
-         "z_contrast": 2., "z_btrm": 1., "g_contrast": .7, "g_btrm": .4},
+         "z_contrast": 2., "z_btrm": 1., "g_contrast": .7, "g_btrm": .4,
+         "ring_inside_gt_cell_centers": 0},
         {"group": "BG", "size_bin": "0-8",
          "z_contrast": 1., "z_btrm": .1, "g_contrast": .4, "g_btrm": .03},
     ]
