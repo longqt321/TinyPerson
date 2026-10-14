@@ -668,7 +668,7 @@ def _btrm_real_features(run: str, report_id: str, max_images: int, split: str):
     runs.commit()
     return {"run": run, "images": result["images"],
             "gate_gain": result["effective_gain"],
-            "saturation": result["all_feature_maps"]["g_btrm_gt_95"]}
+            "saturation": result["all_feature_maps"]["g_btrm_all_sat95"]}
 
 
 @app.function(image=image, cpu=2.0, memory=4096, max_containers=1,
