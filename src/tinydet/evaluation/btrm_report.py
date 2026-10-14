@@ -8,7 +8,6 @@ import json
 import math
 from pathlib import Path
 
-import torch
 import yaml
 
 from tinydet.modules.btrm import GATE_INDEX, LocalBackgroundEvidence
@@ -121,6 +120,8 @@ def write_btrm_report(root: Path, references: dict, config: dict, group: str) ->
             raise ValueError("Comparison requires a shared architectural YAML")
     if [records[n]["mode"] for n in names] != ["none", "contrast", "btrm"]:
         raise ValueError("Arms must be none, contrast, btrm in that order")
+    if len({records[n]["git_commit"] for n in names}) != 1:
+        raise ValueError("Different training source commits; cannot attribute module effects")
     if any(records[n]["git_dirty"] for n in names):
         print("WARNING: at least one experiment ran from dirty git state", flush=True)
 
