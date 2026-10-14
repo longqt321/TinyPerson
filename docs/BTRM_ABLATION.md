@@ -26,6 +26,9 @@ uv run --extra cpu modal run modal/app.py::compare \
     --config configs/experiment/ablation_btrm.yaml --parallel
 ```
 
+The experiment YAML has `execution.parallel: true`, so parallel training is
+also the default when calling `compare` without `--parallel`.
+
 Parallel mode spawns **three independent L4 containers** simultaneously. It is
 not three training processes competing for one GPU. No training jobs are started
 by this PR. Three L4s can cost roughly triple the per-minute single-GPU price.
