@@ -19,7 +19,7 @@ from ultralytics.data.augment import LetterBox
 
 from tinydet.analysis.heavy_bottom import dataset_images, letterbox_geometry
 from tinydet.analysis.representation import gt_entries
-from tinydet.modules.btrm import GATE_INDEX, LocalBackgroundEvidence, evidence_score
+from tinydet.modules.btrm import GATE_INDEX, OFFSETS, LocalBackgroundEvidence, evidence_score
 from tinydet.utils.experiment import write_json
 
 
@@ -66,6 +66,22 @@ def _scalar(tensor: torch.Tensor, x: float, y: float, size: int) -> float:
     return float(tensor[0, 0, row, col])
 
 
+def ring_gt_occupancy_proxy(box, cx, cy, fheight, fwidth, imgsz, radius=1) -> int:
+    """Count neighbor CELL CENTERS inside the GT box; not a receptive-field claim."""
+    col = max(0, min(fwidth - 1, int(cx * fwidth / imgsz)))
+    row = max(0, min(fheight - 1, int(cy * fheight / imgsz)))
+    found = 0
+    for dy, dx in OFFSETS:
+        y, x = row + dy * radius, col + dx * radius
+        if not (0 <= x < fwidth and 0 <= y < fheight):
+            continue
+        px = (x + 0.5) * imgsz / fwidth
+        py = (y + 0.5) * imgsz / fheight
+        if box[0] <= px <= box[2] and box[1] <= py <= box[3]:
+            found += 1
+    return found
+
+
 def _feature_summary(records: list[dict], per_image: list[dict], gain: float | None):
     groups = defaultdict(list)
     for row in records:
@@ -78,6 +94,10 @@ def _feature_summary(records: list[dict], per_image: list[dict], gain: float | N
             "z_btrm": _summary([r["z_btrm"] for r in subset]),
             "g_contrast": _summary([r["g_contrast"] for r in subset]),
             "g_btrm": _summary([r["g_btrm"] for r in subset]),
+            "ring_inside_gt_cell_centers": _summary([
+                r["ring_inside_gt_cell_centers"] for r in subset
+                if r["group"] == "GT_center"
+            ]),
         }
     global_stats = {}
     for field in ("g_contrast_all_sat95", "g_btrm_all_sat95",
@@ -217,6 +237,10 @@ def collect_features(run: Path, max_images: int = 128, split: str = "val",
             for row in annotations:
                 box = row["box"]
                 cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+                ring_count = ring_gt_occupancy_proxy(
+                    box, cx, cy, before.shape[-2], before.shape[-1],
+                    imgsz, gate.radius if mode != "none" else 1
+                )
                 negative = _random_background(
                     box, gt_boxes, imgsz, imgsz, rng, padding
                 )
@@ -231,6 +255,7 @@ def collect_features(run: Path, max_images: int = 128, split: str = "val",
                         "image": str(path), "gt_id": row["gt_id"],
                         "size_bin": row["size_bin"], "group": group,
                         "bg_sampler": method, "x_input": px, "y_input": py,
+                        "ring_inside_gt_cell_centers": ring_count if group == "GT_center" else None,
                         "z_contrast": a, "z_btrm": b,
                         "g_contrast": math.tanh(a / (gate.saturation if mode != "none" else 3.0)),
                         "g_btrm": math.tanh(b / (gate.saturation if mode != "none" else 3.0)),
@@ -243,7 +268,8 @@ def collect_features(run: Path, max_images: int = 128, split: str = "val",
     with (destination / "samples.csv").open("w", newline="") as stream:
         fieldnames = list(records[0]) if records else [
             "image", "gt_id", "size_bin", "group", "bg_sampler",
-            "x_input", "y_input", "z_contrast", "z_btrm", "g_contrast", "g_btrm",
+            "x_input", "y_input", "ring_inside_gt_cell_centers",
+            "z_contrast", "z_btrm", "g_contrast", "g_btrm",
         ]
         writer = csv.DictWriter(stream, fieldnames=fieldnames)
         writer.writeheader()
