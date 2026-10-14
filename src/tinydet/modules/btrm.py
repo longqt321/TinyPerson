@@ -11,8 +11,8 @@ estimated tangent matrix is fixed. This does not imply an AP gain.
 import math
 
 import torch
-from torch import Tensor, nn
 import torch.nn.functional as F
+from torch import Tensor, nn
 
 OFFSETS = ((-1, -1), (-1, 0), (-1, 1), (0, -1),
            (0, 1), (1, -1), (1, 0), (1, 1))
