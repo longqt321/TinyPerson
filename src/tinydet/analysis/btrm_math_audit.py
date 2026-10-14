@@ -160,7 +160,7 @@ def run_math_audit() -> dict:
             minus[0, ch, row, col] -= step
             numerical = float((m(plus).square().mean() -
                                m(minus).square().mean()) / (2 * step))
-            analytic = float(derivative[0, ch, row, col])
+            analytic = float(derivative[0, ch, row, col].detach())
             err = abs(numerical - analytic)
             tol = 0.002 + 0.05 * abs(analytic)
             if not math.isfinite(numerical) or not math.isfinite(analytic) or err > tol:
