@@ -213,3 +213,64 @@ def test_report_assembly_from_three_mock_frozen_runs(tmp_path):
     assert (root / "mechanism_summary.json").is_file()
     assert (root / "btrm_a3_gate_hist_0_8.png").is_file()
     assert (root / "pr_thresholds_0_8.png").is_file()
+
+
+def test_frozen_feature_diagnostics_full_mock_forward(tmp_path, monkeypatch):
+    """Exercise actual P3 hooks, preprocessing, GT sampling and gate parity on CPU."""
+    import cv2
+    from torch import nn
+
+    from tinydet.analysis import btrm_feature_diagnostics as diagnostic
+    from tinydet.modules.btrm import LocalBackgroundEvidence
+
+    images = tmp_path / "dataset" / "images" / "val"
+    labels = tmp_path / "dataset" / "labels" / "val"
+    images.mkdir(parents=True)
+    labels.mkdir(parents=True)
+    path = images / "synthetic.jpg"
+    pixels = np.random.default_rng(11).integers(
+        0, 255, size=(128, 128, 3), dtype=np.uint8
+    )
+    assert cv2.imwrite(str(path), pixels)
+    (labels / "synthetic.txt").write_text(
+        "0 0.48 0.48 0.52 0.48 0.52 0.52 0.48 0.52\n"
+    )
+
+    run = tmp_path / "btrm_a3" / "fake-run"
+    (run / "checkpoints").mkdir(parents=True)
+    (run / "checkpoints" / "best.pt").write_bytes(b"test placeholder")
+    (run / "config.yaml").write_text(yaml.safe_dump({
+        "data": {"config": str(tmp_path / "unused.yaml")},
+        "train": {"imgsz": 128},
+        "model": {"feature_module": {"mode": "btrm"}},
+    }))
+    monkeypatch.setattr(diagnostic, "dataset_images", lambda *_: [path])
+
+    class FakeNetwork(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = nn.ModuleList(nn.Identity() for _ in range(18))
+            self.model[16] = nn.Conv2d(3, 7, 3, stride=8, padding=1)
+            self.model[17] = LocalBackgroundEvidence("btrm")
+            with torch.no_grad():
+                self.model[17].alpha_raw.fill_(0.42)
+
+        def forward(self, x):
+            return self.model[17](self.model[16](x))
+
+    class FakeYOLO:
+        def __init__(self, _checkpoint):
+            self.model = FakeNetwork()
+
+    monkeypatch.setattr(diagnostic, "YOLO", FakeYOLO)
+    result = diagnostic.collect_features(
+        run, max_images=1, split="val", device_override="cpu"
+    )
+    assert result["images"] == 1
+    assert result["mode"] == "btrm"
+    assert result["records"] >= 1
+    assert result["all_feature_maps"]["modulation_abs_max_error"]["p99"] < 1e-5
+    output = run / "diagnostics" / "btrm_mechanism" / "val"
+    assert (output / "samples.csv").is_file()
+    assert (output / "per_image.csv").is_file()
+    assert (output / "summary.json").is_file()
