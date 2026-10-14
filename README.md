@@ -101,6 +101,11 @@ uv run --extra cpu pytest tests/test_btrm.py -q
 uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_btrm.yaml
 ```
 
+To recover after a completed train but failed size evaluation **without any retraining**:
+```bash
+uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_btrm.yaml --evaluate-only
+```
+
 Completed runs include checkpoints, epoch curves, AP/recall by object-size bin,
 benchmark latency and an automatic `comparisons/btrm/compare-*/` CSV/JSON/MD
 report with A2−A0, A3−A2 and A3−A0. See
