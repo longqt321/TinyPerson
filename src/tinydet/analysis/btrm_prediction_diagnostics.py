@@ -11,7 +11,10 @@ import torch
 import yaml
 
 from tinydet.evaluation.size_metrics import (
-    iou, label_path, parse_annotation_box, size_bin,
+    iou,
+    label_path,
+    parse_annotation_box,
+    size_bin,
 )
 from tinydet.utils.experiment import write_json
 
