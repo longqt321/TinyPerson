@@ -1,5 +1,6 @@
 """Unit tests for BTRM mathematics, routing, serialization and experiment fairness."""
 import copy
+from pathlib import Path
 
 import pytest
 import torch
@@ -143,6 +144,7 @@ def test_size_prediction_manifest_uses_one_image_per_batch(tmp_path, monkeypatch
     """Regression: Python list paths produce one giant 322-image batch."""
     from PIL import Image
     from ultralytics.data.build import load_inference_source
+
     from tinydet.evaluation import size_metrics
 
     image_paths = []
