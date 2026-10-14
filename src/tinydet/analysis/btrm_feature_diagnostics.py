@@ -10,14 +10,15 @@ import random
 from collections import defaultdict
 from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
 import yaml
-from PIL import Image
 from ultralytics import YOLO
+from ultralytics.data.augment import LetterBox
 
-from tinydet.analysis.heavy_bottom import dataset_images, letterbox
-from tinydet.analysis.representation import gt_entries, input_tensor
+from tinydet.analysis.heavy_bottom import dataset_images, letterbox_geometry
+from tinydet.analysis.representation import gt_entries
 from tinydet.modules.btrm import GATE_INDEX, LocalBackgroundEvidence, evidence_score
 from tinydet.utils.experiment import write_json
 
@@ -79,7 +80,7 @@ def _feature_summary(records: list[dict], per_image: list[dict], gain: float | N
             "g_btrm": _summary([r["g_btrm"] for r in subset]),
         }
     global_stats = {}
-    for field in ("g_contrast_gt_95", "g_btrm_gt_95",
+    for field in ("g_contrast_all_sat95", "g_btrm_all_sat95",
                   "g_contrast_all_p50", "g_btrm_all_p50",
                   "g_contrast_all_p95", "g_btrm_all_p95",
                   "z_ratio_median", "modulation_abs_max_error"):
@@ -141,14 +142,23 @@ def collect_features(run: Path, max_images: int = 128, split: str = "val",
     records, per_image = [], []
     try:
         for path in selected:
-            with Image.open(path) as raw:
-                width, height = raw.size
-                square, scale, left, top = letterbox(raw.convert("RGB"), imgsz)
-            annotations = gt_entries(path, width, height, scale, left, top)
+            raw = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            if raw is None:
+                raise FileNotFoundError(f"Unable to decode source image: {path}")
+            height, width = raw.shape[:2]
+            scale, left, top = letterbox_geometry(width, height, imgsz)
+            resized = LetterBox(
+                new_shape=(imgsz, imgsz), auto=False, stride=32
+            )(image=raw)
+            inp = (
+                torch.from_numpy(resized[..., ::-1].transpose(2, 0, 1).copy())
+                .unsqueeze(0).to(device).float().div_(255)
+            )
+            all_annotations = gt_entries(path, width, height, scale, left, top)
+            annotations = all_annotations
             if len(annotations) > max_gt_per_image:
                 annotations = rng.sample(annotations, max_gt_per_image)
             captured.clear()
-            inp = input_tensor(square, device)
             with torch.inference_mode():
                 _ = model(inp)
             if set(captured) != {"p3", "after"}:
@@ -190,8 +200,8 @@ def collect_features(run: Path, max_images: int = 128, split: str = "val",
             dz = zb[..., rad:-rad, rad:-rad].flatten().numpy()
             per_image.append({
                 "image": str(path), "gt_count": len(annotations),
-                "g_contrast_gt_95": float(np.mean(interior_gc >= .95)),
-                "g_btrm_gt_95": float(np.mean(interior_gb >= .95)),
+                "g_contrast_all_sat95": float(np.mean(interior_gc >= .95)),
+                "g_btrm_all_sat95": float(np.mean(interior_gb >= .95)),
                 "g_contrast_all_p50": float(np.median(interior_gc)),
                 "g_btrm_all_p50": float(np.median(interior_gb)),
                 "g_contrast_all_p95": float(np.quantile(interior_gc, .95)),
@@ -201,7 +211,7 @@ def collect_features(run: Path, max_images: int = 128, split: str = "val",
                 )) if (nz > 1e-5).any() else 0.0,
                 "modulation_abs_max_error": error,
             })
-            gt_boxes = [r["box"] for r in annotations]
+            gt_boxes = [r["box"] for r in all_annotations]
             padding = (left, top, left + round(width * scale),
                        top + round(height * scale))
             for row in annotations:
