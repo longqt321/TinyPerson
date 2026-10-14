@@ -28,7 +28,7 @@ def _summary(values):
     if not len(items):
         return {"count": 0}
     return {
-        "count": int(len(items)), "mean": float(items.mean()),
+        "count": len(items), "mean": float(items.mean()),
         "median": float(np.median(items)),
         "p05": float(np.quantile(items, .05)),
         "p95": float(np.quantile(items, .95)),
