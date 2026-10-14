@@ -42,7 +42,6 @@ def _plots(destination: Path, features: dict, feature_rows: dict, pr_rows: list[
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import numpy as np
 
     # Only plot real A2/A3 gate variables, not a hypothetical baseline gate.
     for model in ("btrm_a2", "btrm_a3"):
@@ -144,7 +143,7 @@ def assemble_report(references: dict[str, Path], destination: Path, split: str =
     for arm in ("btrm_a0", "btrm_a2", "btrm_a3"):
         f = feature[arm]
         stats = f["all_feature_maps"]
-        metric = ("g_btrm_gt_95" if arm == "btrm_a3" else "g_contrast_gt_95")
+        metric = ("g_btrm_all_sat95" if arm == "btrm_a3" else "g_contrast_all_sat95")
         lines.append(
             f"| {arm} | {_fmt(f['effective_gain'])} | "
             f"{_fmt(stats['modulation_abs_max_error'].get('p99'), 7)} | "
