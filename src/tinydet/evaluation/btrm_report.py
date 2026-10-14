@@ -80,13 +80,14 @@ def _flatten(run: Path, split: str, need_size: bool) -> dict:
 def _delta(after: dict, before: dict):
     # Absolute differences; + AP is favorable and + latency is unfavorable.
     result = {}
-    for key in after:
+    for key, value in after.items():
         if key in {"model", "run", "seed", "git_commit", "git_dirty", "model_sha256", "mode"}:
             continue
-        a, b = after[key], before.get(key)
-        if isinstance(a, (int, float)) and not isinstance(a, bool) and isinstance(b, (int, float)):
-            if math.isfinite(float(a)) and math.isfinite(float(b)):
-                result[key] = float(a) - float(b)
+        b = before.get(key)
+        if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and isinstance(b, (int, float))
+                and math.isfinite(float(value)) and math.isfinite(float(b))):
+            result[key] = float(value) - float(b)
     return result
 
 
