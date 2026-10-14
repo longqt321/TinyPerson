@@ -4,7 +4,6 @@ No training and no prediction jobs. Matching mirrors the custom size-AP
 protocol: target-bin GT first, excluded-bin GT cause ignored detections.
 """
 import csv
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
