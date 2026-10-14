@@ -117,7 +117,8 @@ def _feature_summary(records: list[dict], per_image: list[dict], gain: float | N
 
 
 def collect_features(run: Path, max_images: int = 128, split: str = "val",
-                     max_gt_per_image: int = 64, seed: int = 42) -> dict:
+                     max_gt_per_image: int = 64, seed: int = 42,
+                     device_override: str | None = None) -> dict:
     """Use L4 batch=1; compute the numerical module gate again on captured P3."""
     if max_images < 1 or max_gt_per_image < 1 or split not in ("val", "test"):
         raise ValueError("Invalid feature diagnostic configuration")
@@ -133,10 +134,13 @@ def collect_features(run: Path, max_images: int = 128, split: str = "val",
     selected = [images[index] for index in sample_indices]
     imgsz = int(config["train"]["imgsz"])
 
-    if not torch.cuda.is_available():
+    # Production requires GPU; CPU is a deliberate unit-test-only override.
+    if device_override not in (None, "cpu"):
+        raise ValueError("Only a CPU unit-test override is accepted")
+    if device_override is None and not torch.cuda.is_available():
         raise RuntimeError("Feature diagnostic expects a Modal L4 GPU")
     torch.set_num_threads(2)
-    device = torch.device("cuda:0")
+    device = torch.device(device_override or "cuda:0")
     model = YOLO(str(checkpoint)).model.to(device).eval()
     gate = model.model[GATE_INDEX]
     mode = config["model"].get("feature_module", {}).get("mode", "none")
