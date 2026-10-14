@@ -86,8 +86,46 @@ def collect_size_predictions(checkpoint: Path, dataset_file: Path, artifact: Pat
     return artifact
 
 
+def parse_annotation_box(line: str):
+    """Parse one normalized YOLO detection box OR YOLO segmentation polygon.
+
+    TinyPerson Roboflow labels in this project are segmentation polygons.
+    Treating their first four coordinates as xywh corrupts tiny-bin AP.
+    """
+    values = [float(v) for v in line.split()]
+    if len(values) < 5 or int(values[0]) != 0:
+        return None
+    if len(values) == 5:
+        cx, cy, bw, bh = values[1:]
+        return [cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]
+    if (len(values) - 1) % 2 or len(values) < 7:
+        raise ValueError("YOLO polygon must contain at least three xy pairs")
+    x = values[1::2]
+    y = values[2::2]
+    return [min(x), min(y), max(x), max(y)]
+
+
+def recall_for_bin(samples, bin_name: str, threshold: float = 0.5) -> float | None:
+    """Max recall among predictions retained at collection conf=0.001."""
+    total = sum(gt["bin"] == bin_name for sample in samples for gt in sample["gt"])
+    if not total:
+        return None
+    matched = [set() for _ in samples]
+    for _, sample_idx, overlaps in prepare_matches(samples):
+        eligible = [
+            j for j, gt in enumerate(samples[sample_idx]["gt"])
+            if gt["bin"] == bin_name and j not in matched[sample_idx]
+        ]
+        if not eligible:
+            continue
+        group_ious = overlaps[eligible]
+        if len(group_ious) and group_ious.max() >= threshold:
+            matched[sample_idx].add(eligible[int(group_ious.argmax())])
+    return sum(map(len, matched)) / total
+
+
 def finalize_size_predictions(artifact: Path):
-    """Read annotations and calculate size AP entirely on CPU."""
+    """Read original-scale polygons and calculate AP entirely on CPU."""
     payload = torch.load(artifact, map_location="cpu", weights_only=True)
     samples = []
     for result in payload["predictions"]:
@@ -97,18 +135,31 @@ def finalize_size_predictions(artifact: Path):
         label = label_path(Path(result["image"]))
         if label.is_file():
             for line in label.read_text().splitlines():
-                values = [float(v) for v in line.split()]
-                if len(values) < 5 or int(values[0]) != 0:
+                if not line.strip():
                     continue
-                cx, cy, bw, bh = values[1:5]
-                gt.append({"box": [(cx-bw/2)*width, (cy-bh/2)*height,
-                                   (cx+bw/2)*width, (cy+bh/2)*height],
-                           "bin": size_bin(bw*width*scale, bh*height*scale)})
-        pred = [(box.numpy(), float(score)) for box, score, cls in
-                zip(result["boxes"], result["scores"], result["classes"]) if int(cls) == 0]
+                normalized = parse_annotation_box(line)
+                if normalized is None:
+                    continue
+                x1, y1, x2, y2 = normalized
+                box = [x1 * width, y1 * height, x2 * width, y2 * height]
+                gt.append({
+                    "box": box,
+                    "bin": size_bin((x2-x1) * width * scale,
+                                    (y2-y1) * height * scale),
+                })
+        pred = [
+            (box.numpy(), float(score))
+            for box, score, cls in zip(result["boxes"], result["scores"], result["classes"])
+            if int(cls) == 0
+        ]
         samples.append({"gt": gt, "pred": pred})
-    return size_ap(samples)
-
+    result = size_ap(samples)
+    for bin_name, metrics in result.items():
+        metrics["GT"] = sum(
+            gt["bin"] == bin_name for sample in samples for gt in sample["gt"]
+        )
+        metrics["Recall50_conf0.001"] = recall_for_bin(samples, bin_name)
+    return result
 
 def evaluate_size(checkpoint: Path, dataset_file: Path, split: str = "val", imgsz: int = 1280):
     from tempfile import TemporaryDirectory
