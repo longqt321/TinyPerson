@@ -1,6 +1,8 @@
 # Matched ablation: one architectural YAML, same seed/schedule/augmentations.
 # A0: identity slot; A2: normalized center contrast; A3: BTRM.
 # Use --parallel to train all three on distinct Modal L4 GPUs simultaneously.
+execution:
+  parallel: true
 seed: 42
 data:
   config: /mnt/data/tinyperson/data.yaml
