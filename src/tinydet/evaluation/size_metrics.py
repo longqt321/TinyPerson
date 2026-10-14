@@ -73,15 +73,26 @@ def collect_size_predictions(checkpoint: Path, dataset_file: Path, artifact: Pat
     images = dataset_images(dataset_file, split)
     if not images or any(not path.is_file() for path in images):
         raise ValueError(f"Missing or empty dataset split: {split}")
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    # Ultralytics 8.4.164 treats a Python list of image paths as a single
+    # in-memory batch (LoadPilAndNumpy), IGNORING batch=1. This can OOM a
+    # 22-GB L4 when the validation set has 322 images at 1280 resolution.
+    # A .txt path is instead routed to LoadImagesAndVideos, which actually
+    # respects batch=1 and streams images one at a time.
+    manifest = artifact.parent / "size_input_images.txt"
+    manifest.write_text("".join(f"{path.resolve()}\n" for path in images))
     predictions = []
     for result in YOLO(str(checkpoint)).predict(
-        source=[str(path) for path in images], stream=True, batch=1,
+        source=str(manifest), stream=True, batch=1,
         imgsz=imgsz, conf=.001, max_det=1000, verbose=False,
     ):
         predictions.append({"image": result.path, "shape": result.orig_shape,
                             "boxes": result.boxes.xyxy.cpu(), "scores": result.boxes.conf.cpu(),
                             "classes": result.boxes.cls.cpu()})
-    artifact.parent.mkdir(parents=True, exist_ok=True)
+    if len(predictions) != len(images):
+        raise ValueError(
+            f"Only predicted {len(predictions)}/{len(images)} images; size AP would be invalid"
+        )
     torch.save({"predictions": predictions, "imgsz": imgsz}, artifact)
     return artifact
 
