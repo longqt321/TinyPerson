@@ -1,6 +1,5 @@
 """Unit tests for BTRM mathematics, routing, serialization and experiment fairness."""
 import copy
-import math
 
 import pytest
 import torch
