@@ -28,7 +28,7 @@ def smoke(config: str, imgsz: int = 128) -> None:
         install_feature_module(model, options)
         model.eval()
         with torch.no_grad():
-            output = model(torch.randn(1, 3, imgsz, imgsz))
+            _ = model(torch.randn(1, 3, imgsz, imgsz))
         gate = model.model[GATE_INDEX]
         is_module = isinstance(gate, LocalBackgroundEvidence)
         assert is_module == (options["mode"] != "none")
