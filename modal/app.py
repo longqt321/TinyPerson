@@ -152,8 +152,8 @@ def _write_btrm_report(references: dict, report: dict, group: str):
 
 
 @app.local_entrypoint()
-def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = "", parallel: bool = False, reuse: bool = False):
-    """Compare models; optionally reuse exact completed runs."""
+def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = "", parallel: bool = False, reuse: bool = False, evaluate_only: bool = False):
+    """Compare models, or safely finish evaluation without any retraining."""
     from tinydet.utils.comparison import load_comparison
     from tinydet.utils.experiment import git_info
 
@@ -176,6 +176,8 @@ def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = 
         raise ValueError(f"Unknown model: {start_at}")
     if start_at:
         experiments = experiments[names.index(start_at):]
+    if evaluate_only:
+        reuse = True  # Never launch training from a recovery operation.
     if any(experiment["hardware"]["gpu"] != "L4" for experiment in experiments):
         raise ValueError("Only L4 GPU is allowed by the resource cap")
     commit, dirty = git_info()
@@ -213,6 +215,12 @@ def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = 
             finish(match["run"], match["val"], match["benchmark"])
             references[experiment["name"]] = match["run"]
         else:
+            if evaluate_only:
+                raise FileNotFoundError(
+                    f"No reusable completed checkpoint for {experiment['name']}. "
+                    "Evaluation-only mode refuses to train; verify Modal Volume run status "
+                    "and the exact saved experiment/model YAML."
+                )
             to_train.append(experiment)
 
     errors = []
