@@ -610,3 +610,103 @@ def spatial_probe(run: str, config: str = "configs/analysis/spatial_probe.yaml")
     extracted = _spatial_probe_extract.remote(run, text)
     print(f"GPU extraction: {extracted}", flush=True)
     print(f"CPU probe metrics: {_spatial_probe_finish.remote(run, extracted['output'], text)}")
+
+
+# BTRM diagnostics are strictly post-hoc: they read frozen checkpoints and
+# saved validation predictions. Mathematical audit is a hard prerequisite
+# for every GPU feature-diagnostic call.
+@app.function(image=image, cpu=2.0, memory=4096, max_containers=1,
+              scaledown_window=2, volumes=mounts, timeout=600)
+def _btrm_math_gate(report_id: str):
+    from tinydet.analysis.btrm_math_audit import run_math_audit
+    from tinydet.utils.experiment import write_json
+
+    runs.reload()
+    report = run_math_audit()  # raises on any numerical violation
+    if report["status"] != "PASS":
+        raise AssertionError("Cannot proceed to real features without a valid math audit")
+    destination = RUN_ROOT / "comparisons" / "btrm_diagnostics" / report_id
+    write_json(destination / "math_audit.json", report)
+    runs.commit()
+    return {"status": report["status"], "checks": report["checks"],
+            "max_abs_error": report["max_abs_error"]}
+
+
+@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
+              max_containers=1, scaledown_window=2, volumes=mounts, timeout=3600)
+def _btrm_saved_pr(references: dict, report_id: str, split: str):
+    import json
+
+    from tinydet.analysis.btrm_prediction_diagnostics import analyze_prediction_runs
+    from tinydet.utils.experiment import resolve_run
+
+    runs.reload()
+    root = RUN_ROOT / "comparisons" / "btrm_diagnostics" / report_id
+    audit = json.loads((root / "math_audit.json").read_text())
+    if audit.get("status") != "PASS":
+        raise RuntimeError("Mathematical validation failed or was not run")
+    paths = {model: resolve_run(RUN_ROOT, ref) for model, ref in references.items()}
+    result = analyze_prediction_runs(paths, root, split)
+    runs.commit()
+    return result
+
+
+@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0,
+              scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
+              max_containers=1, volumes=mounts, timeout=3600)
+def _btrm_real_features(run: str, report_id: str, max_images: int, split: str):
+    import json
+
+    from tinydet.analysis.btrm_feature_diagnostics import collect_features
+    from tinydet.utils.experiment import resolve_run
+
+    runs.reload()
+    audit = RUN_ROOT / "comparisons" / "btrm_diagnostics" / report_id / "math_audit.json"
+    if json.loads(audit.read_text()).get("status") != "PASS":
+        raise RuntimeError("Mathematical validation failed or was not run")
+    result = collect_features(resolve_run(RUN_ROOT, run), max_images, split)
+    runs.commit()
+    return {"run": run, "images": result["images"],
+            "gate_gain": result["effective_gain"],
+            "saturation": result["all_feature_maps"]["g_btrm_gt_95"]}
+
+
+@app.function(image=image, cpu=2.0, memory=4096, max_containers=1,
+              scaledown_window=2, volumes=mounts, timeout=1200)
+def _btrm_finalize_diagnostics(references: dict, report_id: str, split: str):
+    from tinydet.analysis.btrm_diagnostic_report import assemble_report
+    from tinydet.utils.experiment import resolve_run
+
+    runs.reload()
+    root = RUN_ROOT / "comparisons" / "btrm_diagnostics" / report_id
+    paths = {model: resolve_run(RUN_ROOT, ref) for model, ref in references.items()}
+    result = assemble_report(paths, root, split)
+    runs.commit()
+    return result
+
+
+@app.local_entrypoint()
+def btrm_diagnose(
+    a0: str = "btrm_a0/20261014-063504-0a3e661-seed42",
+    a2: str = "btrm_a2/20261014-063507-0a3e661-seed42",
+    a3: str = "btrm_a3/20261014-063508-0a3e661-seed42",
+    max_images: int = 128,
+    split: str = "val",
+):
+    """Audit equations first; analyze saved predictions and frozen P3 only if PASS."""
+    if split not in {"val", "test"} or max_images < 1:
+        raise ValueError("Invalid split or max_images")
+    references = {"btrm_a0": a0, "btrm_a2": a2, "btrm_a3": a3}
+    report_id = "audit-" + uuid.uuid4().hex[:10]
+    print("STEP 1/4: independent float64 BTRM audit (CPU, no GPU)", flush=True)
+    audit = _btrm_math_gate.remote(report_id)
+    print("Math result:", audit, flush=True)
+    if audit["status"] != "PASS":
+        raise RuntimeError("Math audit did not pass; GPU stage canceled")
+    print("STEP 2/4: reanalyze saved detector predictions (CPU)", flush=True)
+    print(_btrm_saved_pr.remote(references, report_id, split), flush=True)
+    print("STEP 3/4: measure frozen P3 features (GPU L4, batch=1)", flush=True)
+    for run in references.values():
+        print(_btrm_real_features.remote(run, report_id, max_images, split), flush=True)
+    print("STEP 4/4: aggregate and write diagnostics (CPU)", flush=True)
+    print(_btrm_finalize_diagnostics.remote(references, report_id, split), flush=True)
