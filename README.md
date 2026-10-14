@@ -88,3 +88,25 @@ Use `configs/experiment/ablation_nwd.yaml` for the four-way P3-only baseline/NWD
 ### Heavy-Bottom architecture study
 
 [Study design, checkpoint choices, diagnostics, four architectures, and commands](docs/HEAVY_BOTTOM.md). Phase 1 uses an explicit Modal run `best.pt` or pretrained YOLO26n checkpoint without retraining. Phase 2 is a separate four-model, 50-epoch screening configuration at `configs/experiment/heavy_bottom.yaml`; it is not launched automatically.
+
+### BTRM: three-arm P3 local evidence ablation
+
+A0 (identity), A2 (background-normalized contrast) and A3 (BTRM tangent
+projection) use the **same** YOLO26n YAML and a common 50-epoch training
+schedule. The comparison YAML enables three separate L4 GPUs by default.
+
+```bash
+uv run --extra cpu python scripts/btrm_smoke.py
+uv run --extra cpu pytest tests/test_btrm.py -q
+uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_btrm.yaml
+```
+
+To recover after a completed train but failed size evaluation **without any retraining**:
+```bash
+uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_btrm.yaml --evaluate-only
+```
+
+Completed runs include checkpoints, epoch curves, AP/recall by object-size bin,
+benchmark latency and an automatic `comparisons/btrm/compare-*/` CSV/JSON/MD
+report with A2−A0, A3−A2 and A3−A0. See
+[protocol and exact output paths](docs/BTRM_ABLATION.md).

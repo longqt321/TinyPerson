@@ -15,8 +15,8 @@ def load_comparison(path: str | Path) -> list[dict]:
     experiments = []
     for model in models:
         if (not isinstance(model, dict) or not {"name", "config"} <= model.keys()
-                or set(model) - {"name", "config", "modules"}):
-            raise ValueError("Each model needs name and config, with optional modules")
+                or set(model) - {"name", "config", "modules", "feature_module"}):
+            raise ValueError("Each model needs name and config, with optional modules/feature_module")
         name = model["name"]
         if not isinstance(name, str) or not name.replace("-", "").replace("_", "").isalnum():
             raise ValueError("Model name must contain only letters, digits, '-' or '_'")
@@ -30,5 +30,9 @@ def load_comparison(path: str | Path) -> list[dict]:
             from tinydet.modules.ultralytics_adapter import validate_modules
 
             model_config["modules"] = validate_modules(model["modules"])
+        if "feature_module" in model:
+            from tinydet.modules.btrm import validate_feature_module
+
+            model_config["feature_module"] = validate_feature_module(model["feature_module"])
         experiments.append({"name": name, **shared, "model": model_config})
     return experiments

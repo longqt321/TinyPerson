@@ -130,68 +130,153 @@ def train(config: str):
     print(run)
 
 
+@app.function(image=image, cpu=1.0, memory=1024, max_containers=1,
+              volumes={str(RUN_ROOT): runs}, timeout=60)
+def _has_size_metrics(run: str, split: str):
+    from tinydet.utils.experiment import resolve_run
+
+    runs.reload()
+    target = resolve_run(RUN_ROOT, run)
+    return (target / "metrics" / f"size_{split}.json").is_file()
+
+
+@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
+              volumes={str(RUN_ROOT): runs}, timeout=3600)
+def _write_btrm_report(references: dict, report: dict, group: str):
+    from tinydet.evaluation.btrm_report import write_btrm_report
+
+    runs.reload()
+    result = write_btrm_report(RUN_ROOT, references, report, group)
+    runs.commit()
+    return result
+
+
 @app.local_entrypoint()
-def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = "", parallel: bool = False, reuse: bool = False):
-    """Compare models; optionally reuse exact completed runs."""
+def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = "", parallel: bool = False, reuse: bool = False, evaluate_only: bool = False):
+    """Compare models, or safely finish evaluation without any retraining."""
     from tinydet.utils.comparison import load_comparison
     from tinydet.utils.experiment import git_info
 
     experiments = load_comparison(config)
+    raw = yaml.safe_load(Path(config).read_text())
+    execution = raw.get("execution", {})
+    if not isinstance(execution, dict) or set(execution) - {"parallel"}:
+        raise ValueError("execution accepts only a parallel boolean")
+    if type(execution.get("parallel", False)) is not bool:
+        raise ValueError("execution.parallel must be a boolean")
+    parallel = parallel or execution.get("parallel", False)
+    report = raw.get("report", {})
+    if report and not isinstance(report, dict):
+        raise ValueError("report must be a YAML mapping")
+    report_enabled = bool(report.get("enabled", False))
+    if report_enabled and report.get("split", "val") != "val":
+        raise ValueError("Automatic report currently supports validation split only")
     names = [experiment["name"] for experiment in experiments]
     if start_at and start_at not in names:
         raise ValueError(f"Unknown model: {start_at}")
     if start_at:
         experiments = experiments[names.index(start_at):]
+    if evaluate_only:
+        reuse = True  # Never launch training from a recovery operation.
     if any(experiment["hardware"]["gpu"] != "L4" for experiment in experiments):
         raise ValueError("Only L4 GPU is allowed by the resource cap")
     commit, dirty = git_info()
     wandb_group = f"compare-{uuid.uuid4().hex[:8]}"
+    references = {}
 
     def finish(reference: str, val_done: bool = False, benchmark_done: bool = False):
-        if val_done and benchmark_done:
-            print(f"Reusing completed {reference}", flush=True)
-            return
         if not val_done:
             print(f"Evaluating {reference}", flush=True)
             _evaluate_pipeline(reference, "val", reuse_training=True)
         if not benchmark_done:
             print(f"Benchmarking {reference}", flush=True)
             _benchmark.remote(reference)
+        if report_enabled and report.get("size_metrics", True):
+            if not _has_size_metrics.remote(reference, "val"):
+                print(f"Size-wise AP/recall: {reference}", flush=True)
+                artifact = _heavy_bottom_size_evaluate.remote(reference, "val")
+                _finish_evaluation.remote(reference, artifact, "val", True)
         print(f"Completed {reference}", flush=True)
 
     to_train = []
     for experiment in experiments:
         match = None
         if reuse:
-            model_sha256 = hashlib.sha256(Path(experiment["model"]["config"]).read_bytes()).hexdigest()
+            model_sha256 = hashlib.sha256(
+                Path(experiment["model"]["config"]).read_bytes()
+            ).hexdigest()
             match = _find_reusable.remote(experiment, model_sha256)
         if match:
             if match["legacy"]:
-                print(f"Warning: {match['run']} has no recorded model YAML hash; verify dataset and model files are unchanged", flush=True)
+                print(
+                    f"Warning: {match['run']} has no model YAML hash; "
+                    "check code and dataset before reusing", flush=True,
+                )
             finish(match["run"], match["val"], match["benchmark"])
+            references[experiment["name"]] = match["run"]
         else:
+            if evaluate_only:
+                raise FileNotFoundError(
+                    f"No reusable completed checkpoint for {experiment['name']}. "
+                    "Evaluation-only mode refuses to train; verify Modal Volume run status "
+                    "and the exact saved experiment/model YAML."
+                )
             to_train.append(experiment)
 
+    errors = []
     if parallel:
         for offset in range(0, len(to_train), 4):
             pending = []
             for experiment in to_train[offset:offset + 4]:
                 print(f"Training {experiment['name']}", flush=True)
-                options = {"secrets": [wandb_secret]} if experiment["output"].get("wandb_project") else {}
-                pending.append(_train.with_options(**options).spawn(config, commit, dirty, yaml.safe_dump(experiment), wandb_group))
-            completed = [call.get() for call in pending]
-            for run in completed:
+                options = ({"secrets": [wandb_secret]}
+                           if experiment["output"].get("wandb_project") else {})
+                call = _train.with_options(**options).spawn(
+                    config, commit, dirty, yaml.safe_dump(experiment), wandb_group
+                )
+                pending.append((experiment["name"], call))
+            for name, call in pending:
+                try:
+                    run = call.get()
+                    reference = str(Path(run).relative_to(RUN_ROOT))
+                    _finalize_pipeline(reference)
+                    finish(reference)
+                    references[name] = reference
+                except Exception as exc:
+                    errors.append((name, str(exc)))
+                    print(f"FAILED {name}: {exc}", flush=True)
+    else:
+        for experiment in to_train:
+            name = experiment["name"]
+            print(f"Training {name}", flush=True)
+            options = ({"secrets": [wandb_secret]}
+                       if experiment["output"].get("wandb_project") else {})
+            try:
+                run = _train.with_options(**options).remote(
+                    config, commit, dirty, yaml.safe_dump(experiment), wandb_group
+                )
                 reference = str(Path(run).relative_to(RUN_ROOT))
                 _finalize_pipeline(reference)
                 finish(reference)
-    else:
-        for experiment in to_train:
-            print(f"Training {experiment['name']}", flush=True)
-            options = {"secrets": [wandb_secret]} if experiment["output"].get("wandb_project") else {}
-            run = _train.with_options(**options).remote(config, commit, dirty, yaml.safe_dump(experiment), wandb_group)
-            reference = str(Path(run).relative_to(RUN_ROOT))
-            _finalize_pipeline(reference)
-            finish(reference)
+                references[name] = reference
+            except Exception as exc:
+                errors.append((name, str(exc)))
+                print(f"FAILED {name}: {exc}", flush=True)
+
+    if errors:
+        raise RuntimeError(f"Comparison failed for: {errors}; successful runs remain saved")
+    if report_enabled:
+        required = {report.get(k) for k in ("baseline", "contrast", "proposed")}
+        if None in required or len(required) != 3:
+            raise ValueError("Report needs distinct baseline/contrast/proposed names")
+        if not required <= set(references):
+            print(
+                f"Skipping incomplete report: missing {required - set(references)}. "
+                "Use a full comparison to generate the three-arm report.",
+                flush=True,
+            )
+        else:
+            print("BTRM report:", _write_btrm_report.remote(references, report, wandb_group))
 
 
 @app.local_entrypoint()

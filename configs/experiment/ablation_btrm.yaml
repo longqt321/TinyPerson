@@ -1,0 +1,69 @@
+# Matched ablation: one architectural YAML, same seed/schedule/augmentations.
+# A0: identity slot; A2: normalized center contrast; A3: BTRM.
+# Use --parallel to train all three on distinct Modal L4 GPUs simultaneously.
+execution:
+  parallel: true
+seed: 42
+data:
+  config: /mnt/data/tinyperson/data.yaml
+train:
+  epochs: 50
+  patience: 50  # avoid different early-stopping exposure across models
+  imgsz: 1280
+  batch: 16
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.5
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  bgr: 0.0
+  mosaic: 1.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+report:
+  enabled: true
+  baseline: btrm_a0
+  contrast: btrm_a2
+  proposed: btrm_a3
+  split: val
+  size_metrics: true
+models:
+  - name: btrm_a0
+    config: configs/model/yolo26n-btrm.yaml
+    feature_module:
+      mode: none
+  - name: btrm_a2
+    config: configs/model/yolo26n-btrm.yaml
+    feature_module:
+      mode: contrast
+      radius: 1
+      ridge_relative: 0.05
+      eps: 0.001
+      saturation: 3.0
+  - name: btrm_a3
+    config: configs/model/yolo26n-btrm.yaml
+    feature_module:
+      mode: btrm
+      radius: 1
+      ridge_relative: 0.05
+      eps: 0.001
+      saturation: 3.0
