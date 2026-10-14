@@ -137,3 +137,57 @@ def test_report_delta_is_proposed_minus_contrast():
     assert _delta({"AP50": .3, "latency_ms": 12}, {
         "AP50": .2, "latency_ms": 10
     }) == pytest.approx({"AP50": .1, "latency_ms": 2})
+
+
+def test_size_prediction_manifest_uses_one_image_per_batch(tmp_path, monkeypatch):
+    """Regression: Python list paths produce one giant 322-image batch."""
+    from PIL import Image
+    from ultralytics.data.build import load_inference_source
+    from tinydet.evaluation import size_metrics
+
+    image_paths = []
+    for i in range(3):
+        path = tmp_path / f"sample_{i}.jpg"
+        Image.new("RGB", (64, 64), (50, 90, 130)).save(path)
+        image_paths.append(path)
+    monkeypatch.setattr(size_metrics, "dataset_images", lambda *_: image_paths)
+
+    calls = []
+
+    class FakeBoxes:
+        xyxy = torch.empty((0, 4), dtype=torch.float32)
+        conf = torch.empty(0, dtype=torch.float32)
+        cls = torch.empty(0, dtype=torch.float32)
+
+    class FakeYOLO:
+        def __init__(self, checkpoint):
+            assert checkpoint == "fake-checkpoint.pt"
+
+        def predict(self, *, source, batch, imgsz, stream, **kwargs):
+            assert isinstance(source, str)  # a .txt path, never an image list
+            assert source.endswith(".txt")
+            assert batch == 1
+            assert imgsz == 1280 and stream is True
+            paths = [Path(line) for line in Path(source).read_text().splitlines()]
+            assert paths == image_paths
+            loader = load_inference_source(source, batch=batch)
+            assert type(loader).__name__ == "LoadImagesAndVideos"
+            assert loader.bs == 1
+            assert loader.nf == 3
+            assert len(list(loader)) == 3
+            calls.append(source)
+            for path in paths:
+                yield type("Result", (), {
+                    "path": str(path), "orig_shape": (64, 64), "boxes": FakeBoxes()
+                })()
+
+    monkeypatch.setattr(size_metrics, "YOLO", FakeYOLO)
+    artifact = tmp_path / "size" / "predictions.pt"
+    result = size_metrics.collect_size_predictions(
+        Path("fake-checkpoint.pt"), tmp_path / "data.yaml", artifact, imgsz=1280
+    )
+    assert result == artifact
+    assert len(calls) == 1
+    payload = torch.load(artifact, weights_only=True, map_location="cpu")
+    assert len(payload["predictions"]) == 3
+    assert payload["imgsz"] == 1280
