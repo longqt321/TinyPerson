@@ -159,6 +159,12 @@ def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = 
 
     experiments = load_comparison(config)
     raw = yaml.safe_load(Path(config).read_text())
+    execution = raw.get("execution", {})
+    if not isinstance(execution, dict) or set(execution) - {"parallel"}:
+        raise ValueError("execution accepts only a parallel boolean")
+    if type(execution.get("parallel", False)) is not bool:
+        raise ValueError("execution.parallel must be a boolean")
+    parallel = parallel or execution.get("parallel", False)
     report = raw.get("report", {})
     if report and not isinstance(report, dict):
         raise ValueError("report must be a YAML mapping")
