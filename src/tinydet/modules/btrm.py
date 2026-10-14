@@ -33,7 +33,7 @@ def evidence_score(
         raise ValueError("ridge_relative must be positive and finite")
     if not (math.isfinite(eps) and eps > 0):
         raise ValueError("eps must be positive and finite")
-    b, c, h, w = x.shape
+    _, c, h, w = x.shape
     if min(h, w) <= 2 * radius:
         raise ValueError("Feature map is too small for this ring radius")
 
