@@ -1,0 +1,60 @@
+name: MSR CPU preflight
+
+on:
+  pull_request:
+    paths:
+      - "src/tinydet/modules/msr.py"
+      - "src/tinydet/data/**"
+      - "src/tinydet/models/registry.py"
+      - "src/tinydet/utils/config.py"
+      - "src/tinydet/utils/comparison.py"
+      - "src/tinydet/modules/ultralytics_adapter.py"
+      - "src/tinydet/training/trainer.py"
+      - "configs/model/yolo26n-msr-p2.yaml"
+      - "configs/experiment/ablation_msr.yaml"
+      - "scripts/audit_dataset.py"
+      - "tests/test_msr.py"
+      - "tests/test_data_preflight.py"
+      - ".github/workflows/msr-cpu.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/tinydet/modules/msr.py"
+      - "src/tinydet/data/**"
+      - "configs/model/yolo26n-msr-p2.yaml"
+      - "configs/experiment/ablation_msr.yaml"
+      - "tests/test_msr.py"
+      - "tests/test_data_preflight.py"
+
+jobs:
+  cpu-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install CPU environment
+        run: uv sync --extra cpu --group dev
+      - name: Test MSR and original-image audit
+        run: >
+          uv run --extra cpu --group dev pytest
+          tests/test_msr.py
+          tests/test_data_preflight.py
+          tests/test_shapes.py -q
+      - name: Lint changed Python files
+        run: >
+          uv run --extra cpu ruff check
+          src/tinydet/modules/msr.py
+          src/tinydet/data/image_audit.py
+          src/tinydet/data/__init__.py
+          src/tinydet/training/trainer.py
+          src/tinydet/modules/ultralytics_adapter.py
+          src/tinydet/models/registry.py
+          src/tinydet/utils/config.py
+          src/tinydet/utils/comparison.py
+          scripts/audit_dataset.py
+          tests/test_msr.py
+          tests/test_data_preflight.py
