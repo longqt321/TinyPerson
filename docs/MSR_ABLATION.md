@@ -54,10 +54,8 @@ Primary contrasts: A3−A0 (overall module), A3−A1 (normalization), and A3−A
 
 ## Commands
 
-\`\`\`bash
-uv sync --extra cpu --group dev
-uv run --extra cpu --group dev pytest tests/test_msr.py tests/test_shapes.py -q
-uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_msr.yaml
-\`\`\`
+    uv sync --extra cpu --group dev
+    uv run --extra cpu --group dev pytest tests/test_msr.py tests/test_shapes.py -q
+    uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_msr.yaml
 
 GPU training is intentionally not launched as part of this implementation/PR. No accuracy or latency gain is claimed.
