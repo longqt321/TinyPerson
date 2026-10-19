@@ -17,12 +17,12 @@ The reference TinyBenchmark protocol (see [annotation rules](https://github.com/
 
 Use the non-corner erase annotation and matching erased image archive. This preserves the reference training treatment for ignore/uncertain/logo regions and excludes dense images. Do not feed a corner JSON to this script.
 
-\`\`\`bash
-uv run --extra cpu python scripts/prepare_tinyperson_yolo.py \\
-  --annotations /data/TinyPerson/erase_with_uncertain_dataset/annotations/tiny_set_train.json \\
-  --image-root /data/TinyPerson/erase_with_uncertain_dataset/train \\
+```bash
+uv run --extra cpu python scripts/prepare_tinyperson_yolo.py \
+  --annotations /data/TinyPerson/erase_with_uncertain_dataset/annotations/tiny_set_train.json \
+  --image-root /data/TinyPerson/erase_with_uncertain_dataset/train \
   --output /data/derived/tinyperson-yolo
-\`\`\`
+```
 
 The script validates every image's raster dimensions against COCO metadata, refuses dense/corner data and remaining special annotations, maps both person categories to class 0, and writes a deterministic train/validation split grouped by the filename's inferred video/frame prefix. Inspect manifest.json, especially singleton_group_count: filenames that do not encode a video group fall back to singleton groups, so confirm grouping is sensible for the downloaded release. The official test split is never used for validation.
 
@@ -41,26 +41,26 @@ Only start training after this preflight reports source metadata as verified. Th
 
 Download the chosen checkpoint from the Modal run volume and use the original official test images plus the JSON with dense images (tiny_set_test_with_dense.json). The predictor verifies every source raster against its declared COCO width/height and saves boxes in original-image coordinates.
 
-\`\`\`bash
+```bash
 uv run --extra cpu python tools/download_results.py MODEL/RUN_ID
-uv run --extra cpu python scripts/predict_tinyperson_test.py \\
-  --checkpoint /path/to/best.pt \\
-  --annotations /data/TinyPerson/annotations/tiny_set_test_with_dense.json \\
-  --image-root /data/TinyPerson/test \\
-  --output predictions/tinyperson-test-predictions.json \\
+uv run --extra cpu python scripts/predict_tinyperson_test.py \
+  --checkpoint /path/to/best.pt \
+  --annotations /data/TinyPerson/annotations/tiny_set_test_with_dense.json \
+  --image-root /data/TinyPerson/test \
+  --output predictions/tinyperson-test-predictions.json \
   --imgsz 1280
-\`\`\`
+```
 
 Set image-root to the directory under which the JSON's file_name values resolve. If the test archive is under a different root, adjust that path; do not rename/recreate images to force a match.
 
 ## 3. Calculate TinyPerson AP
 
-\`\`\`bash
-uv run --extra cpu python scripts/evaluate_tinyperson_benchmark.py \\
-  --annotations /data/TinyPerson/annotations/tiny_set_test_with_dense.json \\
-  --predictions predictions/tinyperson-test-predictions.json \\
+```bash
+uv run --extra cpu python scripts/evaluate_tinyperson_benchmark.py \
+  --annotations /data/TinyPerson/annotations/tiny_set_test_with_dense.json \
+  --predictions predictions/tinyperson-test-predictions.json \
   --output metrics/tinyperson_test.json
-\`\`\`
+```
 
 The evaluator rejects missing/extra/duplicate image predictions to prevent accidental evaluation on the repository's custom 70/20/10 split. It excludes dense images, combines person categories, treats ignore/uncertain regions as neutral, caps detections at 200 per image, and writes per-size AP at IoU 0.25/0.50/0.75. The output records source paths and protocol details.
 
