@@ -110,14 +110,18 @@ def test_p2_architecture_and_checkpoint_roundtrip(tmp_path):
     pytest.importorskip("ultralytics")
     from tinydet.models.registry import build_model
 
+    options = {
+        "mode": "full_adaptive",
+        "dilations": [1, 2, 4],
+        "eps": 1e-4,
+        "score_clip": 10.0,
+        "hidden_ratio": 4,
+        "scale_temperature": 1.0,
+    }
     model = build_model({
         "config": "configs/model/yolo26n-msr-p2.yaml",
         "pretrained": None,
-        "feature_module": {
-            "mode": "full_adaptive", "dilations": [1, 2, 4],
-            "eps": 1e-4, "score_clip": 10.0, "hidden_ratio": 4,
-            "scale_temperature": 1.0,
-        },
+        "feature_module": options,
     })
     net = model.model
     assert len(net.model) == DETECT_INDEX + 1
