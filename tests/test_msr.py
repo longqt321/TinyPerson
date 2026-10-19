@@ -131,12 +131,19 @@ def test_p2_architecture_and_checkpoint_roundtrip(tmp_path):
     result = model.predict(torch.zeros(1, 3, 64, 64), device="cpu", verbose=False)
     assert len(result) == 1 and result[0].orig_shape == (64, 64)
 
-    checkpoint = tmp_path / "msr_model.pt"
-    torch.save(net, checkpoint)
-    loaded = torch.load(checkpoint, weights_only=False)
-    assert isinstance(loaded.model[21], MSRFusionGate)
-    assert loaded.model[21].mode == "full_adaptive"
-    assert loaded.model[DETECT_INDEX].f == [22, 26, 30, 34]
+    checkpoint = tmp_path / "msr_state.pt"
+    torch.save(net.state_dict(), checkpoint)
+    state = torch.load(checkpoint, weights_only=True, map_location="cpu")
+    reloaded = build_model({
+        "config": "configs/model/yolo26n-msr-p2.yaml",
+        "pretrained": None,
+        "feature_module": options,
+    })
+    reloaded.model.load_state_dict(state)
+    loaded_net = reloaded.model
+    assert isinstance(loaded_net.model[21], MSRFusionGate)
+    assert loaded_net.model[21].mode == "full_adaptive"
+    assert loaded_net.model[DETECT_INDEX].f == [22, 26, 30, 34]
 
 
 def test_install_rejects_already_replaced_gates():
