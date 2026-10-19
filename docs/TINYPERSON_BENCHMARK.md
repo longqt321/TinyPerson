@@ -26,7 +26,16 @@ uv run --extra cpu python scripts/prepare_tinyperson_yolo.py \\
 
 The script validates every image's raster dimensions against COCO metadata, refuses dense/corner data and remaining special annotations, maps both person categories to class 0, and writes a deterministic train/validation split grouped by the filename's inferred video/frame prefix. Inspect manifest.json, especially singleton_group_count: filenames that do not encode a video group fall back to singleton groups, so confirm grouping is sensible for the downloaded release. The official test split is never used for validation.
 
-Upload the derived dataset to the Modal data volume and point the experiment YAML's data.config at its data.yaml location. Keep the original archives and JSON unchanged.
+The converter copies the source COCO JSON into the derived dataset so the existing preflight can verify dimensions for every train/validation raster. Keep the original archives and JSON unchanged. Upload to a new remote directory so the current dataset is not overwritten:
+
+```bash
+uv run --extra cpu python tools/upload_data.py data /data/derived/tinyperson-yolo --remote /tinyperson_official_v1
+uv run --extra cpu modal run modal/app.py::compare \
+  --config configs/experiment/ablation_msr_tinyperson_official.yaml \
+  --preflight-only --require-source-metadata
+```
+
+Only start training after this preflight reports source metadata as verified. The dedicated config points at /mnt/data/tinyperson_official_v1/data.yaml and uses distinct run names for all four MSR variants. For a five-epoch pipeline smoke test, add --smoke --parallel to the compare command; it does not validate final AP.
 
 ## 2. Predict on the official test split at source resolution
 
