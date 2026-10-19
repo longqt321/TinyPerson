@@ -23,20 +23,6 @@ uv run --extra cpu modal run modal/app.py::benchmark --run baseline/RUN_ID
 
 Use `tools/list_runs.py --root outputs --csv outputs/experiments.csv` for downloaded results. Each run holds config, metadata, environment, checkpoints, and metrics. Git commit and dirty state are recorded; commit code before final runs.
 
-For ERF, provide an image already in the data volume:
-
-```bash
-uv run --extra cpu modal run modal/app.py::erf --run baseline/RUN_ID --image-path /mnt/data/tinyperson/images/example.jpg
-```
-
-Download selected artifacts with `uv run --extra cpu python tools/download_results.py baseline/RUN_ID`. Upload explicitly with `uv run --extra cpu python tools/upload_data.py data LOCAL_DATASET --remote /tinyperson`.
-
-Activation maps and frequency spectra use the same input image:
-
-```bash
-uv run --extra cpu modal run modal/app.py::diagnose --run baseline/RUN_ID --image-path /mnt/data/tinyperson/images/example.jpg
-```
-
 ## Compare models
 
 Edit `configs/experiment/comparison.yaml` to set the shared dataset and training parameters, then list model YAML files under `models`. Each model uses the same seed, dataset, training parameters, GPU and output root. Runs execute sequentially by default; each completed run gets validation metrics and a GPU benchmark. Add `--parallel` to train models in waves of up to four separate L4 containers. Evaluation and benchmarking follow each wave, so comparison uses at most four GPUs at a time. A failed run stops the sequence.
@@ -61,12 +47,6 @@ Add `--reuse` to `compare` to search the Modal run volume before starting GPUs. 
 uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/comparison.yaml --reuse --parallel
 ```
 
-## Context ablation models
-
-`configs/model/yolo26n-no-p5.yaml` now stops its backbone at P4 and detects from P3/P4; no P5 features are computed. `configs/model/yolo26n-p3-only.yaml` stops at P3 and detects only from P3. The previous detection-only P5 ablation is preserved as `configs/model/yolo26n-detect-no-p5.yaml` to reproduce the older run. All four models are listed in `configs/experiment/comparison.yaml`.
-
-Removing deep stages also reduces parameter count: standard 2,504,190; truncated P4 590,452; P3-only 144,106. An accuracy difference therefore cannot isolate receptive-field context from model capacity. The old detection-only ablation keeps the full backbone and offers a useful control. Its prior checkpoint remains under the old `yolo26n_no_p5` run name; that run does not represent the new truncated model.
-
 ## Explicit augmentation settings
 
 `configs/experiment/comparison.yaml` records the detection augmentation defaults of the installed Ultralytics 8.4.164 release. Training uses 50 epochs with patience 15. Mosaic runs at probability 1.0 until the last 10 epochs; HSV jitter, translation, scaling and horizontal flip are enabled. Rotation, shear, perspective, vertical flip, BGR swap, mixup, CutMix, copy-paste and multi-scale are explicitly disabled. `copy_paste_mode` is recorded but has no effect while `copy_paste: 0.0`; `auto_augment` and `erasing` are classification-only and are not part of this detection configuration. `compile: false` makes the torch.compile choice explicit; a full GPU compile run has not been verified. Ultralytics validates all listed options before training.
@@ -80,15 +60,6 @@ GPU workers use min_containers=0, buffer_containers=0 and scaledown_window=2 to 
 W&B runs use `latest` for the newest execution of each `config.name` and `historical` for earlier executions, regardless of completion state or seed. Filter W&B by Tags contains `latest` to show one run per model; remove the filter to inspect history. Logs and Modal checkpoints are preserved. To refresh existing runs or repair tags after an API failure, run `uv run --extra cpu modal run modal/app.py::organize_wandb --project hoangngan/tiny-person-research` (CPU only). This labels runs; it does not configure the browser workspace filter or resume training.
 
 Training now records mean box AP at every IoU threshold from 0.50 through 0.95 in steps of 0.05. Each new run saves `metrics/ap_iou.csv` per epoch and sends the same `metrics/AP0.50(B)` through `metrics/AP0.95(B)` series to W&B. Separate `evaluate` calls add `AP0.50` through `AP0.95` to `metrics/val.json` or `metrics/test.json`. These values are averaged over classes from the same Ultralytics validation pass; older CSV files cannot recover the intermediate IoU thresholds without rerunning validation on their checkpoints.
-
-### NWD placement ablation
-
-Use `configs/experiment/ablation_nwd.yaml` for the four-way P3-only baseline/NWD regression/NWD TAL/NWD full comparison. Optional `model.modules` settings select training-only plugins. See [method and commands](docs/NWD_ABLATION.md). The Modal image pins Ultralytics 8.4.164 to match the tested loss API and local lockfile.
-
-### Heavy-Bottom architecture study
-
-[Study design, checkpoint choices, diagnostics, four architectures, and commands](docs/HEAVY_BOTTOM.md). Phase 1 uses an explicit Modal run `best.pt` or pretrained YOLO26n checkpoint without retraining. Phase 2 is a separate four-model, 50-epoch screening configuration at `configs/experiment/heavy_bottom.yaml`; it is not launched automatically.
-
 
 ## TinyPerson benchmark protocol
 

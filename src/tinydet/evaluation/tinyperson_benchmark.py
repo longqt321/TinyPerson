@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import math
+import multiprocessing
+import os
 from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +21,75 @@ SIZE_RANGES: dict[str, tuple[float, float]] = {
     "tiny2": (8.0, 12.0), "tiny3": (12.0, 20.0),
     "small": (20.0, 32.0), "reasonable": (32.0, 100000.0),
 }
+_EVAL_CONTEXT: tuple[list[int], dict, list[tuple[float, int, list[float]]]] | None = None
+
+
+def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
+    if _EVAL_CONTEXT is None:
+        raise RuntimeError("Evaluator worker context was not initialized")
+    eval_ids, gt_by_image, scored = _EVAL_CONTEXT
+    size_range = SIZE_RANGES[bin_name]
+    bin_gt, positive_count = {}, 0
+    for image_id in eval_ids:
+        positives = gt_by_image[image_id]["positive"]
+        inside = [b for b in positives if _in_range(b, size_range)]
+        outside = [b for b in positives if not _in_range(b, size_range)]
+        bin_gt[image_id] = {
+            "positive": inside, "outside": outside,
+            "ignored": gt_by_image[image_id]["ignored"],
+        }
+        positive_count += len(inside)
+
+    metrics = {}
+    for threshold in IOU_THRESHOLDS:
+        matched = {image_id: set() for image_id in eval_ids}
+        matched_outside = {image_id: set() for image_id in eval_ids}
+        matched_ignored_iou = {image_id: set() for image_id in eval_ids}
+        tp, fp = [], []
+        for _, image_id, box in scored:
+            target = bin_gt[image_id]["positive"]
+            overlaps = [_iou(box, candidate) for candidate in target]
+            candidates = [i for i, overlap in enumerate(overlaps)
+                          if overlap >= threshold and i not in matched[image_id]]
+            if candidates:
+                best = max(candidates, key=lambda i: overlaps[i])
+                matched[image_id].add(best)
+                tp.append(1)
+                fp.append(0)
+                continue
+
+            outside = bin_gt[image_id]["outside"]
+            outside_overlaps = [_iou(box, candidate) for candidate in outside]
+            outside_candidates = [
+                i for i, overlap in enumerate(outside_overlaps)
+                if overlap >= threshold and i not in matched_outside[image_id]
+            ]
+            if outside_candidates:
+                best = max(outside_candidates, key=lambda i: outside_overlaps[i])
+                matched_outside[image_id].add(best)
+                continue
+
+            ignored = bin_gt[image_id]["ignored"]
+            ignored_iou = [
+                i for i, other in enumerate(ignored)
+                if _iou(box, other) >= threshold and i not in matched_ignored_iou[image_id]
+            ]
+            if ignored_iou:
+                matched_ignored_iou[image_id].add(ignored_iou[0])
+                continue
+            neutral_iod = any(_iod(box, other) >= threshold for other in ignored)
+            if neutral_iod or not _in_range(box, size_range):
+                continue
+            tp.append(0)
+            fp.append(1)
+        metrics[f"AP@{threshold:.2f}"] = _ap(tp, fp, positive_count)
+
+    valid = [value for value in metrics.values() if value is not None]
+    return bin_name, {
+        **metrics,
+        "AP_mean_IoU_0.25_0.50_0.75": float(np.mean(valid)) if valid else None,
+        "positive_ground_truths": positive_count,
+    }
 
 
 def _xywh_to_xyxy(box: list[float]) -> list[float]:
@@ -111,12 +183,14 @@ def _load_gt(path: Path) -> dict[str, Any]:
 
 
 def evaluate_tinyperson(annotation_file: str | Path,
-                        predictions_file: str | Path) -> dict[str, Any]:
+                        predictions_file: str | Path, workers: int = 0) -> dict[str, Any]:
     """Evaluate predictions/test.json against the original TinyPerson COCO test JSON.
 
     Predictions must contain an images list with path, boxes (xyxy in source pixels),
     scores and classes, matching the repository's exported test predictions.
     """
+    if workers < 0:
+        raise ValueError("workers must be non-negative")
     annotation_file, predictions_file = Path(annotation_file), Path(predictions_file)
     gt = _load_gt(annotation_file)
     payload = json.loads(predictions_file.read_text())
@@ -177,80 +251,23 @@ def evaluate_tinyperson(annotation_file: str | Path,
                 positives.append(ann["box"])
         gt_by_image[image_id] = {"positive": positives, "ignored": ignored}
 
-    output: dict[str, Any] = {}
-    for bin_name, size_range in SIZE_RANGES.items():
-        bin_gt, positive_count = {}, 0
-        for image_id in eval_ids:
-            positives = gt_by_image[image_id]["positive"]
-            inside = [b for b in positives if _in_range(b, size_range)]
-            outside = [b for b in positives if not _in_range(b, size_range)]
-            bin_gt[image_id] = {
-                "positive": inside, "outside": outside,
-                "ignored": gt_by_image[image_id]["ignored"],
-            }
-            positive_count += len(inside)
-
-        metrics = {}
-        for threshold in IOU_THRESHOLDS:
-            scored = sorted(
-                ((d["score"], image_id, d["box"])
-                 for image_id in eval_ids for d in pred_by_id[image_id]),
-                key=lambda item: item[0], reverse=True,
-            )
-            matched = {image_id: set() for image_id in eval_ids}
-            matched_outside = {image_id: set() for image_id in eval_ids}
-            matched_ignored_iou = {image_id: set() for image_id in eval_ids}
-            tp, fp = [], []
-            for _, image_id, box in scored:
-                target = bin_gt[image_id]["positive"]
-                overlaps = [_iou(box, candidate) for candidate in target]
-                candidates = [i for i, overlap in enumerate(overlaps)
-                              if overlap >= threshold and i not in matched[image_id]]
-                if candidates:
-                    best = max(candidates, key=lambda i: overlaps[i])
-                    matched[image_id].add(best)
-                    tp.append(1)
-                    fp.append(0)
-                    continue
-
-                outside = bin_gt[image_id]["outside"]
-                outside_overlaps = [_iou(box, candidate) for candidate in outside]
-                outside_candidates = [
-                    i for i, overlap in enumerate(outside_overlaps)
-                    if overlap >= threshold and i not in matched_outside[image_id]
-                ]
-                if outside_candidates:
-                    best = max(outside_candidates, key=lambda i: outside_overlaps[i])
-                    matched_outside[image_id].add(best)
-                    continue
-
-                ignored = bin_gt[image_id]["ignored"]
-                # The reference first performs one-to-one IoU matching to ignored
-                # GTs, then applies its IoD fallback (which can neutralize multiple
-                # detections inside a broad ignore region).
-                ignored_iou = [
-                    i for i, other in enumerate(ignored)
-                    if _iou(box, other) >= threshold
-                    and i not in matched_ignored_iou[image_id]
-                ]
-                if ignored_iou:
-                    matched_ignored_iou[image_id].add(ignored_iou[0])
-                    continue
-                neutral_iod = any(_iod(box, other) >= threshold for other in ignored)
-                # COCOeval also ignores unmatched detections outside the selected
-                # area range. A matched in-range GT remains a TP even if its
-                # predicted box has a different size.
-                if neutral_iod or not _in_range(box, size_range):
-                    continue
-                tp.append(0)
-                fp.append(1)
-            metrics[f"AP@{threshold:.2f}"] = _ap(tp, fp, positive_count)
-        valid = [value for value in metrics.values() if value is not None]
-        output[bin_name] = {
-            **metrics,
-            "AP_mean_IoU_0.25_0.50_0.75": float(np.mean(valid)) if valid else None,
-            "positive_ground_truths": positive_count,
-        }
+    scored = sorted(
+        ((d["score"], image_id, d["box"])
+         for image_id in eval_ids for d in pred_by_id[image_id]),
+        key=lambda item: item[0], reverse=True,
+    )
+    global _EVAL_CONTEXT
+    _EVAL_CONTEXT = (eval_ids, gt_by_image, scored)
+    worker_count = min(workers or min(len(SIZE_RANGES), os.cpu_count() or 1), len(SIZE_RANGES))
+    if (len(scored) >= 5000 and worker_count > 1
+            and "fork" in multiprocessing.get_all_start_methods()):
+        with ProcessPoolExecutor(
+            max_workers=worker_count, mp_context=multiprocessing.get_context("fork")
+        ) as executor:
+            output = dict(executor.map(_evaluate_size_bin, SIZE_RANGES))
+    else:
+        output = dict(map(_evaluate_size_bin, SIZE_RANGES))
+    _EVAL_CONTEXT = None
 
     output["protocol"] = {
         "name": "TinyPerson documented protocol; standalone implementation",

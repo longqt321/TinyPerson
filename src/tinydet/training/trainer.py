@@ -22,8 +22,9 @@ def train(
     if not torch.cuda.is_available():
         raise RuntimeError("Training requires Modal GPU")
     config = load_config(config_path)
-    if not config.data["config"] or not Path(config.data["config"]).is_file():
-        raise ValueError(f"Dataset config does not exist: {config.data['config']}")
+    effective_dataset_config = Path(dataset_config or config.data["config"])
+    if not effective_dataset_config.is_file():
+        raise ValueError(f"Dataset config does not exist: {effective_dataset_config}")
     if config.model.get("pretrained") and not Path(config.model["pretrained"]).is_file():
         raise ValueError(f"Pretrained checkpoint does not exist: {config.model['pretrained']}")
     set_seed(config.seed, config.train["deterministic"])
@@ -61,12 +62,11 @@ def train(
             print(f"W&B: {wandb_run.url}", flush=True)
         model.callbacks["on_fit_epoch_end"].insert(0, partial(log_ap_by_iou, wandb_enabled=bool(project)))
         training_options = {}
-        if "modules" in config.model or "feature_module" in config.model:
-            from tinydet.modules.ultralytics_adapter import ModuleDetectionTrainer
+        if "feature_module" in config.model:
+            from tinydet.modules.ultralytics_adapter import MSRDetectionTrainer
 
             training_options["trainer"] = partial(
-                ModuleDetectionTrainer,
-                modules=config.model.get("modules"),
+                MSRDetectionTrainer,
                 feature_module=config.model.get("feature_module"),
             )
         started = monotonic()

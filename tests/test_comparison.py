@@ -3,9 +3,9 @@ from tinydet.utils.comparison import load_comparison
 
 def test_comparison_shares_settings_and_changes_only_model():
     experiments = load_comparison("configs/experiment/comparison.yaml")
-    assert len(experiments) == 4
+    assert len(experiments) == 1
     assert experiments[0]["output"]["wandb_project"] == "tiny-person-research"
-    assert len({item["model"]["config"] for item in experiments}) == 4
+    assert experiments[0]["model"]["config"] == "configs/model/yolo26n.yaml"
     for key in ("seed", "data", "train", "hardware", "output"):
         assert all(item[key] == experiments[0][key] for item in experiments)
 

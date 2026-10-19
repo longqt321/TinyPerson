@@ -8,8 +8,8 @@ import yaml
 from ultralytics import YOLO
 from ultralytics.models.yolo.detect import DetectionValidator
 
-from tinydet.analysis.heavy_bottom import dataset_images
 from tinydet.evaluation.iou_metrics import ap_by_iou
+from tinydet.utils.dataset import dataset_images, normalize_dataset_yaml
 from tinydet.utils.experiment import write_json
 
 
@@ -17,6 +17,7 @@ def preflight(run: Path, split: str):
     if split not in {"val", "test"}:
         raise ValueError("split must be val or test")
     config = yaml.safe_load((run / "config.yaml").read_text())
+    config["data"]["config"] = str(normalize_dataset_yaml(config["data"]["config"]))
     checkpoint = run / "checkpoints" / "best.pt"
     if not checkpoint.is_file():
         raise FileNotFoundError(checkpoint)

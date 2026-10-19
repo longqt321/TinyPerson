@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 import random
 import re
 import shutil
-from collections import Counter, defaultdict
 from pathlib import Path
 
 import yaml
@@ -31,8 +33,54 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _image_size(item: tuple[dict, Path]) -> tuple[dict, int, int]:
+    image, image_root = item
+    source = image_root / str(image["file_name"])
+    if not source.is_file():
+        raise FileNotFoundError(f"Image referenced by JSON is missing: {source}")
+    with Image.open(source) as raster:
+        width, height = raster.size
+    declared = (int(image["width"]), int(image["height"]))
+    if (width, height) != declared:
+        raise ValueError(
+            f"Raster/COCO dimension mismatch for {image['file_name']}: raster={(width, height)}, "
+            f"JSON={declared}"
+        )
+    return image, width, height
+
+
+def _write_record(item: tuple[dict, Path, Path, set[str]]) -> tuple[dict, str, int]:
+    record, image_root, output, val_groups = item
+    split = "val" if record["group"] in val_groups else "train"
+    source = image_root / record["file_name"]
+    image_dest = output / "images" / split / record["basename"]
+    label_dest = output / "labels" / split / f"{Path(record['basename']).stem}.txt"
+    image_dest.parent.mkdir(parents=True, exist_ok=True)
+    label_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, image_dest)
+
+    lines = []
+    width, height = record["width"], record["height"]
+    for ann in record["annotations"]:
+        x, y, bw, bh = map(float, ann["bbox"])
+        if bw <= 0 or bh <= 0:
+            raise ValueError(f"Non-positive bbox in image {record['file_name']}: {ann['bbox']}")
+        if x < -1e-3 or y < -1e-3 or x + bw > width + 1e-3 or y + bh > height + 1e-3:
+            raise ValueError(f"Out-of-bounds bbox in image {record['file_name']}: {ann['bbox']}")
+        cx, cy = (x + bw / 2) / width, (y + bh / 2) / height
+        lines.append(f"0 {cx:.8f} {cy:.8f} {bw / width:.8f} {bh / height:.8f}")
+    label_dest.write_text("\n".join(lines) + ("\n" if lines else ""))
+    return ({
+        "image_id": record["id"], "source_file_name": record["file_name"],
+        "output_image": str(image_dest.relative_to(output)),
+        "output_label": str(label_dest.relative_to(output)),
+        "source_width": width, "source_height": height,
+        "group": record["group"], "split": split, "objects": len(lines),
+    }, split, len(lines))
+
+
 def prepare(annotations_path: Path, image_root: Path, output: Path,
-            val_fraction: float = 0.1, seed: int = 42) -> dict:
+            val_fraction: float = 0.1, seed: int = 42, workers: int = 0) -> dict:
     if not 0 < val_fraction < 0.5:
         raise ValueError("val_fraction must be between 0 and 0.5")
     if output.exists() and any(output.iterdir()):
@@ -71,28 +119,22 @@ def prepare(annotations_path: Path, image_root: Path, output: Path,
 
     image_records = []
     group_to_images = defaultdict(list)
-    for image in images:
-        image_id = int(image["id"])
-        file_name = str(image["file_name"])
-        source = image_root / file_name
-        if not source.is_file():
-            raise FileNotFoundError(f"Image referenced by JSON is missing: {source}")
-        with Image.open(source) as raster:
-            width, height = raster.size
-        declared = (int(image["width"]), int(image["height"]))
-        if (width, height) != declared:
-            raise ValueError(
-                f"Raster/COCO dimension mismatch for {file_name}: raster={(width, height)}, "
-                f"JSON={declared}"
-            )
-        group = _group_key(file_name)
-        record = {
-            "id": image_id, "file_name": file_name, "basename": Path(file_name).name,
-            "width": width, "height": height, "group": group,
-            "annotations": by_image.get(image_id, []),
-        }
-        image_records.append(record)
-        group_to_images[group].append(record)
+    worker_count = workers or min(16, os.cpu_count() or 1)
+    if worker_count < 1:
+        raise ValueError("workers must be non-negative")
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        inspected_images = executor.map(_image_size, ((image, image_root) for image in images))
+        for image, width, height in inspected_images:
+            image_id = int(image["id"])
+            file_name = str(image["file_name"])
+            group = _group_key(file_name)
+            record = {
+                "id": image_id, "file_name": file_name, "basename": Path(file_name).name,
+                "width": width, "height": height, "group": group,
+                "annotations": by_image.get(image_id, []),
+            }
+            image_records.append(record)
+            group_to_images[group].append(record)
 
     groups = list(group_to_images)
     if len(groups) < 2:
@@ -116,38 +158,18 @@ def prepare(annotations_path: Path, image_root: Path, output: Path,
     manifest = []
     split_counts = Counter()
     object_counts = Counter()
-    for record in image_records:
-        split = "val" if record["group"] in val_groups else "train"
-        split_counts[split] += 1
-        source = image_root / record["file_name"]
-        image_dest = output / "images" / split / record["basename"]
-        label_dest = output / "labels" / split / f"{Path(record['basename']).stem}.txt"
-        image_dest.parent.mkdir(parents=True, exist_ok=True)
-        label_dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, image_dest)
-
-        lines = []
-        width, height = record["width"], record["height"]
-        for ann in record["annotations"]:
-            x, y, bw, bh = map(float, ann["bbox"])
-            if bw <= 0 or bh <= 0:
-                raise ValueError(f"Non-positive bbox in image {record['file_name']}: {ann['bbox']}")
-            if x < -1e-3 or y < -1e-3 or x + bw > width + 1e-3 or y + bh > height + 1e-3:
-                raise ValueError(f"Out-of-bounds bbox in image {record['file_name']}: {ann['bbox']}")
-            cx, cy = (x + bw / 2) / width, (y + bh / 2) / height
-            lines.append(f"0 {cx:.8f} {cy:.8f} {bw / width:.8f} {bh / height:.8f}")
-        label_dest.write_text("\n".join(lines) + ("\n" if lines else ""))
-        object_counts[split] += len(lines)
-        manifest.append({
-            "image_id": record["id"], "source_file_name": record["file_name"],
-            "output_image": str(image_dest.relative_to(output)),
-            "output_label": str(label_dest.relative_to(output)),
-            "source_width": width, "source_height": height,
-            "group": record["group"], "split": split, "objects": len(lines),
-        })
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        written = executor.map(
+            _write_record,
+            ((record, image_root, output, val_groups) for record in image_records),
+        )
+        for row, split, objects in written:
+            manifest.append(row)
+            split_counts[split] += 1
+            object_counts[split] += objects
 
     data_yaml = {
-        "path": str(output.resolve()), "train": "images/train",
+        "path": ".", "train": "images/train",
         "val": "images/val", "names": {0: "person"},
     }
     (output / "data.yaml").write_text(yaml.safe_dump(data_yaml, sort_keys=False))
@@ -181,9 +203,11 @@ def main() -> None:
                         help="New, empty output directory for YOLO images/labels/data.yaml")
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--workers", type=int, default=0,
+                        help="I/O threads; 0 uses up to 16 CPUs")
     args = parser.parse_args()
     print(json.dumps(prepare(args.annotations, args.image_root, args.output,
-                             args.val_fraction, args.seed), indent=2))
+                             args.val_fraction, args.seed, args.workers), indent=2))
 
 
 if __name__ == "__main__":

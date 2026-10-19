@@ -19,9 +19,14 @@ import torch
 from PIL import Image
 from ultralytics import YOLO
 
-from tinydet.analysis.heavy_bottom import (
-    dataset_images, label_path, letterbox, letterbox_geometry, map_box, resolve_stages, size_bin,
-)
+from tinydet.utils.dataset import dataset_images, label_path
+from tinydet.utils.images import letterbox, letterbox_geometry, map_box
+from tinydet.utils.model import resolve_stages
+
+
+def size_bin(width: float, height: float) -> str:
+    side = max(width, height)
+    return "0-8" if side < 8 else "8-16" if side < 16 else "16-32" if side < 32 else ">32"
 
 
 

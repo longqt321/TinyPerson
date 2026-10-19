@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 from pathlib import Path
 
 from PIL import Image
@@ -18,9 +19,15 @@ def main() -> None:
                         help="Directory containing COCO file_name paths")
     parser.add_argument("--output", type=Path, default=Path("predictions/test.json"))
     parser.add_argument("--imgsz", type=int, default=1280)
+    parser.add_argument("--batch-size", type=int, default=16,
+                        help="Inference batch; lower if device memory is limited")
     parser.add_argument("--conf", type=float, default=0.001)
     parser.add_argument("--device", default=None, help="Ultralytics device, e.g. cpu, 0")
+    parser.add_argument("--cpu-threads", type=int, default=0,
+                        help="PyTorch CPU threads; 0 keeps PyTorch default")
     args = parser.parse_args()
+    if args.batch_size < 1 or args.cpu_threads < 0:
+        parser.error("--batch-size must be positive and --cpu-threads non-negative")
     if not args.checkpoint.is_file():
         raise FileNotFoundError(args.checkpoint)
 
@@ -40,20 +47,28 @@ def main() -> None:
             )
         paths.append(path)
 
+    if args.device in (None, "cpu") and args.cpu_threads:
+        import torch
+
+        torch.set_num_threads(args.cpu_threads)
     model = YOLO(str(args.checkpoint))
-    results = model.predict(
-        source=[str(path) for path in paths], stream=True, imgsz=args.imgsz,
-        conf=args.conf, max_det=200, device=args.device, verbose=False,
-    )
     predictions = []
-    for result in results:
-        boxes = result.boxes
-        predictions.append({
-            "path": str(Path(result.path).resolve()),
-            "boxes": boxes.xyxy.cpu().tolist() if boxes is not None else [],
-            "scores": boxes.conf.cpu().tolist() if boxes is not None else [],
-            "classes": boxes.cls.cpu().tolist() if boxes is not None else [],
-        })
+    with tempfile.TemporaryDirectory(prefix="tinyperson-test-") as temporary:
+        source_list = Path(temporary) / "images.txt"
+        source_list.write_text("\n".join(str(path.resolve()) for path in paths) + "\n")
+        results = model.predict(
+            source=str(source_list), stream=True, imgsz=args.imgsz,
+            batch=args.batch_size, conf=args.conf, max_det=200,
+            device=args.device, verbose=False,
+        )
+        for result in results:
+            boxes = result.boxes
+            predictions.append({
+                "path": str(Path(result.path).resolve()),
+                "boxes": boxes.xyxy.cpu().tolist() if boxes is not None else [],
+                "scores": boxes.conf.cpu().tolist() if boxes is not None else [],
+                "classes": boxes.cls.cpu().tolist() if boxes is not None else [],
+            })
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({"images": predictions}, indent=2) + "\n")
     print(json.dumps({
@@ -61,7 +76,8 @@ def main() -> None:
         "annotation": str(args.annotations.resolve()),
         "predictions": str(args.output.resolve()),
         "images_predicted": len(predictions),
-        "imgsz": args.imgsz, "confidence_threshold": args.conf, "max_det": 200,
+        "imgsz": args.imgsz, "batch_size": args.batch_size,
+        "confidence_threshold": args.conf, "max_det": 200,
     }, indent=2))
 
 

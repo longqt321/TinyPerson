@@ -21,10 +21,12 @@ from sklearn.preprocessing import StandardScaler
 from torchvision.ops import roi_align
 from ultralytics import YOLO
 
-from tinydet.analysis.heavy_bottom import dataset_images, letterbox, resolve_stages
 from tinydet.analysis.representation import (
     FeatureCapture, center, gt_entries, input_tensor, validate_output_directory, write_csv,
 )
+from tinydet.utils.dataset import dataset_images
+from tinydet.utils.images import letterbox
+from tinydet.utils.model import resolve_stages
 
 def resolve_spatial_checkpoint(run):
     """Locate best.pt in finalized or raw Ultralytics run artifacts."""

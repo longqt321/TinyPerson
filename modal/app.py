@@ -24,6 +24,17 @@ CPU_LIMIT = (2.0, 4.0)
 MEMORY_LIMIT_MB = (8192, 24576)
 
 
+def _dataset_yaml_path(path: str | Path) -> Path:
+    dataset_yaml = Path(os.path.normpath(path))
+    try:
+        dataset_yaml.relative_to(DATA_ROOT)
+    except ValueError as exc:
+        raise ValueError(f"Dataset YAML must be inside the Modal data Volume: {dataset_yaml}") from exc
+    if not dataset_yaml.is_absolute() or dataset_yaml.name != "data.yaml":
+        raise ValueError(f"Expected an absolute path to data.yaml inside {DATA_ROOT}: {dataset_yaml}")
+    return dataset_yaml
+
+
 def copytree_concurrent(src: Path, dst: Path, max_workers: int = 24) -> None:
     pending = []
 
@@ -45,17 +56,19 @@ def copytree_concurrent(src: Path, dst: Path, max_workers: int = 24) -> None:
 
 @app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
               volumes=mounts, timeout=1800)
-def _audit_original_dataset(imgsz: int, audit_id: str):
+def _audit_original_dataset(dataset_yaml: str, imgsz: int, audit_id: str):
     """Audit stored image pixels and paired labels before any YOLO preprocessing."""
     from tinydet.data.image_audit import audit_dataset
+    from tinydet.utils.dataset import normalize_dataset_yaml
 
     data.reload()
     runs.reload()
-    dataset_yaml = DATA_ROOT / "tinyperson" / "data.yaml"
+    dataset_yaml = _dataset_yaml_path(dataset_yaml)
     if not dataset_yaml.is_file():
         raise FileNotFoundError(f"Dataset config does not exist: {dataset_yaml}")
     report_path = RUN_ROOT / "preflight" / f"dataset-audit-{audit_id}.json"
-    report = audit_dataset(dataset_yaml, imgsz, report_path)
+    normalized_yaml = normalize_dataset_yaml(dataset_yaml)
+    report = audit_dataset(normalized_yaml, imgsz, report_path)
     runs.commit()
     return {
         "passed": report["passed"],
@@ -82,8 +95,9 @@ def _audit_original_dataset(imgsz: int, audit_id: str):
 @app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=21600)
 def _train(config: str, commit: str, dirty: bool, config_text: str | None = None, wandb_group: str | None = None, dataset_audit: dict | None = None):
     os.chdir("/root")
-    volume_dataset = DATA_ROOT / "tinyperson"
-    volume_yaml = volume_dataset / "data.yaml"
+    raw_config = yaml.safe_load(config_text) if config_text else yaml.safe_load(Path(config).read_text())
+    volume_yaml = _dataset_yaml_path(raw_config["data"]["config"])
+    volume_dataset = volume_yaml.parent
     if not volume_yaml.is_file():
         raise FileNotFoundError(f"Dataset config does not exist: {volume_yaml}")
 
@@ -91,12 +105,16 @@ def _train(config: str, commit: str, dirty: bool, config_text: str | None = None
         local_dataset = Path(temporary) / "tinyperson"
         print(f"Copying dataset from {volume_dataset} to local container disk", flush=True)
         copytree_concurrent(volume_dataset, local_dataset)
+        local_yaml = local_dataset / "data.yaml"
+        dataset_config = yaml.safe_load(local_yaml.read_text())
+        dataset_config["path"] = str(local_dataset.resolve())
+        local_yaml.write_text(yaml.safe_dump(dataset_config, sort_keys=False))
         print("Dataset copy complete; starting training", flush=True)
         if config_text is not None:
             config_file = Path(temporary) / "experiment.yaml"
             config_file.write_text(config_text)
             config = str(config_file)
-        run = train_model(config, (commit, dirty), local_dataset / "data.yaml", wandb_group, dataset_audit)
+        run = train_model(config, (commit, dirty), local_yaml, wandb_group, dataset_audit)
         runs.commit()
         return str(run)
 
@@ -162,7 +180,7 @@ def train(config: str, preflight_only: bool = False, strict_resolution: bool = F
     if gpu != "L4":
         raise ValueError("Only L4 GPU is allowed by the resource cap")
     audit = _audit_original_dataset.remote(
-        int(experiment.train["imgsz"]), uuid.uuid4().hex[:12]
+        str(experiment.data["config"]), int(experiment.train["imgsz"]), uuid.uuid4().hex[:12]
     )
     print("Original-image preflight (before YOLO resizing):", flush=True)
     print(json.dumps(audit, indent=2), flush=True)
@@ -227,17 +245,16 @@ def compare(
             )
         print("SMOKE MODE: every model is limited to 5 epochs.", flush=True)
 
-    configured_data = Path(experiments[0]["data"]["config"])
-    expected_data = Path("/mnt/data/tinyperson/data.yaml")
-    if configured_data != expected_data:
-        raise ValueError(
-            f"Modal training currently uses {expected_data}; config names {configured_data}. "
-            "Audit and training must use the same dataset YAML."
-        )
+    configured_paths = {Path(experiment["data"]["config"]) for experiment in experiments}
+    if len(configured_paths) != 1:
+        raise ValueError("All compared models must use the same dataset YAML.")
+    configured_data = _dataset_yaml_path(next(iter(configured_paths)))
     imgsz_values = {int(experiment["train"]["imgsz"]) for experiment in experiments}
     if len(imgsz_values) != 1:
         raise ValueError("All compared models must use the same imgsz for a valid comparison.")
-    audit = _audit_original_dataset.remote(next(iter(imgsz_values)), uuid.uuid4().hex[:12])
+    audit = _audit_original_dataset.remote(
+        str(configured_data), next(iter(imgsz_values)), uuid.uuid4().hex[:12]
+    )
     print("Original-image preflight (before YOLO resizing):", flush=True)
     print(json.dumps(audit, indent=2), flush=True)
     if not audit["passed"]:
@@ -384,109 +401,14 @@ def organize_wandb(project: str = "hoangngan/tiny-person-research"):
 
 
 @app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
-              scaledown_window=2, volumes=mounts, timeout=1800)
-def _prepare_heavy_bottom(run: str, checkpoint: str, probe: str, output: str, count: int,
-                          size: int, max_instances: int | None):
-    import json
-
-    from ultralytics import YOLO
-
-    from tinydet.analysis.heavy_bottom import make_probe, resolve_stages
-    from tinydet.utils.experiment import resolve_run
-
-    runs.reload()
-    target = resolve_run(RUN_ROOT, run) if run else None
-    selected = target / "checkpoints" / "best.pt" if target else Path(checkpoint)
-    if not selected.is_file():
-        raise FileNotFoundError(selected)
-    if count <= 0 or size <= 0 or (max_instances is not None and max_instances <= 0):
-        raise ValueError("count, size and max_instances must be positive")
-    resolve_stages(YOLO(str(selected)).model)
-    destination = (Path(output) if output else
-                   target / "diagnostics" / "heavy_bottom" if target else
-                   RUN_ROOT / "heavy_bottom" / selected.stem)
-    probe_path = Path(probe)
-    if not probe_path.is_file():
-        make_probe(DATA_ROOT / "tinyperson" / "data.yaml", probe_path, size=size, count=count)
-    selected_probe = json.loads(probe_path.read_text())
-    if selected_probe["size"] != size:
-        raise ValueError("Probe image size differs from --size")
-    instances = selected_probe["instances"]
-    if not instances or any(not Path(row["image"]).is_file() for row in instances[:max_instances]):
-        raise ValueError("Probe contains no instances or missing images")
-    print(f"Probe: {len(instances)} instances; processing {len(instances[:max_instances])}", flush=True)
-    runs.commit()
-    return str(selected), str(probe_path), str(destination), max_instances
-
-
-@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0, scaledown_window=2,
-              cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
-def _heavy_bottom_diagnose(checkpoint: str, probe: str, output: str, max_instances: int | None):
-    from tinydet.analysis.heavy_bottom import collect_diagnostics
-
-    runs.reload()
-    result = collect_diagnostics(Path(checkpoint), Path(probe), Path(output), max_instances)
-    runs.commit()
-    return str(result)
-
-
-@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
               scaledown_window=2, volumes=mounts, timeout=3600)
-def _finish_heavy_bottom(output: str):
-    from tinydet.analysis.heavy_bottom import finalize_diagnostics
-
-    runs.reload()
-    result = finalize_diagnostics(Path(output))
-    runs.commit()
-    return str(result)
-
-
-@app.local_entrypoint()
-def heavy_bottom_diagnose(run: str = "", checkpoint: str = "", probe: str = "",
-                          output: str = "", count: int = 200, size: int = 1280,
-                          max_instances: int = 0):
-    """Diagnose an explicit run best.pt or an explicit pretrained checkpoint on Modal."""
-    if bool(run) == bool(checkpoint):
-        raise ValueError("Specify exactly one of --run or --checkpoint")
-    if run.endswith("/RUN_ID"):
-        raise ValueError("RUN_ID is a placeholder. List runs with: modal volume ls tiny-person-runs /")
-    probe = probe or str(RUN_ROOT / "heavy_bottom" / f"probe_{size}_{count}_seed42.json")
-    prepared = _prepare_heavy_bottom.remote(run, checkpoint, probe, output, count, size,
-                                           max_instances or None)
-    artifact = _heavy_bottom_diagnose.remote(*prepared)
-    print(_finish_heavy_bottom.remote(artifact))
-
-
-@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0, scaledown_window=2,
-              cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
-def _heavy_bottom_size_evaluate(run: str, split: str):
-    from tinydet.evaluation.size_metrics import collect_size_predictions
-    from tinydet.utils.experiment import resolve_run
-
-    runs.reload()
-    target = resolve_run(RUN_ROOT, run)
-    config = yaml.safe_load((target / "config.yaml").read_text())
-    artifact = collect_size_predictions(target / "checkpoints" / "best.pt",
-        Path(config["data"]["config"]), target / f"evaluation-{split}-size" / "predictions.pt",
-        split, config["train"]["imgsz"])
-    runs.commit()
-    return str(artifact)
-
-
-@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
-              scaledown_window=2, volumes=mounts, timeout=3600)
-def _finish_evaluation(run: str, artifact: str, split: str, size_metrics: bool = False):
+def _finish_evaluation(run: str, artifact: str, split: str):
     from tinydet.evaluation.evaluator import finalize_predictions
-    from tinydet.evaluation.size_metrics import finalize_size_predictions
-    from tinydet.utils.experiment import resolve_run, write_json
+    from tinydet.utils.experiment import resolve_run
 
     runs.reload()
     target = resolve_run(RUN_ROOT, run)
-    if size_metrics:
-        result = finalize_size_predictions(Path(artifact))
-        write_json(target / "metrics" / f"size_{split}.json", result)
-    else:
-        result = finalize_predictions(target, Path(artifact), split)
+    result = finalize_predictions(target, Path(artifact), split)
     runs.commit()
     return result
 
@@ -536,13 +458,6 @@ def _render_diagnostic(output: str, layer: int, kind: str):
     return str(result)
 
 
-@app.local_entrypoint()
-def heavy_bottom_size_evaluate(run: str, split: str = "val"):
-    _preflight.remote(run, split)
-    artifact = _heavy_bottom_size_evaluate.remote(run, split)
-    print(_finish_evaluation.remote(run, artifact, split, size_metrics=True))
-
-
 @app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0,
               scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
               max_containers=1, volumes=mounts, timeout=3600)
@@ -574,7 +489,7 @@ def _representation_diagnose(run: str, config_text: str):
 
 
 @app.local_entrypoint()
-def representation_diagnose(run: str, config: str = "configs/analysis/representation.yaml"):
+def representation_diagnose(run: str, config: str):
     """Run the three frozen-feature studies on one existing checkpoint."""
 
     if run.endswith("/RUN_ID"):
@@ -631,7 +546,7 @@ def _spatial_probe_finish(run: str, output: str, config_text: str):
 
 
 @app.local_entrypoint()
-def spatial_probe(run: str, config: str = "configs/analysis/spatial_probe.yaml"):
+def spatial_probe(run: str, config: str):
     """Frozen spatial sensitivity probe: L4 extraction, CPU-only statistics."""
     if run.endswith("/RUN_ID"):
         raise ValueError("Replace RUN_ID with a completed Modal run id")

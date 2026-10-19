@@ -15,8 +15,10 @@ def main() -> None:
     parser.add_argument("--predictions", required=True, type=Path,
                         help="Repository export predictions/test.json from a completed test evaluation")
     parser.add_argument("--output", type=Path, default=Path("metrics/tinyperson_test.json"))
+    parser.add_argument("--workers", type=int, default=0,
+                        help="CPU processes across size ranges; 0 uses up to 7 cores")
     args = parser.parse_args()
-    result = evaluate_tinyperson(args.annotations, args.predictions)
+    result = evaluate_tinyperson(args.annotations, args.predictions, args.workers)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))

@@ -6,21 +6,21 @@ train:
   epochs: 50
   patience: 15
   imgsz: 1280
-  batch: 16
+  batch: 8
   optimizer: AdamW
   lr0: 0.001
   amp: true
   deterministic: true
-  degrees: 5.0
-  translate: 0.1
+  degrees: 1.0
+  translate: 0.0
   scale: 0.1
   shear: 0.1
   perspective: 0.0
   flipud: 0.0
   fliplr: 0.5
-  hsv_h: 0.015
-  hsv_s: 0.3
-  hsv_v: 0.3
+  hsv_h: 0.01
+  hsv_s: 0.01
+  hsv_v: 0.01
   bgr: 0.0
   mosaic: 0.5
   close_mosaic: 10

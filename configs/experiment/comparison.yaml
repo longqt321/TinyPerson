@@ -43,9 +43,3 @@ output:
 models:
   - name: yolo26n
     config: configs/model/yolo26n.yaml
-  - name: yolo26n_no_p5
-    config: configs/model/yolo26n-no-p5.yaml
-  - name: yolo26n_p2
-    config: configs/model/yolo26n_p2.yaml
-  - name: yolo26n_p3_only
-    config: configs/model/yolo26n-p3-only.yaml
