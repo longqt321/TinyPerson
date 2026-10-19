@@ -12,9 +12,16 @@ on:
       - "src/tinydet/training/trainer.py"
       - "configs/model/yolo26n-msr-p2.yaml"
       - "configs/experiment/ablation_msr.yaml"
+      - "configs/experiment/ablation_msr_tinyperson_official.yaml"
       - "scripts/audit_dataset.py"
       - "tests/test_msr.py"
       - "tests/test_data_preflight.py"
+      - "src/tinydet/evaluation/tinyperson_benchmark.py"
+      - "scripts/prepare_tinyperson_yolo.py"
+      - "scripts/predict_tinyperson_test.py"
+      - "scripts/evaluate_tinyperson_benchmark.py"
+      - "tests/test_tinyperson_benchmark.py"
+      - "docs/TINYPERSON_BENCHMARK.md"
       - ".github/workflows/msr-cpu.yml"
   push:
     branches: [main]
@@ -23,8 +30,14 @@ on:
       - "src/tinydet/data/**"
       - "configs/model/yolo26n-msr-p2.yaml"
       - "configs/experiment/ablation_msr.yaml"
+      - "configs/experiment/ablation_msr_tinyperson_official.yaml"
       - "tests/test_msr.py"
       - "tests/test_data_preflight.py"
+      - "src/tinydet/evaluation/tinyperson_benchmark.py"
+      - "scripts/prepare_tinyperson_yolo.py"
+      - "scripts/predict_tinyperson_test.py"
+      - "scripts/evaluate_tinyperson_benchmark.py"
+      - "tests/test_tinyperson_benchmark.py"
 
 jobs:
   cpu-tests:
@@ -38,11 +51,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install CPU environment
         run: uv sync --extra cpu --group dev
-      - name: Test MSR and original-image audit
+      - name: Test MSR, dataset audit, and TinyPerson protocol
         run: >
           uv run --extra cpu --group dev pytest
           tests/test_msr.py
           tests/test_data_preflight.py
+          tests/test_tinyperson_benchmark.py
           tests/test_shapes.py -q
       - name: Lint changed Python files
         run: >
@@ -59,3 +73,8 @@ jobs:
           scripts/audit_dataset.py
           tests/test_msr.py
           tests/test_data_preflight.py
+          src/tinydet/evaluation/tinyperson_benchmark.py
+          scripts/prepare_tinyperson_yolo.py
+          scripts/predict_tinyperson_test.py
+          scripts/evaluate_tinyperson_benchmark.py
+          tests/test_tinyperson_benchmark.py
