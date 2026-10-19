@@ -15,6 +15,12 @@ on:
       - "scripts/audit_dataset.py"
       - "tests/test_msr.py"
       - "tests/test_data_preflight.py"
+      - "src/tinydet/evaluation/tinyperson_benchmark.py"
+      - "scripts/prepare_tinyperson_yolo.py"
+      - "scripts/predict_tinyperson_test.py"
+      - "scripts/evaluate_tinyperson_benchmark.py"
+      - "tests/test_tinyperson_benchmark.py"
+      - "docs/TINYPERSON_BENCHMARK.md"
       - ".github/workflows/msr-cpu.yml"
   push:
     branches: [main]
@@ -25,6 +31,11 @@ on:
       - "configs/experiment/ablation_msr.yaml"
       - "tests/test_msr.py"
       - "tests/test_data_preflight.py"
+      - "src/tinydet/evaluation/tinyperson_benchmark.py"
+      - "scripts/prepare_tinyperson_yolo.py"
+      - "scripts/predict_tinyperson_test.py"
+      - "scripts/evaluate_tinyperson_benchmark.py"
+      - "tests/test_tinyperson_benchmark.py"
 
 jobs:
   cpu-tests:
@@ -43,6 +54,12 @@ jobs:
           uv run --extra cpu --group dev pytest
           tests/test_msr.py
           tests/test_data_preflight.py
+          src/tinydet/evaluation/tinyperson_benchmark.py
+          scripts/prepare_tinyperson_yolo.py
+          scripts/predict_tinyperson_test.py
+          scripts/evaluate_tinyperson_benchmark.py
+          tests/test_tinyperson_benchmark.py
+          tests/test_tinyperson_benchmark.py
           tests/test_shapes.py -q
       - name: Lint changed Python files
         run: >
