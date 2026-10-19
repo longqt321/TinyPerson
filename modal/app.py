@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -41,8 +42,45 @@ def copytree_concurrent(src: Path, dst: Path, max_workers: int = 24) -> None:
             future.result()
 
 
+
+@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
+              volumes=mounts, timeout=1800)
+def _audit_original_dataset(imgsz: int, audit_id: str):
+    """Audit stored image pixels and paired labels before any YOLO preprocessing."""
+    from tinydet.data.image_audit import audit_dataset
+
+    data.reload()
+    runs.reload()
+    dataset_yaml = DATA_ROOT / "tinyperson" / "data.yaml"
+    if not dataset_yaml.is_file():
+        raise FileNotFoundError(f"Dataset config does not exist: {dataset_yaml}")
+    report_path = RUN_ROOT / "preflight" / f"dataset-audit-{audit_id}.json"
+    report = audit_dataset(dataset_yaml, imgsz, report_path)
+    runs.commit()
+    return {
+        "passed": report["passed"],
+        "data_yaml": report["data_yaml"],
+        "imgsz": report["imgsz"],
+        "measurement_basis": report["measurement_basis"],
+        "dataset_signature_metadata_sha256": report["dataset_signature_metadata_sha256"],
+        "images_total": report["images_total"],
+        "decoded_images_total": report["decoded_images_total"],
+        "corrupt_images_total": report["corrupt_images_total"],
+        "label_files_found_total": report["label_files_found_total"],
+        "annotation_rows_total": report["annotation_rows_total"],
+        "parsed_objects_total": report["parsed_objects_total"],
+        "splits": report["splits"],
+        "coco_dimension_checks": report["coco_dimension_checks"],
+        "coco_dimension_status": report["coco_dimension_status"],
+        "severe_resolution_loss": report["severe_resolution_loss"],
+        "warnings": report["warnings"],
+        "errors": report["errors"],
+        "report_path": str(report_path),
+    }
+
+
 @app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=21600)
-def _train(config: str, commit: str, dirty: bool, config_text: str | None = None, wandb_group: str | None = None):
+def _train(config: str, commit: str, dirty: bool, config_text: str | None = None, wandb_group: str | None = None, dataset_audit: dict | None = None):
     os.chdir("/root")
     volume_dataset = DATA_ROOT / "tinyperson"
     volume_yaml = volume_dataset / "data.yaml"
@@ -58,7 +96,7 @@ def _train(config: str, commit: str, dirty: bool, config_text: str | None = None
             config_file = Path(temporary) / "experiment.yaml"
             config_file.write_text(config_text)
             config = str(config_file)
-        run = train_model(config, (commit, dirty), local_dataset / "data.yaml", wandb_group)
+        run = train_model(config, (commit, dirty), local_dataset / "data.yaml", wandb_group, dataset_audit)
         runs.commit()
         return str(run)
 
@@ -113,7 +151,9 @@ def _find_reusable(expected: dict, model_sha256: str):
 
 
 @app.local_entrypoint()
-def train(config: str):
+def train(config: str, preflight_only: bool = False, strict_resolution: bool = False, require_source_metadata: bool = False):
+    from dataclasses import asdict
+
     from tinydet.utils.config import load_config
     from tinydet.utils.experiment import git_info
 
@@ -121,22 +161,101 @@ def train(config: str):
     gpu = experiment.hardware["gpu"]
     if gpu != "L4":
         raise ValueError("Only L4 GPU is allowed by the resource cap")
+    audit = _audit_original_dataset.remote(
+        int(experiment.train["imgsz"]), uuid.uuid4().hex[:12]
+    )
+    print("Original-image preflight (before YOLO resizing):", flush=True)
+    print(json.dumps(audit, indent=2), flush=True)
+    if not audit["passed"]:
+        raise ValueError("Dataset preflight failed; fix the errors before training.")
+    if strict_resolution and audit["severe_resolution_loss"]:
+        raise ValueError(
+            "Strict resolution preflight failed: at least half of parsed objects are "
+            "predicted to have sqrt-area below 4 px. Review the report and choose imgsz."
+        )
+    if require_source_metadata and audit["coco_dimension_status"] != "verified":
+        raise ValueError(
+            "Source COCO dimensions are not fully verified against stored rasters "
+            f"(status={audit['coco_dimension_status']!r}). Add the original COCO metadata "
+            "or resolve image-name/dimension mismatches before training."
+        )
+    if require_source_metadata and audit["coco_dimension_status"] != "verified":
+        raise ValueError(
+            "Source COCO dimensions are not fully verified against stored rasters "
+            f"(status={audit['coco_dimension_status']!r}). Add the original COCO metadata "
+            "or resolve image-name/dimension mismatches before training."
+        )
+    if preflight_only:
+        print("Preflight complete; no training GPU was launched.", flush=True)
+        return
+
+    experiment.data["preflight_signature"] = audit["dataset_signature_metadata_sha256"]
+    config_text = yaml.safe_dump(asdict(experiment), sort_keys=False)
     commit, dirty = git_info()
     options = {"gpu": gpu}
     if experiment.output.get("wandb_project"):
         options["secrets"] = [wandb_secret]
-    run = _train.with_options(**options).remote(config, commit, dirty)
+    run = _train.with_options(**options).remote(
+        config, commit, dirty, config_text=config_text, dataset_audit=audit
+    )
     _finalize_pipeline(str(Path(run).relative_to(RUN_ROOT)))
     print(run)
 
 
 @app.local_entrypoint()
-def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = "", parallel: bool = False, reuse: bool = False):
-    """Compare models; optionally reuse exact completed runs."""
+def compare(
+    config: str = "configs/experiment/comparison.yaml",
+    start_at: str = "",
+    parallel: bool = False,
+    reuse: bool = False,
+    smoke: bool = False,
+    preflight_only: bool = False,
+    strict_resolution: bool = False,
+    require_source_metadata: bool = False,
+):
+    """Audit original data first, then compare models; --smoke caps every run at 5 epochs."""
     from tinydet.utils.comparison import load_comparison
     from tinydet.utils.experiment import git_info
 
     experiments = load_comparison(config)
+    if smoke:
+        for experiment in experiments:
+            experiment["train"] = dict(experiment["train"])
+            experiment["train"]["epochs"] = 5
+            experiment["train"]["patience"] = max(
+                int(experiment["train"].get("patience", 6)), 6
+            )
+        print("SMOKE MODE: every model is limited to 5 epochs.", flush=True)
+
+    configured_data = Path(experiments[0]["data"]["config"])
+    expected_data = Path("/mnt/data/tinyperson/data.yaml")
+    if configured_data != expected_data:
+        raise ValueError(
+            f"Modal training currently uses {expected_data}; config names {configured_data}. "
+            "Audit and training must use the same dataset YAML."
+        )
+    imgsz_values = {int(experiment["train"]["imgsz"]) for experiment in experiments}
+    if len(imgsz_values) != 1:
+        raise ValueError("All compared models must use the same imgsz for a valid comparison.")
+    audit = _audit_original_dataset.remote(next(iter(imgsz_values)), uuid.uuid4().hex[:12])
+    print("Original-image preflight (before YOLO resizing):", flush=True)
+    print(json.dumps(audit, indent=2), flush=True)
+    if not audit["passed"]:
+        raise ValueError("Dataset preflight failed; no training was started.")
+    if strict_resolution and audit["severe_resolution_loss"]:
+        raise ValueError(
+            "Strict resolution preflight failed: at least half of parsed objects are "
+            "predicted to have sqrt-area below 4 px. Review the report and choose imgsz."
+        )
+    if preflight_only:
+        print("Preflight complete; no training GPU was launched.", flush=True)
+        return
+
+    # A stable data signature makes reuse conditional on the same source dataset.
+    for experiment in experiments:
+        experiment["data"]["preflight_signature"] = audit[
+            "dataset_signature_metadata_sha256"
+        ]
     names = [experiment["name"] for experiment in experiments]
     if start_at and start_at not in names:
         raise ValueError(f"Unknown model: {start_at}")
@@ -178,7 +297,9 @@ def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = 
             for experiment in to_train[offset:offset + 4]:
                 print(f"Training {experiment['name']}", flush=True)
                 options = {"secrets": [wandb_secret]} if experiment["output"].get("wandb_project") else {}
-                pending.append(_train.with_options(**options).spawn(config, commit, dirty, yaml.safe_dump(experiment), wandb_group))
+                pending.append(_train.with_options(**options).spawn(
+                    config, commit, dirty, yaml.safe_dump(experiment), wandb_group, audit
+                ))
             completed = [call.get() for call in pending]
             for run in completed:
                 reference = str(Path(run).relative_to(RUN_ROOT))
@@ -188,7 +309,9 @@ def compare(config: str = "configs/experiment/comparison.yaml", start_at: str = 
         for experiment in to_train:
             print(f"Training {experiment['name']}", flush=True)
             options = {"secrets": [wandb_secret]} if experiment["output"].get("wandb_project") else {}
-            run = _train.with_options(**options).remote(config, commit, dirty, yaml.safe_dump(experiment), wandb_group)
+            run = _train.with_options(**options).remote(
+                config, commit, dirty, yaml.safe_dump(experiment), wandb_group, audit
+            )
             reference = str(Path(run).relative_to(RUN_ROOT))
             _finalize_pipeline(reference)
             finish(reference)
@@ -453,7 +576,6 @@ def _representation_diagnose(run: str, config_text: str):
 @app.local_entrypoint()
 def representation_diagnose(run: str, config: str = "configs/analysis/representation.yaml"):
     """Run the three frozen-feature studies on one existing checkpoint."""
-    from tinydet.utils.experiment import resolve_run
 
     if run.endswith("/RUN_ID"):
         raise ValueError("Replace RUN_ID with an existing Modal run id")
@@ -462,7 +584,7 @@ def representation_diagnose(run: str, config: str = "configs/analysis/representa
         raise FileNotFoundError(source)
     settings = yaml.safe_load(source.read_text())
     if not isinstance(settings, dict):
-        raise ValueError("Expected YAML configuration mapping")
+        raise TypeError("Expected YAML configuration mapping")
     print(_representation_diagnose.remote(run, source.read_text()))
 
 
@@ -519,7 +641,7 @@ def spatial_probe(run: str, config: str = "configs/analysis/spatial_probe.yaml")
     text = config_file.read_text()
     settings = yaml.safe_load(text)
     if not isinstance(settings, dict):
-        raise ValueError("Expected YAML configuration mapping")
+        raise TypeError("Expected YAML configuration mapping")
     if settings.get("experiment", {}).get("device") != "cuda":
         raise ValueError("Modal spatial probe requires experiment.device: cuda")
     extracted = _spatial_probe_extract.remote(run, text)

@@ -17,6 +17,7 @@ def train(
     source_git: tuple[str, bool] | None = None,
     dataset_config: str | Path | None = None,
     wandb_group: str | None = None,
+    dataset_audit: dict | None = None,
 ) -> Path:
     if not torch.cuda.is_available():
         raise RuntimeError("Training requires Modal GPU")
@@ -27,6 +28,17 @@ def train(
         raise ValueError(f"Pretrained checkpoint does not exist: {config.model['pretrained']}")
     set_seed(config.seed, config.train["deterministic"])
     run = create_run(config, source_git)
+    if dataset_audit is not None:
+        write_json(run / "diagnostics" / "dataset_preflight_summary.json", dataset_audit)
+        details = metadata(run)
+        details["dataset_preflight"] = {
+            "report_path": dataset_audit.get("report_path"),
+            "source_signature": dataset_audit.get("dataset_signature_metadata_sha256"),
+            "imgsz": dataset_audit.get("imgsz"),
+            "images_total": dataset_audit.get("images_total"),
+            "severe_resolution_loss": dataset_audit.get("severe_resolution_loss"),
+        }
+        write_json(run / "metadata.json", details)
     update_status(run, "RUNNING")
     wandb_run = None
     try:
