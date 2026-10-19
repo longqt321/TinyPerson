@@ -576,7 +576,6 @@ def _representation_diagnose(run: str, config_text: str):
 @app.local_entrypoint()
 def representation_diagnose(run: str, config: str = "configs/analysis/representation.yaml"):
     """Run the three frozen-feature studies on one existing checkpoint."""
-    from tinydet.utils.experiment import resolve_run
 
     if run.endswith("/RUN_ID"):
         raise ValueError("Replace RUN_ID with an existing Modal run id")
@@ -585,7 +584,7 @@ def representation_diagnose(run: str, config: str = "configs/analysis/representa
         raise FileNotFoundError(source)
     settings = yaml.safe_load(source.read_text())
     if not isinstance(settings, dict):
-        raise ValueError("Expected YAML configuration mapping")
+        raise TypeError("Expected YAML configuration mapping")
     print(_representation_diagnose.remote(run, source.read_text()))
 
 
@@ -642,7 +641,7 @@ def spatial_probe(run: str, config: str = "configs/analysis/spatial_probe.yaml")
     text = config_file.read_text()
     settings = yaml.safe_load(text)
     if not isinstance(settings, dict):
-        raise ValueError("Expected YAML configuration mapping")
+        raise TypeError("Expected YAML configuration mapping")
     if settings.get("experiment", {}).get("device") != "cuda":
         raise ValueError("Modal spatial probe requires experiment.device: cuda")
     extracted = _spatial_probe_extract.remote(run, text)
