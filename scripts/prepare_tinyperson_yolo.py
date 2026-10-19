@@ -110,6 +110,9 @@ def prepare(annotations_path: Path, image_root: Path, output: Path,
         val_groups.remove(groups[-1])
 
     output.mkdir(parents=True, exist_ok=True)
+    source_annotation_copy = output / "annotations" / annotations_path.name
+    source_annotation_copy.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(annotations_path, source_annotation_copy)
     manifest = []
     split_counts = Counter()
     object_counts = Counter()
@@ -150,6 +153,7 @@ def prepare(annotations_path: Path, image_root: Path, output: Path,
     (output / "data.yaml").write_text(yaml.safe_dump(data_yaml, sort_keys=False))
     (output / "manifest.json").write_text(json.dumps({
         "source_annotation": str(annotations_path.resolve()),
+        "source_annotation_copy": str(source_annotation_copy.relative_to(output)),
         "source_annotation_sha256": _sha256(annotations_path),
         "image_root": str(image_root.resolve()), "seed": seed,
         "validation_fraction_requested": val_fraction,
