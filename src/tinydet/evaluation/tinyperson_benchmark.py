@@ -122,7 +122,7 @@ def evaluate_tinyperson(annotation_file: str | Path,
     payload = json.loads(predictions_file.read_text())
     rows = payload.get("images")
     if not isinstance(rows, list):
-        raise ValueError("Prediction JSON must contain an images list")
+        raise TypeError("Prediction JSON must contain an images list")
 
     pred_by_id: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
