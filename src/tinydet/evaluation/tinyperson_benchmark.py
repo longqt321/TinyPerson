@@ -11,10 +11,12 @@ import numpy as np
 
 IOU_THRESHOLDS = (0.25, 0.50, 0.75)
 MAX_DETECTIONS = 200
-# Half-open sqrt(box area) ranges in original image pixels.
-SIZE_RANGES: dict[str, tuple[float, float] | None] = {
-    "all": None, "tiny": (1.0, 20.0), "tiny1": (1.0, 8.0),
-    "tiny2": (8.0, 12.0), "tiny3": (12.0, 20.0), "small": (20.0, 32.0),
+# TinyBenchmark Params uses squared pixel-area bounds, inclusive at both ends.
+# These are expressed as sqrt(area) for readability.
+SIZE_RANGES: dict[str, tuple[float, float]] = {
+    "all": (1.0, 100000.0), "tiny": (1.0, 20.0), "tiny1": (1.0, 8.0),
+    "tiny2": (8.0, 12.0), "tiny3": (12.0, 20.0),
+    "small": (20.0, 32.0), "reasonable": (32.0, 100000.0),
 }
 
 
@@ -29,8 +31,10 @@ def _sqrt_area(box: list[float]) -> float:
     return math.sqrt(max(box[2] - box[0], 0.0) * max(box[3] - box[1], 0.0))
 
 
-def _in_range(box: list[float], size_range: tuple[float, float] | None) -> bool:
-    return size_range is None or size_range[0] <= _sqrt_area(box) < size_range[1]
+def _in_range(box: list[float], size_range: tuple[float, float]) -> bool:
+    # The reference Params uses area < min or area > max, so boundaries are inclusive.
+    size = _sqrt_area(box)
+    return size_range[0] <= size <= size_range[1]
 
 
 def _iou(a: list[float], b: list[float]) -> float:
@@ -194,6 +198,7 @@ def evaluate_tinyperson(annotation_file: str | Path,
                 key=lambda item: item[0], reverse=True,
             )
             matched = {image_id: set() for image_id in eval_ids}
+            matched_outside = {image_id: set() for image_id in eval_ids}
             tp, fp = [], []
             for _, image_id, box in scored:
                 target = bin_gt[image_id]["positive"]
@@ -206,13 +211,29 @@ def evaluate_tinyperson(annotation_file: str | Path,
                     tp.append(1)
                     fp.append(0)
                     continue
-                # Out-of-bin positives are neutral for size-specific AP by IoU;
-                # ignore/uncertain regions are neutral by intersection-over-detection.
-                neutral_iou = any(_iou(box, other) >= threshold
-                                  for other in bin_gt[image_id]["outside"])
-                neutral_iod = any(_iod(box, other) >= threshold
-                                  for other in bin_gt[image_id]["ignored"])
-                if neutral_iou or neutral_iod:
+
+                outside = bin_gt[image_id]["outside"]
+                outside_overlaps = [_iou(box, candidate) for candidate in outside]
+                outside_candidates = [
+                    i for i, overlap in enumerate(outside_overlaps)
+                    if overlap >= threshold and i not in matched_outside[image_id]
+                ]
+                if outside_candidates:
+                    best = max(outside_candidates, key=lambda i: outside_overlaps[i])
+                    matched_outside[image_id].add(best)
+                    continue
+
+                ignored = bin_gt[image_id]["ignored"]
+                # Official TinyBenchmark first accepts an IoU match to an ignored
+                # GT; its fallback uses IoD >= the current IoU threshold.
+                neutral_ignore = any(
+                    _iou(box, other) >= threshold or _iod(box, other) >= threshold
+                    for other in ignored
+                )
+                # COCOeval also ignores unmatched detections outside the selected
+                # area range. A matched in-range GT remains a TP even if its
+                # predicted box has a different size.
+                if neutral_ignore or not _in_range(box, size_range):
                     continue
                 tp.append(0)
                 fp.append(1)
@@ -233,15 +254,14 @@ def evaluate_tinyperson(annotation_file: str | Path,
         "images_evaluated": len(eval_ids),
         "max_detections_per_image": MAX_DETECTIONS,
         "iou_thresholds": list(IOU_THRESHOLDS),
-        "size_ranges_sqrt_area_px_half_open": {
-            key: list(value) if value is not None else None
-            for key, value in SIZE_RANGES.items()
+        "size_ranges_sqrt_area_px_inclusive": {
+            key: list(value) for key, value in SIZE_RANGES.items()
         },
         "ignored_annotations": dict(ann_counts),
         "matching": {
             "normal_positive": "IoU",
-            "ignore_uncertain": "intersection over detection (IoD)",
-            "out_of_size_range": "neutral by IoU for size-specific AP",
+            "ignore_uncertain": "IoU match or intersection over detection (IoD)",
+            "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored",
         },
         "ap_interpolation": "101-point precision envelope",
         "warning": (
