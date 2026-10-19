@@ -14,4 +14,8 @@ def build_model(config: dict):
         if not weights.is_file():
             raise ValueError(f"Pretrained checkpoint does not exist: {weights}")
         model.load(str(weights))
+    if config.get("feature_module") is not None:
+        from tinydet.modules.msr import install_msr_feature_module
+
+        install_msr_feature_module(model.model, config["feature_module"])
     return model
