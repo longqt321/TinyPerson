@@ -45,4 +45,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
         from tinydet.modules.ultralytics_adapter import validate_modules
 
         raw["model"]["modules"] = validate_modules(raw["model"]["modules"])
+    if "feature_module" in raw["model"]:
+        from tinydet.modules.msr import validate_feature_module
+
+        raw["model"]["feature_module"] = validate_feature_module(raw["model"]["feature_module"])
     return ExperimentConfig(**{key: raw[key] for key in required})

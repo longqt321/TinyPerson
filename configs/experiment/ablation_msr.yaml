@@ -1,0 +1,68 @@
+# MSR screening: isolate the effects of normalization and multi-scale dilation.
+# All variants use one P2 YAML with the same Identity slot and training recipe.
+seed: 42
+data:
+  config: /mnt/data/tinyperson/data.yaml
+train:
+  epochs: 50
+  patience: 15
+  imgsz: 1280
+  batch: 16
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  degrees: 5.0
+  translate: 0.1
+  scale: 0.1
+  shear: 0.1
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.015
+  hsv_s: 0.3
+  hsv_v: 0.3
+  bgr: 0.0
+  mosaic: 0.5
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.1
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+  cache: true
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+models:
+  - name: msr_a0_identity
+    config: configs/model/yolo26n-msr-p2.yaml
+    feature_module:
+      mode: none
+  - name: msr_a1_raw_multiscale
+    config: configs/model/yolo26n-msr-p2.yaml
+    feature_module:
+      mode: raw
+      dilations: [1, 2, 4]
+      eps: 0.0001
+      max_gain: 0.1
+      score_clip: 10.0
+  - name: msr_a2_standardized_single
+    config: configs/model/yolo26n-msr-p2.yaml
+    feature_module:
+      mode: standardized
+      dilations: [1]
+      eps: 0.0001
+      max_gain: 0.1
+      score_clip: 10.0
+  - name: msr_a3_standardized_multiscale
+    config: configs/model/yolo26n-msr-p2.yaml
+    feature_module:
+      mode: standardized
+      dilations: [1, 2, 4]
+      eps: 0.0001
+      max_gain: 0.1
+      score_clip: 10.0
