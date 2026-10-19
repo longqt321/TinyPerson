@@ -3,8 +3,8 @@ import pytest
 import torch
 
 from tinydet.modules.msr import (
-    FUSION_SPECS,
     DETECT_INDEX,
+    FUSION_SPECS,
     MSRFusionGate,
     MultiScaleStandardizedResidual,
     install_msr_feature_module,

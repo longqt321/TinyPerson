@@ -203,7 +203,7 @@ def audit_dataset(
 
     config = yaml.safe_load(yaml_path.read_text())
     if not isinstance(config, dict):
-        raise ValueError("Dataset YAML must be a mapping")
+        raise TypeError("Dataset YAML must be a mapping")
     yaml_parent = yaml_path.parent
     configured_root = config.get("path", str(yaml_parent))
     root = _resolve_path(str(configured_root), yaml_parent, yaml_parent).resolve()

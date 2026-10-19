@@ -2,7 +2,6 @@
 import argparse
 import json
 import sys
-from pathlib import Path
 
 from tinydet.data.image_audit import audit_dataset
 

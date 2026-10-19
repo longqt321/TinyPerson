@@ -55,6 +55,7 @@ jobs:
           src/tinydet/models/registry.py
           src/tinydet/utils/config.py
           src/tinydet/utils/comparison.py
+          modal/app.py
           scripts/audit_dataset.py
           tests/test_msr.py
           tests/test_data_preflight.py
