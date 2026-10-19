@@ -49,16 +49,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install CPU environment
         run: uv sync --extra cpu --group dev
-      - name: Test MSR and original-image audit
+      - name: Test MSR, dataset audit, and TinyPerson protocol
         run: >
           uv run --extra cpu --group dev pytest
           tests/test_msr.py
           tests/test_data_preflight.py
-          src/tinydet/evaluation/tinyperson_benchmark.py
-          scripts/prepare_tinyperson_yolo.py
-          scripts/predict_tinyperson_test.py
-          scripts/evaluate_tinyperson_benchmark.py
-          tests/test_tinyperson_benchmark.py
           tests/test_tinyperson_benchmark.py
           tests/test_shapes.py -q
       - name: Lint changed Python files
@@ -76,3 +71,8 @@ jobs:
           scripts/audit_dataset.py
           tests/test_msr.py
           tests/test_data_preflight.py
+          src/tinydet/evaluation/tinyperson_benchmark.py
+          scripts/prepare_tinyperson_yolo.py
+          scripts/predict_tinyperson_test.py
+          scripts/evaluate_tinyperson_benchmark.py
+          tests/test_tinyperson_benchmark.py
