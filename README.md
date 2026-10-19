@@ -90,6 +90,12 @@ Use `configs/experiment/ablation_nwd.yaml` for the four-way P3-only baseline/NWD
 [Study design, checkpoint choices, diagnostics, four architectures, and commands](docs/HEAVY_BOTTOM.md). Phase 1 uses an explicit Modal run `best.pt` or pretrained YOLO26n checkpoint without retraining. Phase 2 is a separate four-model, 50-epoch screening configuration at `configs/experiment/heavy_bottom.yaml`; it is not launched automatically.
 
 
+## TinyPerson benchmark protocol
+
+The native YOLO metrics are not the official TinyPerson benchmark because YOLO labels cannot preserve ignore/uncertain/dense metadata. The repository now has a dedicated workflow to prepare a YOLO train/validation derivative from the official non-dense erase annotations, run inference on the original official test rasters, and calculate TinyPerson-style AP with ignore-aware matching.
+
+See [docs/TINYPERSON_BENCHMARK.md](docs/TINYPERSON_BENCHMARK.md) for the exact data paths, commands, protocol caveats, and the distinction between native validation and benchmark evaluation. The standalone evaluator reports AP; validate it against the legacy TinyBenchmark reference and use that reference for official miss-rate (MR) before publication claims.
+
 ## Full MSR architecture and original-image preflight
 
 The MSR experiment now includes standardized local evidence, max/adaptive multi-scale aggregation, and attention-guided cross-level fusion at six P2/P3/P4/P5 neck concatenations. Four ablations isolate local evidence, cross-level fusion, and adaptive scale aggregation. It is a research hypothesis, not a claim of improved accuracy.
