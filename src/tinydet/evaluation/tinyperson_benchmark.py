@@ -199,6 +199,7 @@ def evaluate_tinyperson(annotation_file: str | Path,
             )
             matched = {image_id: set() for image_id in eval_ids}
             matched_outside = {image_id: set() for image_id in eval_ids}
+            matched_ignored_iou = {image_id: set() for image_id in eval_ids}
             tp, fp = [], []
             for _, image_id, box in scored:
                 target = bin_gt[image_id]["positive"]
@@ -224,16 +225,22 @@ def evaluate_tinyperson(annotation_file: str | Path,
                     continue
 
                 ignored = bin_gt[image_id]["ignored"]
-                # Official TinyBenchmark first accepts an IoU match to an ignored
-                # GT; its fallback uses IoD >= the current IoU threshold.
-                neutral_ignore = any(
-                    _iou(box, other) >= threshold or _iod(box, other) >= threshold
-                    for other in ignored
-                )
+                # The reference first performs one-to-one IoU matching to ignored
+                # GTs, then applies its IoD fallback (which can neutralize multiple
+                # detections inside a broad ignore region).
+                ignored_iou = [
+                    i for i, other in enumerate(ignored)
+                    if _iou(box, other) >= threshold
+                    and i not in matched_ignored_iou[image_id]
+                ]
+                if ignored_iou:
+                    matched_ignored_iou[image_id].add(ignored_iou[0])
+                    continue
+                neutral_iod = any(_iod(box, other) >= threshold for other in ignored)
                 # COCOeval also ignores unmatched detections outside the selected
                 # area range. A matched in-range GT remains a TP even if its
                 # predicted box has a different size.
-                if neutral_ignore or not _in_range(box, size_range):
+                if neutral_iod or not _in_range(box, size_range):
                     continue
                 tp.append(0)
                 fp.append(1)
