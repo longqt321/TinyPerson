@@ -1,74 +1,64 @@
-# TinyPerson benchmark protocol in this repository
+# Dữ liệu và benchmark TinyPerson
 
-## Why this is separate from native YOLO validation
+## Hai loại đánh giá
 
-The native Ultralytics validator consumes YOLO labels and reports COCO-style AP. A YOLO label file cannot retain TinyPerson's ignore, uncertain, in_dense_image, or source image metadata. Native validation remains useful for training/selection, but is not by itself the TinyPerson benchmark.
+YOLO validation trên derivative dùng label YOLO và phù hợp để chọn checkpoint giữa các run. Nó không giữ đầy đủ metadata `ignore`, `uncertain`, `in_dense_image` của TinyPerson, nên không đồng nhất với benchmark TinyPerson chính thức.
 
-The reference TinyBenchmark protocol (see [annotation rules](https://github.com/ucas-vg/PointTinyBenchmark/blob/master/dataset/TinyPerson_annotation.md) and [reference evaluator](https://github.com/sxy1122/TinyBenchmark/blob/master/tiny_benchmark/MyPackage/tools/evaluate/evaluate_tiny.py)) specifies:
+Script `evaluate_tinyperson_benchmark.py` tính AP theo các size bins TinyPerson từ dự đoán trên ảnh gốc và annotation gốc. Script này là implementation trong repository, không phải bản evaluator chuẩn được vendored. Trước khi công bố kết quả chính thức, đối chiếu fixed prediction file với reference evaluator; metric miss rate (MR) cần reference evaluator.
 
-- sea_person and earth_person are one person class.
-- Only normal boxes are positive ground truth.
-- Images with more than 220 annotations / marked dense are excluded.
-- ignore and uncertain boxes are neutral, not positives or negatives; the reference evaluator uses IoU matching and an IoD fallback for ignored regions.
-- AP uses IoU thresholds 0.25, 0.50, 0.75, a maximum of 200 detections per image, and area ranges all, tiny, tiny1, tiny2, tiny3, small, reasonable, measured by square-root bbox area in original pixels.
-- The reference code also reports miss rate (MR). The standalone evaluator added here reports AP only; MR/reference cross-validation remains a follow-up before publication-grade claims.
+## Chuẩn bị train/validation derivative
 
-## 1. Prepare YOLO train/validation from official training data
-
-Use the non-corner erase annotation and matching erased image archive. This preserves the reference training treatment for ignore/uncertain/logo regions and excludes dense images. Do not feed a corner JSON to this script.
+Dùng erase annotation train không phải corner/crop cùng ảnh tương ứng. Script từ chối ảnh dense và annotation đặc biệt còn sót, kiểm tra kích thước raster theo COCO, gộp `sea_person` và `earth_person` về class `person`, rồi tạo split train/val xác định theo nhóm tên file.
 
 ```bash
-uv run --extra cpu python scripts/prepare_tinyperson_yolo.py \
+python scripts/prepare_tinyperson_yolo.py \
   --annotations /data/TinyPerson/erase_with_uncertain_dataset/annotations/tiny_set_train.json \
   --image-root /data/TinyPerson/erase_with_uncertain_dataset/train \
   --output /data/derived/tinyperson-yolo
 ```
 
-The script validates every image's raster dimensions against COCO metadata, refuses dense/corner data and remaining special annotations, maps both person categories to class 0, and writes a deterministic train/validation split grouped by the filename's inferred video/frame prefix. Image inspection and copying use I/O threads (`--workers`, default up to 16). Inspect manifest.json, especially singleton_group_count: filenames that do not encode a video group fall back to singleton groups, so confirm grouping is sensible for the downloaded release. The official test split is never used for validation.
-
-The converter copies the source COCO JSON into the derived dataset so the existing preflight can verify dimensions for every train/validation raster. Keep the original archives and JSON unchanged. Upload to a new remote directory so the current dataset is not overwritten:
+Xem `manifest.json`, đặc biệt cách suy ra group từ filename và số `singleton_group_count`. Giữ nguyên dữ liệu gốc. Upload derivative vào versioned path trong Modal Volume:
 
 ```bash
-uv run --extra cpu python tools/upload_data.py data /data/derived/tinyperson-yolo --remote /tinyperson_official_v1
-uv run --extra cpu modal run modal/app.py::compare \
+python tools/upload_data.py data /data/derived/tinyperson-yolo \
+  --remote /tinyperson_official_v1
+modal run modal/app.py::compare \
   --config configs/experiment/ablation_msr_p2.yaml \
   --preflight-only --require-source-metadata
 ```
 
-Only start training after this preflight reports source metadata as verified. The paired P2 MSR config points at /mnt/data/tinyperson_official_v1/data.yaml. For a five-epoch pipeline smoke test, use configs/experiment/ablation_msr_p2.yaml with --smoke --parallel; it does not validate final AP.
+Config hiện tại dùng `/mnt/data/tinyperson_official_v1/data.yaml`. Preflight kiểm tra ảnh/label gốc, signature dữ liệu và COCO dimensions trước khi mở GPU. Preflight pass không thay thế kiểm tra chất lượng split.
 
-## 2. Predict on the official test split at source resolution
+## Đánh giá validation theo COCO AP-small
 
-Download the chosen checkpoint from the Modal run volume and use the original official test images plus the JSON with dense images (tiny_set_test_with_dense.json). The predictor verifies every source raster against its declared COCO width/height and saves boxes in original-image coordinates.
+`evaluate_coco_small.py` dùng annotation COCO train gốc, `manifest.json` để lấy thành viên validation, tọa độ bbox ảnh gốc và evaluator `pycocotools`. Small theo COCO là diện tích nhỏ hơn $32^2$ pixel² trên ảnh gốc. Cài optional dependency và chạy sau khi tải artifacts:
+
+```fish
+modal volume get tiny-person-runs /MODEL/RUN_ID/evaluation-val outputs/MODEL/RUN_ID/evaluation-val
+modal volume get tiny-person-data /tinyperson_official_v1/annotations/tiny_set_train.json data/tiny_set_train.json
+modal volume get tiny-person-data /tinyperson_official_v1/manifest.json data/manifest.json
+uv run --extra cpu --with pycocotools python scripts/evaluate_coco_small.py \
+  --run outputs/MODEL/RUN_ID \
+  --annotations data/tiny_set_train.json --manifest data/manifest.json
+```
+
+Metric này chưa được xác minh trên môi trường thiếu dataset và `pycocotools`; không ghi AP-small trước khi script chạy thành công.
+
+## Official test
+
+Chỉ đánh giá test sau khi đã cố định kiến trúc, checkpoint selection và inference parameters dựa trên validation. Dùng ảnh test gốc và `tiny_set_test_with_dense.json`:
 
 ```bash
-uv run --extra cpu python tools/download_results.py MODEL/RUN_ID
-uv run --extra cpu python scripts/predict_tinyperson_test.py \
+python scripts/predict_tinyperson_test.py \
   --checkpoint /path/to/best.pt \
   --annotations /data/TinyPerson/annotations/tiny_set_test_with_dense.json \
   --image-root /data/TinyPerson/test \
   --output predictions/tinyperson-test-predictions.json \
   --imgsz 1280 --batch-size 16
-```
-
-Set image-root to the directory under which the JSON's file_name values resolve. If the test archive is under a different root, adjust that path; do not rename/recreate images to force a match. Inference batches 16 images by default; lower `--batch-size` if device memory is limited. For CPU inference, `--cpu-threads N` sets PyTorch's native CPU thread count.
-
-## 3. Calculate TinyPerson AP
-
-```bash
-uv run --extra cpu python scripts/evaluate_tinyperson_benchmark.py \
+python scripts/evaluate_tinyperson_benchmark.py \
   --annotations /data/TinyPerson/annotations/tiny_set_test_with_dense.json \
   --predictions predictions/tinyperson-test-predictions.json \
   --output metrics/tinyperson_test.json --workers 7
 ```
 
-The evaluator calculates independent size ranges in separate processes on Linux. `--workers` sets process count; default uses up to seven cores. Other platforms use serial evaluation.
-
-The evaluator rejects missing/extra/duplicate image predictions to prevent accidental evaluation on the repository's custom 70/20/10 split. It excludes dense images, combines person categories, treats ignore/uncertain regions as neutral, caps detections at 200 per image, and writes per-size AP at IoU 0.25/0.50/0.75. The output records source paths and protocol details.
-
-## Important limitations
-
-- This repository implementation is a standalone AP evaluator derived from the published protocol, not a vendored copy of the legacy TinyBenchmark stack. Before publication, cross-check its scores against the reference evaluator on a fixed prediction file and use the reference evaluator for official MR.
-- The size ranges follow the reference evaluator's inclusive area bounds: all [1, 100000], tiny [1, 20], tiny1 [1, 8], tiny2 [8, 12], tiny3 [12, 20], small [20, 32], and reasonable [32, 100000], where each value is sqrt(box area) in original pixels.
-- The predictor is a separate inference pass. Its preprocessing, confidence threshold, NMS, and checkpoint must be recorded and kept identical when comparing MSR variants. The official benchmark evaluator itself does not define the detector's inference settings.
-- Do not select the best checkpoint or tune MSR using official test metrics. Use only the validation split derived from official training images for model selection.
+Giữ cùng checkpoint policy, imgsz, confidence, postprocessing và max detections khi so model. Evaluator loại dense images, gộp hai category person, xử lý ignore/uncertain như vùng neutral, giới hạn 200 detections/image và báo AP ở IoU 0.25/0.50/0.75 theo size bins. Không dùng official test để chọn checkpoint hoặc điều chỉnh MSR.

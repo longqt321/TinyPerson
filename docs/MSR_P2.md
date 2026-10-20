@@ -1,56 +1,94 @@
-# Isolated P2 MSR experiment
+# MSR trên nhánh P2
 
-## Architecture
+## Mục tiêu
 
-The inspected YOLO26n YAMLs confirm A0/A1 use Detect strides `[8, 16, 32]`; A2/A3 use `[4, 8, 16, 32]`. A0/A2 retain `SPPF`; A1/A3 replace it with `Identity`. E1/E3 name `MSR` directly at layer 29, after the P2 neck branch, and route its output to Detect. Importing `tinydet.modules.msr` registers `MSR` in Ultralytics' YAML parser namespace. P3/P4/P5 remain on their original graph paths.
+Kiểm tra liệu chuẩn hóa residual cục bộ đa tỷ lệ có cải thiện feature P2 cho phát hiện người rất nhỏ hay không. MSR là feature module; thí nghiệm đầu tiên không đổi backbone, neck trước P2, Detect, loss, label assignment hoặc dữ liệu.
 
-For each odd kernel in `{3,5,7}`, MSR computes valid-pixel local mean and variance in FP32, clips signed standardized residuals, projects concatenated positive/negative responses, predicts per-channel scale gates, normalizes the weighted sum, and applies a sigmoid feature gate plus depthwise 3x3 refinement. A learnable residual coefficient starts at `1e-3`. This signed split and scale gating are hypotheses; the four-run study tests the full module, while later ablations should isolate those choices.
+## Vị trí trong YOLO26n
 
-## Dataset and training pipeline
+Trong A2/A3, layer 2 là feature backbone stride 4. Neck tiếp tục upsample và hợp nhất feature từ backbone stride 8, 16, 32. Layer 19 là output P2 sau hợp nhất. MSR nằm tại layer 29, nhận trực tiếp layer 19; Detect nhận output MSR làm P2 và giữ nguồn gốc cho P3/P4/P5.
 
-The configured dataset is `/mnt/data/tinyperson_official_v1/data.yaml`, which is in the Modal volume and not mounted in this local workspace. The latest available preflight artifact (`outputs/tiny_A2_p2/20261019-194809-8326468-seed42/diagnostics/dataset_preflight_summary.json`) reports 746 images total: 662 train and 84 validation; 14,825 and 3,608 objects respectively; zero corrupt images, missing label files, or out-of-range boxes; source COCO dimensions verified for all 746 images. At `imgsz=1280`, train/validation median square-root bbox areas are 8.94/10.04 px; 42.9%/34.1% are below 8 px. The official test set is not part of this derivative. The dataset preparation code combines the two TinyPerson categories as YOLO class 0 (`person`). The report does not include a duplicate-file audit.
+```text
+backbone stride 32 → upsample + layer 6 (stride 16) → layer 13
+                 → upsample + layer 4 (stride 8)  → layer 16
+                 → upsample + layer 2 (stride 4)  → layer 19 (P2)
+                 → layer 29 (MSR) → Detect P2
+```
 
-Preparation stores YOLO-normalized boxes using original raster dimensions. Ultralytics' normal detection dataloader then applies its native letterbox/geometry transform; the experiment leaves that loader and all configured augmentations unchanged. `train()` calls `set_seed(seed, deterministic)` and forwards the full train mapping to `model.train()`, including `patience`, `amp`, `close_mosaic`, and the augmentation values. No external pretrained checkpoint is configured in this comparison; same seed and same source architecture initialize the paired runs from the same random baseline weights. The optional `model.pretrained` path supports A2/A3 checkpoint transfer; the P2 MSR loader remaps legacy Detect layer 29 to layer 30 and reports matched, remapped, and skipped tensors.
+YAML khai báo module thật, không dùng placeholder:
 
-## Run
+```yaml
+- [19, 1, MSR, [32, [3, 5, 7], 0.000001, 0.001, 10.0, 4, 0.001]]
+- [[29, 22, 25, 28], 1, Detect, [nc]]
+```
 
-Local integration smoke: one synthetic batch through the actual YOLO26 end-to-end criterion, backward, optimizer update, state-dict save/reload, and prediction. Use a Modal GPU to check CUDA AMP and the real dataset pipeline.
+Khi import `tinydet.modules.msr`, class `MSR` được thêm vào namespace `ultralytics.nn.tasks` mà parser Ultralytics tra cứu. YAML này dùng scale `n`, nên channel đầu vào của MSR là 32.
+
+## Luồng tensor và toán học
+
+Input và output có shape `[B,C,H,W]`; ở model nano, `C=32`. Với mỗi kernel $k\in\{3,5,7\}$, MSR tính local mean và variance theo từng channel:
+
+\[
+\mu_k=A_k(X),\quad v_k=\max(A_k(X^2)-\mu_k^2,0),\quad
+\hat\sigma_k=\max(\sqrt{v_k+\epsilon},\sigma_{min})
+\]
+
+\[
+Z_k=\operatorname{clip}((X-\mu_k)/\hat\sigma_k,-z_{max},z_{max})
+\]
+
+Thống kê chạy FP32; mean và $E[X^2]$ dùng cùng quy tắc padding, không tính padding ngoài ảnh. `eps=1e-6`, `sigma_min=1e-3`, `z_max=10`.
+
+MSR tách $Z_k$ thành `ReLU(Z_k)` và `ReLU(-Z_k)`, nối thành `2C` channel. Một projection riêng cho mỗi kernel gồm Conv 1×1, BatchNorm và SiLU trả feature về C channel, gọi là $F_k$.
+
+GAP và MLP cho mỗi $F_k$ tạo gate theo channel $\alpha_k$. MSR hợp nhất các tỷ lệ bằng tổng có chuẩn hóa:
+
+\[
+E=\frac{\sum_k \alpha_k\odot F_k}{\max(\sum_k\alpha_k,10^{-6})}
+\]
+
+Conv 1×1 + sigmoid tạo gate không gian-channel $G$. Sau đó depthwise Conv 3×3 refine feature đã điều chỉnh:
+
+\[
+Y=X+\gamma\,\operatorname{DWConv}_{3\times3}(X\odot G)
+\]
+
+$\gamma$ là scalar học được, khởi tạo `0.001`. Tách đáp ứng dương/âm và học gate theo tỷ lệ là giả thuyết thiết kế, không phải bảo đảm tăng thông tin hoặc tăng AP.
+
+## Thiết kế đối chứng
+
+Nguồn config: `configs/experiment/ablation_msr_p2.yaml`. Dùng cùng dataset, seed 42, 50 epochs, patience 15, imgsz 1280, batch 8, AdamW, lr 0.001, AMP và deterministic bật, augmentation nhẹ giống nhau.
+
+| Run | Cấu hình | So sánh |
+|---|---|---|
+| E0 | A2, P2 + SPPF | Baseline |
+| E1 | A2 + MSR | E1 với E0 đo MSR khi giữ SPPF |
+| E2 | A3, P2, bỏ SPPF | Baseline phụ |
+| E3 | A3 + MSR | E3 với E2 đo MSR khi bỏ SPPF |
+
+Không so E1 với E2 để quy kết hiệu quả riêng cho MSR. Nếu hiệu quả nhỏ, chạy paired seeds 42/43/44 và báo cáo mean/std.
+
+## Trạng thái evidence
+
+Model YAML đã được parser nhận diện; CPU smoke test chạy criterion YOLO thật, backward, optimizer step, lưu/nạp checkpoint và predict. CUDA AMP chưa xác minh trong môi trường local CPU-only.
+
+Biểu đồ W&B đã chia sẻ cho bốn run tới 50 epoch cho thấy các đường recall, precision và mAP gần nhau. Đây là quan sát sơ bộ từ hình, không thay thế số metric trong CSV/JSON. Chưa thể kết luận MSR có cải thiện. Hãy lấy metric của `best.pt`, so từng cặp và tính AP theo kích thước gốc trước khi viết kết luận.
+
+Profiler Ultralytics ở imgsz 1280 ghi A2+MSR 2,525,313 parameters và 33.554 GFLOPs; A3+MSR 2,360,705 parameters và 33.024 GFLOPs. MSR thêm 9,337 parameters. FLOPs là ước lượng vì profiler có thể bỏ qua pooling và tensor arithmetic trong MSR.
+
+## Chạy
+
+Từ repo root, trong venv đã kích hoạt:
 
 ```bash
-uv run --extra cpu --group dev pytest tests/test_msr.py -q
-uv run --extra cpu python scripts/smoke_msr.py
-uv run --extra cpu python scripts/validate_tiny_ablation.py \
+python scripts/validate_tiny_ablation.py \
   configs/model/yolo26n_tiny_A2_p2_msr.yaml \
-  configs/model/yolo26n_tiny_A3_p2_no_sppf_msr.yaml --imgsz 1280
-uv run --extra cpu modal run modal/app.py::compare \
-  --config configs/experiment/ablation_msr_p2.yaml --smoke --parallel
-uv run --extra cpu modal run modal/app.py::compare \
+  configs/model/yolo26n_tiny_A3_p2_no_sppf_msr.yaml --imgsz 640
+python scripts/smoke_msr.py
+modal run --detach modal/app.py::compare \
   --config configs/experiment/ablation_msr_p2.yaml --parallel
 ```
 
-`--smoke` limits all four jobs to five epochs. Full runs use 50 epochs and patience 15. Each run has a distinct output directory under `/mnt/runs`; the Modal workflow saves config, environment, metadata, train metrics/plot, validation metrics, and `best.pt`/`last.pt`. W&B remains enabled but local artifacts do not depend on W&B syncing.
+`--smoke` giới hạn mọi model còn 5 epoch; nó chỉ kiểm tra đường chạy, không dùng để kết luận metric. `--parallel` tối đa bốn training job. Modal `--detach` để job sống qua lần terminal disconnect, còn compare vẫn cần kết nối để hiển thị tiến độ và chờ toàn pipeline hoàn tất.
 
-## Evaluation
-
-Compare E1 against E0 and E3 against E2 only. Native Ultralytics validation records AP@[.50:.95], AP50, AP75, precision, and recall on the same 84-image validation split. TinyPerson-specific size AP can be computed with the existing `scripts/predict_tinyperson_test.py` and `scripts/evaluate_tinyperson_benchmark.py`, which use original-image boxes and TinyPerson's size bins; keep its settings fixed across runs and do not tune on the official test split.
-
-The separate `scripts/evaluate_coco_small.py` computes COCO bbox AP_small using the official train annotation JSON, the prepared `manifest.json` validation membership, and cached native-validator predictions. It maps both person categories to one class and uses original-coordinate bbox area. It requires optional `pycocotools` installed in the evaluation environment. It has not been run here because dataset files and `pycocotools` are unavailable locally. Report validation results as validation, not test.
-
-After a run completes, download its native validation predictions and the dataset metadata, install `pycocotools`, then evaluate:
-
-```fish
-modal volume get tiny-person-runs /MODEL/RUN_ID/evaluation-val outputs/MODEL/RUN_ID/evaluation-val
-modal volume get tiny-person-data /tinyperson_official_v1/annotations/tiny_set_train.json data/tiny_set_train.json
-modal volume get tiny-person-data /tinyperson_official_v1/manifest.json data/manifest.json
-uv run --extra cpu --with pycocotools python scripts/evaluate_coco_small.py \
-  --run outputs/MODEL/RUN_ID \
-  --annotations data/tiny_set_train.json --manifest data/manifest.json
-```
-
-Alternatively, add `evaluation` to `tools/download_results.py --include` to download `evaluation-val` with other run artifacts.
-
-## Current verification boundary
-
-At `imgsz=1280`, the Ultralytics profiler reports 2,525,313 parameters / 33.554 GFLOPs for A2+MSR and 2,360,705 / 33.024 GFLOPs for A3+MSR. MSR adds 9,337 parameters. The FLOP profiler sees convolution/linear work but may omit pooling and tensor arithmetic inside MSR, so treat GFLOPs as an estimate.
-
-No full training run was launched. This workspace has Python 3.12.13 in `.venv`, PyTorch 2.14.0 CPU-only, Ultralytics 8.4.164, and no CUDA device. Therefore CUDA AMP, a real-dataset criterion batch, GPU memory, latency, and full-run metrics remain unverified. The existing completed A0–A3 runs are not MSR results.
+Full training cần Modal GPU và dataset trong volume; không chạy từ máy CPU. Chi tiết benchmark TinyPerson nằm trong [TINYPERSON_BENCHMARK.md](TINYPERSON_BENCHMARK.md).
