@@ -1,163 +1,109 @@
-"""Tests for the full MSR evidence, adaptive pooling and feature fusion system."""
+"""Tests for the YAML-registered P2 MSR refinement block."""
 import pytest
 import torch
 
-from tinydet.modules.msr import (
-    DETECT_INDEX,
-    FUSION_SPECS,
-    MSRFusionGate,
-    MultiScaleStandardizedResidual,
-    install_msr_feature_module,
-    validate_feature_module,
-)
+from tinydet.modules.msr import MSR, load_p2_msr_weights
 from tinydet.utils.comparison import load_comparison
 
 
-@pytest.mark.parametrize("aggregation", ["max", "adaptive"])
-def test_standardized_evidence_shape_stability_and_gradients(aggregation):
-    module = MultiScaleStandardizedResidual(dilations=(1, 2, 4), aggregation=aggregation)
-    x = torch.randn(2, 8, 19, 17, requires_grad=True)
-    y = module(x)
-    assert y.shape == x.shape
-    assert torch.isfinite(y).all()
-    y.square().mean().backward()
-    assert torch.isfinite(x.grad).all()
-    if aggregation == "adaptive":
-        assert module.scale_bias.grad is not None
-        assert torch.isfinite(module.scale_bias.grad).all()
-    else:
-        assert module.scale_bias is None
+@pytest.mark.parametrize("shape", [(2, 8, 3, 5), (2, 8, 13, 11)])
+def test_msr_refinement_shape_backward_and_optimizer_update(shape):
+    module = MSR(8)
+    x = torch.randn(*shape, requires_grad=True)
+    before = module.gamma.detach().clone()
+    optimizer = torch.optim.SGD(module.parameters(), lr=0.1)
+    loss = (module(x) - torch.randn_like(x)).square().mean()
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert all(p.grad is None or torch.isfinite(p.grad).all() for p in module.parameters())
+    assert module.gamma.grad is not None and module.gamma.grad.abs() > 0
+    for branch in (module.projections, module.scale_gates, module.feature_gate, module.refine):
+        gradients = [p.grad for p in branch.parameters()]
+        assert all(grad is not None for grad in gradients)
+        assert sum(grad.abs().sum() for grad in gradients) > 0
+    optimizer.step()
+    assert not torch.equal(before, module.gamma.detach())
 
 
-def test_standardized_evidence_is_zero_on_constant_features():
-    module = MultiScaleStandardizedResidual(aggregation="adaptive")
-    x = torch.full((2, 8, 17, 15), 2.5, requires_grad=True)
-    y = module(x)
-    assert torch.equal(y, torch.zeros_like(y))
-    assert torch.isfinite(y).all()
-    y.sum().backward()
-    assert torch.isfinite(x.grad).all()
-    assert torch.isfinite(module.scale_bias.grad).all()
+def test_msr_cpu_autocast_and_input_validation():
+    module = MSR(8)
+    x = torch.randn(2, 8, 13, 11)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        y = module(x)
+    assert y.shape == x.shape and torch.isfinite(y).all()
+    with pytest.raises(ValueError, match="BCHW"):
+        module(torch.randn(2, 8, 13))
+    with pytest.raises(ValueError, match="odd"):
+        MSR(8, kernels=(3, 4))
 
 
-def test_standardized_evidence_detects_a_local_positive_outlier():
-    module = MultiScaleStandardizedResidual(dilations=(1, 2, 4), aggregation="adaptive")
-    x = torch.ones(1, 4, 25, 25)
-    x[:, :, 12, 12] += 3.0
-    response = module(x)
-    assert response[0, 0, 12, 12] > 5
-    assert response[0, 0, 12, 12] > response[0, 0, 12, 11]
-
-
-@pytest.mark.parametrize("high_first", [True, False])
-@pytest.mark.parametrize("mode", ["local_max", "local_adaptive", "full_max", "full_adaptive"])
-def test_fusion_gate_shape_and_backward(high_first, mode):
-    torch.manual_seed(7)
-    gate = MSRFusionGate(
-        high_channels=8, low_channels=4, high_first=high_first, mode=mode,
-        dilations=(1, 2, 4),
-    )
-    high = torch.randn(2, 8, 19, 17, requires_grad=True)
-    low = torch.randn(2, 4, 19, 17, requires_grad=True)
-    x = torch.cat((high, low), dim=1) if high_first else torch.cat((low, high), dim=1)
-    y = gate(x)
-    assert y.shape == x.shape
-    assert torch.isfinite(y).all()
-    y.square().mean().backward()
-    assert torch.isfinite(high.grad).all()
-    assert torch.isfinite(low.grad).all()
-    assert any(p.grad is not None and torch.isfinite(p.grad).all() for p in gate.parameters())
-
-
-def test_feature_module_validation():
-    assert validate_feature_module(None) == {"mode": "none"}
-    assert validate_feature_module({"mode": "none"}) == {"mode": "none"}
-    for mode in ("local_max", "local_adaptive", "full_max", "full_adaptive"):
-        options = validate_feature_module({"mode": mode, "dilations": [1, 2, 4]})
-        assert options["mode"] == mode
-        assert options["dilations"] == [1, 2, 4]
-    for bad in (
-        {"mode": "unknown"},
-        {"mode": "none", "dilations": [1]},
-        {"mode": "full_adaptive", "dilations": []},
-        {"mode": "full_adaptive", "dilations": [1, 1]},
-        {"mode": "full_adaptive", "dilations": [0]},
-        {"mode": "full_adaptive", "eps": 0},
-        {"mode": "full_adaptive", "score_clip": float("nan")},
-        {"mode": "full_adaptive", "hidden_ratio": 0},
-        {"mode": "full_adaptive", "unknown": True},
-    ):
-        with pytest.raises(ValueError):
-            validate_feature_module(bad)
-
-
-def test_ablation_settings_are_controlled():
-    runs = load_comparison("configs/experiment/ablation_msr.yaml")
-    assert [run["name"] for run in runs] == [
-        "msr_a0_identity", "msr_a1_local_max", "msr_a2_full_max", "msr_a3_full_adaptive"
-    ]
-    assert len({run["model"]["config"] for run in runs}) == 1
-    for key in ("data", "train", "hardware", "output", "seed"):
-        assert all(run[key] == runs[0][key] for run in runs)
-    assert all(run["train"]["epochs"] == 50 for run in runs)
-    assert [run["model"]["feature_module"]["mode"] for run in runs] == [
-        "none", "local_max", "full_max", "full_adaptive"
-    ]
-    assert all(run["train"]["imgsz"] == 1280 for run in runs)
-
-
-def test_p2_architecture_and_checkpoint_roundtrip(tmp_path):
+def test_p2_msr_graph_loss_and_checkpoint_roundtrip(tmp_path):
     pytest.importorskip("ultralytics")
+    from ultralytics.utils import DEFAULT_CFG
+
     from tinydet.models.registry import build_model
 
-    options = {
-        "mode": "full_adaptive",
-        "dilations": [1, 2, 4],
-        "eps": 1e-4,
-        "score_clip": 10.0,
-        "hidden_ratio": 4,
-        "scale_temperature": 1.0,
-    }
     model = build_model({
-        "config": "configs/model/yolo26n-msr-p2.yaml",
-        "pretrained": None,
-        "feature_module": options,
+        "config": "configs/model/yolo26n_tiny_A2_p2_msr.yaml",
     })
     net = model.model
-    assert len(net.model) == DETECT_INDEX + 1
-    assert net.model[DETECT_INDEX].f == [22, 26, 30, 34]
-    for index, spec in FUSION_SPECS.items():
-        gate = net.model[index]
-        assert isinstance(gate, MSRFusionGate)
-        assert (gate.high_channels, gate.low_channels, gate.high_first) == spec
-        assert gate.i == index and gate.f == -1
+    assert len(net.model) == 31
+    assert isinstance(net.model[29], MSR)
+    assert net.model[29].f == 19
+    detect = net.model[30]
+    assert detect.f == [29, 22, 25, 28]
+    assert detect.nc == 1 and net.stride.tolist() == [4.0, 8.0, 16.0, 32.0]
 
-    result = model.predict(torch.zeros(1, 3, 64, 64), device="cpu", verbose=False)
-    assert len(result) == 1 and result[0].orig_shape == (64, 64)
+    net.args = DEFAULT_CFG
+    net.train()
+    batch = {
+        "img": torch.rand(2, 3, 64, 64),
+        "batch_idx": torch.tensor([0.0, 1.0]),
+        "cls": torch.zeros(2, 1),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.15, 0.15], [0.4, 0.6, 0.1, 0.12]]),
+    }
+    loss, _ = net.loss(batch)
+    assert torch.isfinite(loss).all()
+    loss.sum().backward()
+    assert torch.isfinite(net.model[29].gamma.grad)
 
-    checkpoint = tmp_path / "msr_state.pt"
-    torch.save(net.state_dict(), checkpoint)
-    state = torch.load(checkpoint, weights_only=True, map_location="cpu")
-    reloaded = build_model({
-        "config": "configs/model/yolo26n-msr-p2.yaml",
-        "pretrained": None,
-        "feature_module": options,
+    state_path = tmp_path / "msr.pt"
+    torch.save(net.state_dict(), state_path)
+    restored = build_model({
+        "config": "configs/model/yolo26n_tiny_A2_p2_msr.yaml",
     })
-    reloaded.model.load_state_dict(state)
-    loaded_net = reloaded.model
-    assert isinstance(loaded_net.model[21], MSRFusionGate)
-    assert loaded_net.model[21].mode == "full_adaptive"
-    assert loaded_net.model[DETECT_INDEX].f == [22, 26, 30, 34]
+    restored.model.load_state_dict(torch.load(state_path, map_location="cpu", weights_only=True))
+    restored.model.eval()
+    prediction = restored.predict(torch.zeros(1, 3, 64, 64), device="cpu", verbose=False)
+    assert len(prediction) == 1 and prediction[0].orig_shape == (64, 64)
 
 
-def test_install_rejects_already_replaced_gates():
+def test_p2_msr_layer_index_checkpoint_mapping():
     pytest.importorskip("ultralytics")
+    from ultralytics.nn.tasks import DetectionModel
+
     from tinydet.models.registry import build_model
 
-    model = build_model({
-        "config": "configs/model/yolo26n-msr-p2.yaml",
-        "pretrained": None,
-        "feature_module": {"mode": "full_adaptive"},
-    })
-    with pytest.raises(ValueError, match="Identity fusion slot"):
-        install_msr_feature_module(model.model, {"mode": "full_max"})
+    baseline = DetectionModel("configs/model/yolo26n_tiny_A2_p2.yaml", ch=3, verbose=False)
+    adapted = build_model({
+        "config": "configs/model/yolo26n_tiny_A2_p2_msr.yaml",
+    }).model
+    report = load_p2_msr_weights(adapted, baseline)
+    assert report["remapped"] > 0
+    assert torch.equal(adapted.model[30].cv2[0][0].conv.weight,
+                       baseline.model[29].cv2[0][0].conv.weight)
+
+
+def test_p2_msr_comparison_uses_paired_architectures():
+    runs = load_comparison("configs/experiment/ablation_msr_p2.yaml")
+    assert [run["name"] for run in runs] == [
+        "msr_p2_e0_a2_baseline", "msr_p2_e1_a2_msr",
+        "msr_p2_e2_a3_no_sppf", "msr_p2_e3_a3_no_sppf_msr",
+    ]
+    assert runs[0]["model"]["config"] == "configs/model/yolo26n_tiny_A2_p2.yaml"
+    assert runs[1]["model"]["config"] == "configs/model/yolo26n_tiny_A2_p2_msr.yaml"
+    assert runs[1]["model"].keys() == {"config", "pretrained"}
+    assert runs[2]["model"]["config"] == "configs/model/yolo26n_tiny_A3_p2_no_sppf.yaml"
+    assert runs[3]["model"]["config"] == "configs/model/yolo26n_tiny_A3_p2_no_sppf_msr.yaml"
+    for key in ("data", "train", "hardware", "output", "seed"):
+        assert all(run[key] == runs[0][key] for run in runs)

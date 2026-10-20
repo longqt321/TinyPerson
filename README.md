@@ -67,24 +67,28 @@ The native YOLO metrics are not the official TinyPerson benchmark because YOLO l
 
 See [docs/TINYPERSON_BENCHMARK.md](docs/TINYPERSON_BENCHMARK.md) for the exact data paths, commands, protocol caveats, and the distinction between native validation and benchmark evaluation. The standalone evaluator reports AP; validate it against the legacy TinyBenchmark reference and use that reference for official miss-rate (MR) before publication claims.
 
-## Full MSR architecture and original-image preflight
+## P2 MSR experiment
 
-The MSR experiment now includes standardized local evidence, max/adaptive multi-scale aggregation, and attention-guided cross-level fusion at six P2/P3/P4/P5 neck concatenations. Four ablations isolate local evidence, cross-level fusion, and adaptive scale aggregation. It is a research hypothesis, not a claim of improved accuracy.
+The controlled MSR experiment adds one standardized multi-scale residual block to the P2 feature before Detect. Paired A2/A3 configurations isolate this block while preserving the other model branches.
 
 Before any training, the Modal workflow audits stored image files directly (before YOLO resizing), including native width/height, aspect ratio, format, colour mode, bit-depth category, EXIF orientation, file size, normalized box/polygon annotations, and a simulated resize to the chosen input size. If original TinyPerson COCO annotation JSON files are present, declared image dimensions are checked against the raster dimensions. Full JSON audit reports live in the Modal run volume under preflight/; each model run stores a compact summary alongside metadata.
 
 Review the dataset first without starting a training GPU:
 
-    uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_msr.yaml --preflight-only
+    uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_msr_p2.yaml --preflight-only
 
 To require original source COCO metadata to be present and fully match stored raster dimensions, add `--require-source-metadata`. The audit reports `not_found` when COCO source metadata is unavailable; it cannot reconstruct original pixels if source files were pre-resized before upload.
 
 Screen all four variants for five epochs, with up to four L4 containers in parallel:
 
-    uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_msr.yaml --smoke --parallel
+    uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_msr_p2.yaml --smoke --parallel
 
 After reviewing the preflight report, run the full comparison:
 
-    uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_msr.yaml --parallel
+    uv run --extra cpu modal run modal/app.py::compare --config configs/experiment/ablation_msr_p2.yaml --parallel
 
 Add `--strict-resolution` to stop before training if at least half of parsed objects are estimated below 4 px square-root-area after the theoretical letterbox resize. Add `--require-source-metadata` to block when original COCO dimensions are missing, unmatched, only partially matched, or disagree with on-disk raster dimensions. This threshold is an explicit diagnostic policy; it does not claim that detection below 4 px is impossible. The resize estimate does not include mosaic, random scale, crop, or augmentation. The audit can verify native on-disk dimensions, and can verify against source COCO metadata when available; it cannot reconstruct original pixels if the dataset files were already resized before being uploaded.
+
+## Isolated P2 MSR refinement
+
+For model equations and the paired A2/A3 experiment, see [docs/MSR_P2.md](docs/MSR_P2.md) and run `configs/experiment/ablation_msr_p2.yaml`.

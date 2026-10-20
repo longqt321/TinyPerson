@@ -61,17 +61,9 @@ def train(
             )
             print(f"W&B: {wandb_run.url}", flush=True)
         model.callbacks["on_fit_epoch_end"].insert(0, partial(log_ap_by_iou, wandb_enabled=bool(project)))
-        training_options = {}
-        if "feature_module" in config.model:
-            from tinydet.modules.ultralytics_adapter import MSRDetectionTrainer
-
-            training_options["trainer"] = partial(
-                MSRDetectionTrainer,
-                feature_module=config.model.get("feature_module"),
-            )
         started = monotonic()
         torch.cuda.reset_peak_memory_stats()
-        model.train(**training_options, data=str(dataset_config or config.data["config"]), project=str(run), name="training", exist_ok=True, save=True, save_period=-1, seed=config.seed, **{**config.train, "plots": False})
+        model.train(data=str(dataset_config or config.data["config"]), project=str(run), name="training", exist_ok=True, save=True, save_period=-1, seed=config.seed, **{**config.train, "plots": False})
         # Ultralytics already validates the stripped best.pt at the end of training.
         # Keep this result for compare; explicit evaluate still performs fresh validation.
         if Path(model.trainer.best).is_file() and model.trainer.validator.metrics.box.all_ap.size:

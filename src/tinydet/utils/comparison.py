@@ -15,8 +15,8 @@ def load_comparison(path: str | Path) -> list[dict]:
     experiments = []
     for model in models:
         if (not isinstance(model, dict) or not {"name", "config"} <= model.keys()
-                or set(model) - {"name", "config", "feature_module"}):
-            raise ValueError("Each model needs name and config, with optional feature_module")
+                or set(model) - {"name", "config"}):
+            raise ValueError("Each model needs only name and config")
         name = model["name"]
         if not isinstance(name, str) or not name.replace("-", "").replace("_", "").isalnum():
             raise ValueError(f"Model name must contain only letters, digits, '-' or '_': {name}")
@@ -26,9 +26,5 @@ def load_comparison(path: str | Path) -> list[dict]:
         if not Path(model["config"]).is_file():
             raise ValueError(f"Model config does not exist: {model['config']}")
         model_config = {"config": model["config"], "pretrained": None}
-        if "feature_module" in model:
-            from tinydet.modules.msr import validate_feature_module
-
-            model_config["feature_module"] = validate_feature_module(model["feature_module"])
         experiments.append({"name": name, **shared, "model": model_config})
     return experiments

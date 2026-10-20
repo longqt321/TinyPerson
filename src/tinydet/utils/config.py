@@ -36,15 +36,11 @@ def load_config(path: str | Path) -> ExperimentConfig:
         value = raw[section]
         if not isinstance(value, dict):
             raise TypeError(f"{section} must be a mapping")
-        if section == "model" and set(value) - {"config", "pretrained", "feature_module"}:
-            raise ValueError("model accepts only config, pretrained and feature_module")
+        if section == "model" and set(value) - {"config", "pretrained"}:
+            raise ValueError("model accepts only config and pretrained")
         missing = keys - value.keys()
         if missing:
             raise ValueError(f"Missing {section} fields: {', '.join(sorted(missing))}")
     if raw["train"]["epochs"] <= 0 or raw["train"]["imgsz"] <= 0 or raw["train"]["batch"] <= 0:
         raise ValueError("epochs, imgsz and batch must be positive")
-    if "feature_module" in raw["model"]:
-        from tinydet.modules.msr import validate_feature_module
-
-        raw["model"]["feature_module"] = validate_feature_module(raw["model"]["feature_module"])
     return ExperimentConfig(**{key: raw[key] for key in required})

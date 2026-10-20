@@ -1,0 +1,46 @@
+# Paired MSR ablation on P2; only E1/E3 add the P2 refinement module.
+seed: 42
+data:
+  config: /mnt/data/tinyperson_official_v1/data.yaml
+train:
+  epochs: 50
+  patience: 15
+  imgsz: 1280
+  batch: 8
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: L4
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+models:
+  - name: msr_p2_e0_a2_baseline
+    config: configs/model/yolo26n_tiny_A2_p2.yaml
+  - name: msr_p2_e1_a2_msr
+    config: configs/model/yolo26n_tiny_A2_p2_msr.yaml
+  - name: msr_p2_e2_a3_no_sppf
+    config: configs/model/yolo26n_tiny_A3_p2_no_sppf.yaml
+  - name: msr_p2_e3_a3_no_sppf_msr
+    config: configs/model/yolo26n_tiny_A3_p2_no_sppf_msr.yaml

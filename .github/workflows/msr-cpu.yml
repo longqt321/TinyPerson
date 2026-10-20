@@ -8,11 +8,7 @@ on:
       - "src/tinydet/models/registry.py"
       - "src/tinydet/utils/config.py"
       - "src/tinydet/utils/comparison.py"
-      - "src/tinydet/modules/ultralytics_adapter.py"
       - "src/tinydet/training/trainer.py"
-      - "configs/model/yolo26n-msr-p2.yaml"
-      - "configs/experiment/ablation_msr.yaml"
-      - "configs/experiment/ablation_msr_tinyperson_official.yaml"
       - "scripts/audit_dataset.py"
       - "tests/test_msr.py"
       - "tests/test_data_preflight.py"
@@ -28,9 +24,6 @@ on:
     paths:
       - "src/tinydet/modules/msr.py"
       - "src/tinydet/data/**"
-      - "configs/model/yolo26n-msr-p2.yaml"
-      - "configs/experiment/ablation_msr.yaml"
-      - "configs/experiment/ablation_msr_tinyperson_official.yaml"
       - "tests/test_msr.py"
       - "tests/test_data_preflight.py"
       - "src/tinydet/evaluation/tinyperson_benchmark.py"
@@ -65,7 +58,6 @@ jobs:
           src/tinydet/data/image_audit.py
           src/tinydet/data/__init__.py
           src/tinydet/training/trainer.py
-          src/tinydet/modules/ultralytics_adapter.py
           src/tinydet/models/registry.py
           src/tinydet/utils/config.py
           src/tinydet/utils/comparison.py

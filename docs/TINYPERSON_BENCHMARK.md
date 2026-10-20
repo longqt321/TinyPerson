@@ -31,11 +31,11 @@ The converter copies the source COCO JSON into the derived dataset so the existi
 ```bash
 uv run --extra cpu python tools/upload_data.py data /data/derived/tinyperson-yolo --remote /tinyperson_official_v1
 uv run --extra cpu modal run modal/app.py::compare \
-  --config configs/experiment/ablation_msr_tinyperson_official.yaml \
+  --config configs/experiment/ablation_msr_p2.yaml \
   --preflight-only --require-source-metadata
 ```
 
-Only start training after this preflight reports source metadata as verified. The dedicated config points at /mnt/data/tinyperson_official_v1/data.yaml and uses distinct run names for all four MSR variants. For a five-epoch pipeline smoke test, add --smoke --parallel to the compare command; it does not validate final AP.
+Only start training after this preflight reports source metadata as verified. The paired P2 MSR config points at /mnt/data/tinyperson_official_v1/data.yaml. For a five-epoch pipeline smoke test, use configs/experiment/ablation_msr_p2.yaml with --smoke --parallel; it does not validate final AP.
 
 ## 2. Predict on the official test split at source resolution
 
