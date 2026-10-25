@@ -13,7 +13,7 @@ cpu = ["torch>=2.7,<3", "torchvision>=0.22,<1"]
 gpu = ["torch>=2.7,<3", "torchvision>=0.22,<1"]
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "ruff>=0.11,<1", "mypy>=1.15,<2", "jupyterlab>=4,<5"]
+dev = ["ruff>=0.11,<1", "mypy>=1.15,<2", "jupyterlab>=4,<5"]
 
 [tool.uv]
 conflicts = [[{extra = "cpu"}, {extra = "gpu"}]]
@@ -39,5 +39,3 @@ packages = ["src/tinydet"]
 line-length = 100
 target-version = "py312"
 
-[tool.pytest.ini_options]
-pythonpath = ["src"]

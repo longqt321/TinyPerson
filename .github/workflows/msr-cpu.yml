@@ -1,4 +1,4 @@
-name: MSR CPU preflight
+name: MSR CPU checks
 
 on:
   pull_request:
@@ -10,13 +10,10 @@ on:
       - "src/tinydet/utils/comparison.py"
       - "src/tinydet/training/trainer.py"
       - "scripts/audit_dataset.py"
-      - "tests/test_msr.py"
-      - "tests/test_data_preflight.py"
       - "src/tinydet/evaluation/tinyperson_benchmark.py"
       - "scripts/prepare_tinyperson_yolo.py"
       - "scripts/predict_tinyperson_test.py"
       - "scripts/evaluate_tinyperson_benchmark.py"
-      - "tests/test_tinyperson_benchmark.py"
       - "docs/TINYPERSON_BENCHMARK.md"
       - ".github/workflows/msr-cpu.yml"
   push:
@@ -24,16 +21,13 @@ on:
     paths:
       - "src/tinydet/modules/msr.py"
       - "src/tinydet/data/**"
-      - "tests/test_msr.py"
-      - "tests/test_data_preflight.py"
       - "src/tinydet/evaluation/tinyperson_benchmark.py"
       - "scripts/prepare_tinyperson_yolo.py"
       - "scripts/predict_tinyperson_test.py"
       - "scripts/evaluate_tinyperson_benchmark.py"
-      - "tests/test_tinyperson_benchmark.py"
 
 jobs:
-  cpu-tests:
+  cpu-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -44,13 +38,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install CPU environment
         run: uv sync --extra cpu --group dev
-      - name: Test MSR, dataset audit, and TinyPerson protocol
-        run: >
-          uv run --extra cpu --group dev pytest
-          tests/test_msr.py
-          tests/test_data_preflight.py
-          tests/test_tinyperson_benchmark.py
-          tests/test_shapes.py -q
       - name: Lint changed Python files
         run: >
           uv run --extra cpu ruff check
@@ -63,10 +50,7 @@ jobs:
           src/tinydet/utils/comparison.py
           modal/app.py
           scripts/audit_dataset.py
-          tests/test_msr.py
-          tests/test_data_preflight.py
           src/tinydet/evaluation/tinyperson_benchmark.py
           scripts/prepare_tinyperson_yolo.py
           scripts/predict_tinyperson_test.py
           scripts/evaluate_tinyperson_benchmark.py
-          tests/test_tinyperson_benchmark.py

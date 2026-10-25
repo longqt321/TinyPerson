@@ -92,7 +92,7 @@ def _audit_original_dataset(dataset_yaml: str, imgsz: int, audit_id: str):
     }
 
 
-@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=21600)
+@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=21600)
 def _train(config: str, commit: str, dirty: bool, config_text: str | None = None, wandb_group: str | None = None, dataset_audit: dict | None = None):
     os.chdir("/root")
     raw_config = yaml.safe_load(config_text) if config_text else yaml.safe_load(Path(config).read_text())
@@ -138,7 +138,7 @@ def _finalize_pipeline(run: str):
         _organize_wandb.remote(project)
 
 
-@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
+@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
 def _evaluate(run: str, split: str):
     from tinydet.evaluation.evaluator import collect_predictions
     from tinydet.utils.experiment import resolve_run
@@ -149,7 +149,7 @@ def _evaluate(run: str, split: str):
     return str(result)
 
 
-@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
+@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
 def _benchmark(run: str):
     from tinydet.evaluation.benchmark import benchmark
     from tinydet.utils.experiment import resolve_run
@@ -158,6 +158,49 @@ def _benchmark(run: str):
     result = benchmark(resolve_run(RUN_ROOT, run))
     runs.commit()
     return result
+
+
+@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0,
+              scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
+              max_containers=1, volumes=mounts, timeout=3600)
+def _analyze_geometry(run: str, split: str = "val", iou: float = 0.5):
+    """Measure per-GT center and size errors without using local RAM."""
+    import subprocess
+    import sys
+
+    from tinydet.utils.dataset import normalize_dataset_yaml
+    from tinydet.utils.experiment import resolve_run
+
+    if split not in {"val", "test"}:
+        raise ValueError("split must be val or test")
+    if not 0.0 < iou <= 1.0:
+        raise ValueError("iou must be in (0, 1]")
+    runs.reload()
+    data.reload()
+    run_dir = resolve_run(RUN_ROOT, run)
+    config = yaml.safe_load((run_dir / "config.yaml").read_text())
+    dataset_yaml = normalize_dataset_yaml(config["data"]["config"])
+    dataset = yaml.safe_load(dataset_yaml.read_text())
+    root = Path(dataset["path"])
+    checkpoint = run_dir / "checkpoints" / "best.pt"
+    if not checkpoint.is_file():
+        checkpoint = run_dir / "training" / "weights" / "best.pt"
+    if not checkpoint.is_file():
+        raise FileNotFoundError(f"No best.pt under {run_dir}")
+    output = RUN_ROOT / "error_analysis" / run.replace("/", "__") / f"geometry-{split}"
+    subprocess.run(
+        [
+            sys.executable, "/root/scripts/analyze_msr_validation.py",
+            "--images", str(root / f"images/{split}"),
+            "--labels", str(root / f"labels/{split}"),
+            "--checkpoint", f"A2={checkpoint}", "--output", str(output),
+            "--imgsz", str(config["train"]["imgsz"]), "--device", "cuda:0",
+            "--cpu-threads", "4", "--iou", str(iou),
+        ],
+        check=True,
+    )
+    runs.commit()
+    return {"output": str(output), "geometry_summary": str(output / "geometry_summary.csv")}
 
 
 @app.function(image=image, cpu=1.0, memory=1024, max_containers=1, volumes={str(RUN_ROOT): runs}, timeout=300)
@@ -177,8 +220,8 @@ def train(config: str, preflight_only: bool = False, strict_resolution: bool = F
 
     experiment = load_config(config)
     gpu = experiment.hardware["gpu"]
-    if gpu != "L4":
-        raise ValueError("Only L4 GPU is allowed by the resource cap")
+    if gpu != "A10":
+        raise ValueError("Only A10 GPU is allowed by the resource cap")
     audit = _audit_original_dataset.remote(
         str(experiment.data["config"]), int(experiment.train["imgsz"]), uuid.uuid4().hex[:12]
     )
@@ -236,8 +279,12 @@ def compare(
     from tinydet.utils.experiment import git_info
 
     experiments = load_comparison(config)
+    training = [experiment for experiment in experiments if "run" not in experiment]
+    existing = [experiment for experiment in experiments if "run" in experiment]
+    if not training:
+        raise ValueError("At least one model must be trained")
     if smoke:
-        for experiment in experiments:
+        for experiment in training:
             experiment["train"] = dict(experiment["train"])
             experiment["train"]["epochs"] = 5
             experiment["train"]["patience"] = max(
@@ -245,11 +292,11 @@ def compare(
             )
         print("SMOKE MODE: every model is limited to 5 epochs.", flush=True)
 
-    configured_paths = {Path(experiment["data"]["config"]) for experiment in experiments}
+    configured_paths = {Path(experiment["data"]["config"]) for experiment in training}
     if len(configured_paths) != 1:
         raise ValueError("All compared models must use the same dataset YAML.")
     configured_data = _dataset_yaml_path(next(iter(configured_paths)))
-    imgsz_values = {int(experiment["train"]["imgsz"]) for experiment in experiments}
+    imgsz_values = {int(experiment["train"]["imgsz"]) for experiment in training}
     if len(imgsz_values) != 1:
         raise ValueError("All compared models must use the same imgsz for a valid comparison.")
     audit = _audit_original_dataset.remote(
@@ -269,7 +316,7 @@ def compare(
         return
 
     # A stable data signature makes reuse conditional on the same source dataset.
-    for experiment in experiments:
+    for experiment in training:
         experiment["data"]["preflight_signature"] = audit[
             "dataset_signature_metadata_sha256"
         ]
@@ -278,8 +325,10 @@ def compare(
         raise ValueError(f"Unknown model: {start_at}")
     if start_at:
         experiments = experiments[names.index(start_at):]
-    if any(experiment["hardware"]["gpu"] != "L4" for experiment in experiments):
-        raise ValueError("Only L4 GPU is allowed by the resource cap")
+    training = [experiment for experiment in experiments if "run" not in experiment]
+    existing = [experiment for experiment in experiments if "run" in experiment]
+    if any(experiment["hardware"]["gpu"] != "A10" for experiment in training):
+        raise ValueError("Only A10 GPU is allowed by the resource cap")
     commit, dirty = git_info()
     wandb_group = f"compare-{uuid.uuid4().hex[:8]}"
 
@@ -295,8 +344,14 @@ def compare(
             _benchmark.remote(reference)
         print(f"Completed {reference}", flush=True)
 
+    for experiment in existing:
+        reference = experiment["run"]
+        _preflight.remote(reference)
+        print(f"Using completed control {reference}", flush=True)
+        finish(reference, val_done=True, benchmark_done=True)
+
     to_train = []
-    for experiment in experiments:
+    for experiment in training:
         match = None
         if reuse:
             model_sha256 = hashlib.sha256(Path(experiment["model"]["config"]).read_bytes()).hexdigest()
@@ -345,44 +400,9 @@ def benchmark(run: str):
     print(_benchmark.remote(run))
 
 
-@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
-def _erf(run: str, image_path: str, layer: int):
-    from pathlib import Path
-
-    from tinydet.analysis.erf import analyze_erf
-    from tinydet.utils.experiment import resolve_run
-
-    runs.reload()
-    result = analyze_erf(resolve_run(RUN_ROOT, run), Path(image_path), layer, render=False)
-    runs.commit()
-    return str(result)
-
-
 @app.local_entrypoint()
-def erf(run: str, image_path: str, layer: int = 16):
-    _preflight.remote(run, image_path=image_path)
-    output = _erf.remote(run, image_path, layer)
-    print(_render_diagnostic.remote(output, layer, "erf"))
-
-
-@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
-def _diagnose(run: str, image_path: str, layer: int):
-    from pathlib import Path
-
-    from tinydet.analysis.activations import analyze_activations
-    from tinydet.utils.experiment import resolve_run
-
-    runs.reload()
-    result = analyze_activations(resolve_run(RUN_ROOT, run), Path(image_path), layer, render=False)
-    runs.commit()
-    return str(result)
-
-
-@app.local_entrypoint()
-def diagnose(run: str, image_path: str, layer: int = 16):
-    _preflight.remote(run, image_path=image_path)
-    output = _diagnose.remote(run, image_path, layer)
-    print(_render_diagnostic.remote(output, layer, "activations"))
+def analyze_geometry(run: str, split: str = "val", iou: float = 0.5):
+    print(json.dumps(_analyze_geometry.remote(run, split, iou), indent=2))
 
 
 @app.function(image=image, cpu=1.0, memory=1024, max_containers=1, scaledown_window=2, secrets=[wandb_secret], timeout=300)
@@ -446,119 +466,3 @@ def _evaluate_pipeline(run: str, split: str, reuse_training: bool = False):
     return _finish_evaluation.remote(run, artifact, split)
 
 
-@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
-              scaledown_window=2, volumes=mounts, timeout=1800)
-def _render_diagnostic(output: str, layer: int, kind: str):
-    from tinydet.analysis.activations import render_activations
-    from tinydet.analysis.erf import render_erf
-
-    runs.reload()
-    result = (render_erf if kind == "erf" else render_activations)(Path(output), layer)
-    runs.commit()
-    return str(result)
-
-
-@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0,
-              scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
-              max_containers=1, volumes=mounts, timeout=3600)
-def _representation_diagnose(run: str, config_text: str):
-    """Analyze a completed frozen checkpoint; never initiate YOLO training."""
-    from tinydet.analysis.representation import study
-    from tinydet.utils.experiment import resolve_run
-
-    runs.reload()
-    data.reload()
-    target = resolve_run(RUN_ROOT, run)
-    checkpoint = target / "checkpoints" / "best.pt"
-    if not checkpoint.is_file():
-        raise FileNotFoundError(checkpoint)
-    settings = yaml.safe_load(config_text)
-    dataset_file = Path(settings["data"]["config"])
-    if not dataset_file.is_file():
-        raise FileNotFoundError(dataset_file)
-    folder = settings.get("output", {}).get("folder", "diagnostics/representation")
-    destination = (target / folder).resolve()
-    if target.resolve() not in destination.parents:
-        raise ValueError("Output folder must be inside the selected run")
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / "config.yaml").write_text(config_text)
-    outcome = study(checkpoint, dataset_file, destination, settings,
-                    allowed_output_root=target.resolve())
-    runs.commit()
-    return {"output": str(destination), "summary": outcome}
-
-
-@app.local_entrypoint()
-def representation_diagnose(run: str, config: str):
-    """Run the three frozen-feature studies on one existing checkpoint."""
-
-    if run.endswith("/RUN_ID"):
-        raise ValueError("Replace RUN_ID with an existing Modal run id")
-    source = Path(config)
-    if not source.is_file():
-        raise FileNotFoundError(source)
-    settings = yaml.safe_load(source.read_text())
-    if not isinstance(settings, dict):
-        raise TypeError("Expected YAML configuration mapping")
-    print(_representation_diagnose.remote(run, source.read_text()))
-
-
-@app.function(image=image, gpu="L4", min_containers=0, buffer_containers=0,
-              scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
-              max_containers=1, volumes=mounts, timeout=3600)
-def _spatial_probe_extract(run: str, config_text: str):
-    """GPU-only frozen feature extraction; one L4, no detector training."""
-    from tinydet.analysis.spatial_probe import resolve_spatial_checkpoint, save_feature_cache
-    from tinydet.utils.experiment import resolve_run
-
-    runs.reload()
-    data.reload()
-    target = resolve_run(RUN_ROOT, run)
-    checkpoint = resolve_spatial_checkpoint(target)
-    dataset = DATA_ROOT / "tinyperson" / "data.yaml"
-    if not dataset.is_file():
-        raise FileNotFoundError(dataset)
-    settings = yaml.safe_load(config_text)
-    folder = settings.get("output", {}).get("folder", "diagnostics/spatial_probe_v1")
-    destination = (target / folder).resolve()
-    if target.resolve() not in destination.parents:
-        raise ValueError("Spatial probe output must be inside the selected run")
-    result = save_feature_cache(checkpoint, dataset, destination, settings,
-                                allowed_output_root=target.resolve())
-    runs.commit()
-    return result
-
-
-@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
-              max_containers=1, scaledown_window=2, volumes={str(RUN_ROOT): runs},
-              timeout=3600)
-def _spatial_probe_finish(run: str, output: str, config_text: str):
-    """CPU-only scikit-learn fitting, AP and group bootstrap; no paid GPU."""
-    from tinydet.analysis.spatial_probe import finish_feature_cache
-    from tinydet.utils.experiment import resolve_run
-
-    runs.reload()
-    target = resolve_run(RUN_ROOT, run)
-    result = finish_feature_cache(Path(output), yaml.safe_load(config_text),
-                                  allowed_output_root=target.resolve())
-    runs.commit()
-    return result
-
-
-@app.local_entrypoint()
-def spatial_probe(run: str, config: str):
-    """Frozen spatial sensitivity probe: L4 extraction, CPU-only statistics."""
-    if run.endswith("/RUN_ID"):
-        raise ValueError("Replace RUN_ID with a completed Modal run id")
-    config_file = Path(config)
-    if not config_file.is_file():
-        raise FileNotFoundError(config_file)
-    text = config_file.read_text()
-    settings = yaml.safe_load(text)
-    if not isinstance(settings, dict):
-        raise TypeError("Expected YAML configuration mapping")
-    if settings.get("experiment", {}).get("device") != "cuda":
-        raise ValueError("Modal spatial probe requires experiment.device: cuda")
-    extracted = _spatial_probe_extract.remote(run, text)
-    print(f"GPU extraction: {extracted}", flush=True)
-    print(f"CPU probe metrics: {_spatial_probe_finish.remote(run, extracted['output'], text)}")

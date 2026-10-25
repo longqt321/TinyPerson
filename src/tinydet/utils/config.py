@@ -1,8 +1,10 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from tinydet.diagnostics.config import DiagnosticsConfig
 
 
 @dataclass(frozen=True)
@@ -14,6 +16,7 @@ class ExperimentConfig:
     train: dict[str, Any]
     hardware: dict[str, Any]
     output: dict[str, Any]
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 def load_config(path: str | Path) -> ExperimentConfig:
@@ -23,6 +26,9 @@ def load_config(path: str | Path) -> ExperimentConfig:
     raw = yaml.safe_load(path.read_text())
     if not isinstance(raw, dict):
         raise TypeError("Experiment config must be a YAML mapping")
+    unknown = set(raw) - {"name", "seed", "model", "data", "train", "hardware", "output", "diagnostics"}
+    if unknown:
+        raise ValueError(f"Unknown config fields: {', '.join(sorted(unknown))}")
     required = {"name", "seed", "model", "data", "train", "hardware", "output"}
     missing = required - raw.keys()
     if missing:
@@ -43,4 +49,5 @@ def load_config(path: str | Path) -> ExperimentConfig:
             raise ValueError(f"Missing {section} fields: {', '.join(sorted(missing))}")
     if raw["train"]["epochs"] <= 0 or raw["train"]["imgsz"] <= 0 or raw["train"]["batch"] <= 0:
         raise ValueError("epochs, imgsz and batch must be positive")
-    return ExperimentConfig(**{key: raw[key] for key in required})
+    diagnostics = DiagnosticsConfig.parse(raw.get("diagnostics")).to_dict()
+    return ExperimentConfig(**{**{key: raw[key] for key in required}, "diagnostics": diagnostics})

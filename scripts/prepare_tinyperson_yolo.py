@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
 import random
 import re
 import shutil
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml

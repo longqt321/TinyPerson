@@ -4,14 +4,15 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import statistics
 from pathlib import Path
 
 import torch
 from PIL import Image, ImageDraw
 from ultralytics import YOLO
 
-
 SIZE_BINS = ((0, 8, "0-8px"), (8, 16, "8-16px"), (16, 32, "16-32px"), (32, float("inf"), "32px+"))
+GEOMETRY_BINS = ((0, 1, "<=1px"), (1, 2, "1-2px"), (2, 3, "2-3px"), (3, float("inf"), ">3px"))
 
 
 def read_labels(path: Path, width: int, height: int) -> list[list[float]]:
@@ -57,6 +58,53 @@ def size_bin(box: list[float], width: int, height: int, imgsz: int) -> tuple[str
         if lower <= side < upper:
             return name, side
     raise AssertionError(side)
+
+
+def box_geometry_error(prediction: list[float], target: list[float]) -> dict[str, float]:
+    px1, py1, px2, py2 = prediction
+    gx1, gy1, gx2, gy2 = target
+    return {
+        "best_dx_px": round(((px1 + px2) - (gx1 + gx2)) / 2, 3),
+        "best_dy_px": round(((py1 + py2) - (gy1 + gy2)) / 2, 3),
+        "best_dw_px": round((px2 - px1) - (gx2 - gx1), 3),
+        "best_dh_px": round((py2 - py1) - (gy2 - gy1), 3),
+        "best_center_error_px": round(
+            ((((px1 + px2) - (gx1 + gx2)) / 2) ** 2
+             + (((py1 + py2) - (gy1 + gy2)) / 2) ** 2) ** 0.5,
+            3,
+        ),
+    }
+
+
+def geometry_summary(rows: list[dict]) -> list[dict]:
+    summary = []
+    for model_name in sorted({row["model"] for row in rows}):
+        for bin_name in ("all", *(name for _, _, name in SIZE_BINS)):
+            selected = [row for row in rows if row["model"] == model_name
+                        and (bin_name == "all" or row["size_bin"] == bin_name)
+                        and row["best_center_error_px"] is not None]
+            if not selected:
+                continue
+            center_errors = sorted(row["best_center_error_px"] for row in selected)
+            row = {
+                "model": model_name,
+                "size_bin": bin_name,
+                "objects_with_prediction": len(selected),
+                "best_iou_ge_0.50": sum(r["best_iou"] >= 0.50 for r in selected),
+                "best_iou_ge_0.75": sum(r["best_iou"] >= 0.75 for r in selected),
+                "center_error_median_px": round(statistics.median(center_errors), 3),
+                "center_error_p90_px": round(center_errors[int(0.9 * (len(center_errors) - 1))], 3),
+                "dx_median_px": round(statistics.median(r["best_dx_px"] for r in selected), 3),
+                "dy_median_px": round(statistics.median(r["best_dy_px"] for r in selected), 3),
+                "dw_median_px": round(statistics.median(r["best_dw_px"] for r in selected), 3),
+                "dh_median_px": round(statistics.median(r["best_dh_px"] for r in selected), 3),
+            }
+            for lower, upper, name in GEOMETRY_BINS:
+                row[f"center_error_{name}"] = sum(
+                    lower <= error < upper for error in center_errors
+                )
+            summary.append(row)
+    return summary
 
 
 def write_csv(path: Path, rows: list[dict], columns: list[str] | None = None) -> None:
@@ -106,6 +154,11 @@ def analyze_image(
                               if predictions[i]["score"] >= 0.05 and ious[i][target_idx] >= 0.1), None)
             outcome = "localization_error" if localized is not None else "miss"
             selected_idx = localized if localized is not None else best_idx
+        geometry = (box_geometry_error(predictions[best_idx]["box"], target)
+                    if best_idx is not None else {
+                        "best_dx_px": None, "best_dy_px": None, "best_dw_px": None,
+                        "best_dh_px": None, "best_center_error_px": None,
+                    })
         object_rows.append({
             "model": model_name,
             "image": image_path.name,
@@ -118,6 +171,7 @@ def analyze_image(
             "best_confidence": predictions[selected_idx]["score"] if selected_idx is not None else 0.0,
             "matched_iou": round(ious[matched_idx][target_idx], 6) if matched_idx is not None else 0.0,
             "matched_confidence": predictions[matched_idx]["score"] if matched_idx is not None else 0.0,
+            **geometry,
         })
 
     prediction_rows = []
@@ -293,6 +347,7 @@ def main() -> None:
 
     write_csv(args.output / "per_object_errors.csv", all_objects)
     write_csv(args.output / "per_prediction_errors.csv", all_predictions)
+    write_csv(args.output / "geometry_summary.csv", geometry_summary(all_objects))
     write_csv(args.output / "error_summary.csv", model_summaries)
     write_csv(args.output / "size_summary.csv", size_summaries)
     write_csv(args.output / "model_comparison.csv", list(comparison.values()))

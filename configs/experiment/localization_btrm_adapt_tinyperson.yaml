@@ -1,0 +1,66 @@
+# Warm-start adaptation on the same A2 checkpoint; isolates the BTRM residual.
+seed: 42
+comparisons:
+  - name: btrm_adapt
+    control: tiny_A2_p2_adapt
+    treatment: tiny_A2_p2_btrm_adapt
+data:
+  config: /mnt/data/tinyperson_official_v1/data.yaml
+train:
+  epochs: 10
+  patience: 10
+  imgsz: 1280
+  batch: 8
+  optimizer: AdamW
+  lr0: 0.0002
+  amp: true
+  deterministic: true
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: A10
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+diagnostics:
+  enabled: false
+  collect_interval_steps: 100
+  terminal_interval_steps: 100
+  file_interval_steps: 100
+  wandb_interval_epochs: 1
+  gradient_interval_steps: 100
+  epoch_summary: true
+  file_logging: true
+  gate_metrics: true
+  feature_metrics: true
+  residual_metrics: true
+  gradient_metrics: false
+  numerical_health: true
+  performance_metrics: false
+  cuda_timing: false
+  sampled_elements: 4096
+  flush_records: 10
+models:
+  - name: tiny_A2_p2_adapt
+    config: configs/model/yolo26n_tiny_A2_p2.yaml
+    pretrained: /mnt/runs/tiny_A2_p2/20261019-194809-8326468-seed42/checkpoints/best.pt
+  - name: tiny_A2_p2_btrm_adapt
+    config: configs/model/yolo26n_tiny_A2_p2_btrm.yaml
+    pretrained: /mnt/runs/tiny_A2_p2/20261019-194809-8326468-seed42/checkpoints/best.pt

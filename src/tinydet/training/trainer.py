@@ -5,11 +5,32 @@ from time import monotonic
 
 import torch
 
+from tinydet.diagnostics.trainer_callback import MSRDiagnosticsCallback
 from tinydet.models.registry import build_model
 from tinydet.training.iou_logging import log_ap_by_iou
+from tinydet.training.wandb_media import WandbMediaCallback
 from tinydet.utils.config import load_config
 from tinydet.utils.experiment import create_run, metadata, update_status, write_json
 from tinydet.utils.seed import set_seed
+
+
+def _init_wandb(project: str, name: str, group: str | None, config: dict):
+    try:
+        import wandb
+        run = wandb.init(
+            project=project,
+            name=name,
+            group=group,
+            tags=["latest"],
+            job_type="train",
+            config=config,
+            dir="/tmp",
+        )
+        print(f"W&B: {run.url}", flush=True)
+        return run
+    except Exception as exc:  # noqa: BLE001 - W&B is optional logging
+        print(f"W&B disabled after init failure: {exc}", flush=True)
+        return None
 
 
 def train(
@@ -42,6 +63,8 @@ def train(
         write_json(run / "metadata.json", details)
     update_status(run, "RUNNING")
     wandb_run = None
+    diagnostics = None
+    media = None
     try:
         model = build_model(config.model)
         from ultralytics.utils import SETTINGS
@@ -49,21 +72,43 @@ def train(
         project = config.output.get("wandb_project")
         SETTINGS.update({"wandb": bool(project)})
         if project:
-            import wandb
-            wandb_run = wandb.init(
-                project=project,
-                name=f"{config.name}-{run.name}",
-                group=wandb_group,
-                tags=["latest"],
-                job_type="train",
-                config=asdict(config),
-                dir="/tmp",
+            wandb_run = _init_wandb(
+                project, f"{config.name}-{run.name}", wandb_group, asdict(config)
             )
-            print(f"W&B: {wandb_run.url}", flush=True)
+            if wandb_run is None:
+                project = None
+                SETTINGS.update({"wandb": False})
         model.callbacks["on_fit_epoch_end"].insert(0, partial(log_ap_by_iou, wandb_enabled=bool(project)))
+        if project:
+            media = WandbMediaCallback(run, effective_dataset_config)
+            for event, callback in (
+                ("on_train_start", media.on_train_start),
+                ("on_train_epoch_start", media.on_train_epoch_start),
+                ("on_train_batch_end", media.on_train_batch_end),
+                ("on_train_end", media.on_train_end),
+            ):
+                model.callbacks[event].insert(0, callback)
+        from tinydet.modules.msr import MSR
+
+        if config.diagnostics.get("enabled", False) and any(
+            isinstance(module, MSR) for module in model.model.modules()
+        ):
+            diagnostics = MSRDiagnosticsCallback(config.diagnostics, wandb_enabled=bool(project))
+            try:
+                for event, callback in (
+                    ("on_train_start", diagnostics.on_train_start),
+                    ("on_train_epoch_start", diagnostics.on_train_epoch_start),
+                    ("on_train_batch_start", diagnostics.on_train_batch_start),
+                    ("on_train_batch_end", diagnostics.on_train_batch_end),
+                    ("on_train_epoch_end", diagnostics.on_train_epoch_end),
+                    ("on_train_end", diagnostics.on_train_end),
+                ):
+                    model.callbacks[event].insert(0, callback)
+            except (AttributeError, KeyError, RuntimeError, TypeError) as exc:
+                diagnostics._fail("registration", exc)
         started = monotonic()
         torch.cuda.reset_peak_memory_stats()
-        model.train(data=str(dataset_config or config.data["config"]), project=str(run), name="training", exist_ok=True, save=True, save_period=-1, seed=config.seed, **{**config.train, "plots": False})
+        model.train(data=str(dataset_config or config.data["config"]), project=str(run), name="training", exist_ok=True, save=True, save_period=-1, seed=config.seed, **{**config.train, "plots": bool(project)})
         # Ultralytics already validates the stripped best.pt at the end of training.
         # Keep this result for compare; explicit evaluate still performs fresh validation.
         if Path(model.trainer.best).is_file() and model.trainer.validator.metrics.box.all_ap.size:
@@ -83,6 +128,10 @@ def train(
         update_status(run, "FAILED", str(exc))
         raise
     finally:
+        if diagnostics is not None:
+            diagnostics.close()
+        if media is not None:
+            media.close()
         if wandb_run is not None:
             import wandb
 

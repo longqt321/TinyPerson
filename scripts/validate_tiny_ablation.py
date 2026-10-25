@@ -21,8 +21,10 @@ def validate(path: Path, imgsz: int) -> None:
     if config.get("nc") != 1 or config.get("scale") != "n":
         raise ValueError(f"Expected nc=1 and scale=n: {path}")
 
-    if "_msr" in path.stem:
-        import tinydet.modules.msr  # registers MSR in Ultralytics' YAML namespace
+    if "_msr" in path.stem or "_btrm" in path.stem:
+        from tinydet.models.ultralytics import register_ultralytics_modules
+
+        register_ultralytics_modules()
     model = DetectionModel(cfg=str(path), ch=3, verbose=False)
     model.eval()
     head = model.model[-1]

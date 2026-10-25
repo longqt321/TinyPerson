@@ -1,0 +1,48 @@
+# Paired localization ablation on the fixed A2 P2 baseline for VisDrone.
+# Data YAML must be a prepared single-class derivative in the Modal data Volume.
+# For the final variance estimate, replace seed with seeds: [42, 43, 44].
+seed: 42
+comparisons:
+  - name: btrm_on_p2
+    control: visdrone_A2_p2
+    treatment: visdrone_A2_p2_btrm
+data:
+  config: /mnt/data/visdrone_official_v1/data.yaml
+train:
+  epochs: 50
+  patience: 15
+  imgsz: 1280
+  batch: 8
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: A10
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+models:
+  - name: visdrone_A2_p2
+    config: configs/model/yolo26n_tiny_A2_p2.yaml
+  - name: visdrone_A2_p2_btrm
+    config: configs/model/yolo26n_tiny_A2_p2_btrm.yaml

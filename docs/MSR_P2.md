@@ -57,7 +57,7 @@ $\gamma$ là scalar học được, khởi tạo `0.001`. Tách đáp ứng dư�
 
 ## Thiết kế đối chứng
 
-Nguồn config: `configs/experiment/ablation_msr_p2.yaml`. Dùng cùng dataset, seed 42, 50 epochs, patience 15, imgsz 1280, batch 8, AdamW, lr 0.001, AMP và deterministic bật, augmentation nhẹ giống nhau.
+Nguồn config: `configs/experiment/ablation_msr_p2.yaml`. Dùng cùng dataset, seed 42, 50 epochs, patience 15, imgsz 1280, batch 8, AdamW, lr 0.001, AMP và deterministic bật, augmentation nhẹ giống nhau. Khi chênh lệch nhỏ, đổi `seed` thành `seeds: [42, 43, 44]` để chạy paired variance. `comparisons` trong config khai báo cặp control/treatment cho bảng kết quả.
 
 | Run | Cấu hình | So sánh |
 |---|---|---|
@@ -90,5 +90,17 @@ modal run --detach modal/app.py::compare \
 ```
 
 `--smoke` giới hạn mọi model còn 5 epoch; nó chỉ kiểm tra đường chạy, không dùng để kết luận metric. `--parallel` tối đa bốn training job. Modal `--detach` để job sống qua lần terminal disconnect, còn compare vẫn cần kết nối để hiển thị tiến độ và chờ toàn pipeline hoàn tất.
+
+Sau khi tải artifact, tổng hợp kết quả từ run directory:
+
+```bash
+python tools/list_runs.py --root outputs \
+  --config configs/experiment/ablation_msr_p2.yaml \
+  --csv outputs/results.csv --markdown outputs/results.md
+```
+
+Tool chọn một primary run cho mỗi experiment/seed, ưu tiên run có metric, rồi
+`COMPLETED`, metric đánh giá độc lập và run mới nhất. Bảng paired delta dùng đúng
+`comparisons` trong config.
 
 Full training cần Modal GPU và dataset trong volume; không chạy từ máy CPU. Chi tiết benchmark TinyPerson nằm trong [TINYPERSON_BENCHMARK.md](TINYPERSON_BENCHMARK.md).

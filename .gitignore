@@ -46,3 +46,5 @@ mlruns/
 
 # Local reconstruction document; source files remain the canonical copy
 REPO_BLUEPRINT.md
+home/
+~/

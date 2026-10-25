@@ -27,7 +27,7 @@ def main() -> None:
     }
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     amp = device.type == "cuda"
-    before = model.model[29].gamma.detach().clone()
+    before = model.model[29].refinement.gamma.detach().clone()
     optimizer.zero_grad(set_to_none=True)
     with torch.autocast("cuda", enabled=amp):
         loss, _ = model.loss(batch)
@@ -37,7 +37,7 @@ def main() -> None:
     ):
         raise RuntimeError("Non-finite loss or gradient")
     optimizer.step()
-    if torch.equal(before, model.model[29].gamma.detach()):
+    if torch.equal(before, model.model[29].refinement.gamma.detach()):
         raise RuntimeError("MSR residual scale did not update")
 
     args.checkpoint.parent.mkdir(parents=True, exist_ok=True)

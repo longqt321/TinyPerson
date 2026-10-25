@@ -1,18 +1,24 @@
-"""Multi-scale residual refinement block used by the YOLO26n P2 YAML."""
+"""Multi-scale residual block and backward-compatible public API."""
+
+from __future__ import annotations
+
 import math
+from collections.abc import Sequence
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
-from ultralytics.nn import tasks as ultralytics_tasks
+
+from tinydet.models.checkpoint import load_p2_relocated_weights
+from tinydet.modules.msr_components import (
+    EvidenceGuidedModulation,
+    MultiScaleEvidenceFusion,
+    ResidualRefinement,
+    SingleScaleEvidence,
+)
 
 
 class MSR(nn.Module):
-    """Multi-scale residual refinement for one BCHW feature map.
-
-    Local statistics use valid pixels only at image boundaries. Statistics
-    are computed in FP32; learned projections follow the caller's AMP context.
-    """
+    """Coordinate multi-scale evidence extraction and residual refinement."""
 
     def __init__(
         self,
@@ -23,11 +29,14 @@ class MSR(nn.Module):
         z_max: float = 10.0,
         reduction: int = 4,
         residual_scale: float = 1e-3,
-    ):
+        fusion_mode: str = "adaptive",
+    ) -> None:
         super().__init__()
         if type(channels) is not int or channels < 1:
             raise ValueError("channels must be a positive integer")
-        if not kernels or any(type(k) is not int or k < 1 or k % 2 == 0 for k in kernels):
+        if (not isinstance(kernels, Sequence) or isinstance(kernels, (str, bytes))
+                or not kernels
+                or any(type(k) is not int or k < 1 or k % 2 == 0 for k in kernels)):
             raise ValueError("kernels must be a nonempty sequence of positive odd integers")
         if len(set(kernels)) != len(kernels):
             raise ValueError("kernels must not contain duplicates")
@@ -36,6 +45,10 @@ class MSR(nn.Module):
                 raise ValueError(f"{name} must be positive and finite")
         if type(reduction) is not int or reduction < 1:
             raise ValueError("reduction must be a positive integer")
+        if fusion_mode not in MultiScaleEvidenceFusion.MODES:
+            raise ValueError(
+                f"fusion_mode must be one of {MultiScaleEvidenceFusion.MODES}; got {fusion_mode!r}"
+            )
         if not isinstance(residual_scale, (int, float)) or not math.isfinite(residual_scale):
             raise ValueError("residual_scale must be finite")
 
@@ -44,91 +57,112 @@ class MSR(nn.Module):
         self.eps = float(eps)
         self.sigma_min = float(sigma_min)
         self.z_max = float(z_max)
-        hidden = max(channels // reduction, 8)
-        self.projections = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(2 * channels, channels, 1, bias=False),
-                nn.BatchNorm2d(channels),
-                nn.SiLU(inplace=True),
-            )
-            for _ in self.kernels
+        # Preserve original initialization order: all projections, all scale gates,
+        # feature gate, depthwise convolution, then scalar residual parameter.
+        self.single_scales = nn.ModuleList([
+            SingleScaleEvidence(channels, kernel, self.eps, self.sigma_min, self.z_max)
+            for kernel in self.kernels
         ])
-        self.scale_gates = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(channels, hidden),
-                nn.SiLU(inplace=True),
-                nn.Linear(hidden, channels),
-                nn.Sigmoid(),
-            )
-            for _ in self.kernels
-        ])
-        self.feature_gate = nn.Sequential(nn.Conv2d(channels, channels, 1), nn.Sigmoid())
-        self.refine = nn.Conv2d(channels, channels, 3, padding=1, groups=channels, bias=False)
-        self.gamma = nn.Parameter(torch.tensor(float(residual_scale)))
+        self.fusion = MultiScaleEvidenceFusion(
+            channels, len(self.kernels), reduction, fusion_mode
+        )
+        self.fusion.scale_ids = self.kernels
+        self.modulation = EvidenceGuidedModulation(channels)
+        self.refinement = ResidualRefinement(channels, residual_scale)
 
     def forward(self, x: Tensor) -> Tensor:
         if x.ndim != 4 or not x.is_floating_point() or x.shape[1] != self.channels:
             raise ValueError(f"Expected floating BCHW input with C={self.channels}")
-
-        dtype = x.dtype
         with torch.autocast(device_type=x.device.type, enabled=False):
             x32 = x.float()
-            normalized = []
-            for kernel in self.kernels:
-                pad = kernel // 2
-                mean = F.avg_pool2d(x32, kernel, stride=1, padding=pad, count_include_pad=False)
-                second = F.avg_pool2d(x32.square(), kernel, stride=1, padding=pad,
-                                      count_include_pad=False)
-                std = (second.sub(mean.square()).clamp_min(0).add(self.eps).sqrt()
-                       .clamp_min(self.sigma_min))
-                z = ((x32 - mean) / std).clamp(-self.z_max, self.z_max)
-                normalized.append(torch.cat((F.relu(z), F.relu(-z)), dim=1).to(dtype))
+        evidence_by_scale = [scale(x, x32=x32) for scale in self.single_scales]
+        evidence = self.fusion(evidence_by_scale)
+        modulated = self.modulation(x, evidence)
+        return self.refinement(x, modulated)
 
-        features = [projection(z) for projection, z in zip(self.projections, normalized)]
-        gates = [gate(F.adaptive_avg_pool2d(feature, 1).flatten(1)).view(-1, self.channels, 1, 1)
-                 for gate, feature in zip(self.scale_gates, features)]
-        denominator = torch.stack(gates, dim=0).sum(dim=0).clamp_min(1e-6)
-        evidence = sum(feature * gate for feature, gate in zip(features, gates)) / denominator
-        residual = self.refine(x * self.feature_gate(evidence))
-        return x + self.gamma.to(residual.dtype) * residual
+    @property
+    def gamma(self) -> nn.Parameter:
+        """Compatibility accessor for the learned residual scale."""
+        return self.refinement.gamma
 
-
-# Ultralytics parse_model resolves YAML module names from tasks.py globals.
-ultralytics_tasks.MSR = MSR
-
-
-def load_p2_msr_weights(target: nn.Module, source: nn.Module) -> dict[str, int]:
-    """Transfer matching weights, remapping legacy Detect layer 29 to 30."""
-    from ultralytics.utils import LOGGER
-
-    source_state = source.float().state_dict()
-    target_state = target.state_dict()
-    transferred, remapped, skipped = {}, 0, 0
-    for key, value in source_state.items():
-        candidates = [key]
-        if key.startswith("model.29."):
-            candidates.append("model.30." + key[len("model.29."):])
-        for index, target_key in enumerate(candidates):
-            if target_key in target_state and target_state[target_key].shape == value.shape:
-                transferred[target_key] = value
-                remapped += index > 0
-                break
-        else:
-            skipped += 1
-    if not any(key.startswith("model.30.") for key in transferred):
-        raise RuntimeError("No P2 architecture detection-head weights matched")
-    if len(transferred) < 0.8 * len(source_state):
-        raise RuntimeError(
-            f"Only {len(transferred)}/{len(source_state)} checkpoint tensors matched P2 MSR model"
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, strict, missing_keys,
+        unexpected_keys, error_msgs,
+    ) -> None:
+        """Load legacy flat MSR keys into the refactored component layout."""
+        legacy_prefixes = {
+            "projections.": "single_scales.",
+            "scale_gates.": "fusion.scale_gates.",
+            "feature_gate.": "modulation.gate.",
+            "refine.": "refinement.refine.",
+            "gamma": "refinement.gamma",
+        }
+        for key in list(state_dict):
+            if not key.startswith(prefix):
+                continue
+            local_key = key[len(prefix):]
+            for old, new in legacy_prefixes.items():
+                if local_key.startswith(old):
+                    suffix = local_key[len(old):]
+                    if old == "projections.":
+                        index, _, rest = suffix.partition(".")
+                        suffix = f"{index}.projection.{rest}"
+                    state_dict[prefix + new + suffix] = state_dict.pop(key)
+                    break
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys,
+            unexpected_keys, error_msgs,
         )
-    target.load_state_dict(transferred, strict=False)
-    missing = len(target_state) - len(transferred)
-    LOGGER.info(
-        "Transferred %d/%d checkpoint tensors (%d layer-index remapped, %d source skipped, "
-        "%d target tensors left initialized)",
-        len(transferred), len(source_state), remapped, skipped, missing,
-    )
-    return {
-        "transferred": len(transferred), "remapped": remapped,
-        "skipped": skipped, "missing": missing,
-    }
+
+    def __setstate__(self, state) -> None:
+        """Adapt full-object checkpoints saved with the former flat module layout."""
+        super().__setstate__(state)
+        if "single_scales" in self._modules:
+            return
+        modules = self._modules
+        projections = modules.pop("projections", None)
+        gates = modules.pop("scale_gates", None)
+        feature_gate = modules.pop("feature_gate", None)
+        refine = modules.pop("refine", None)
+        gamma = self._parameters.pop("gamma", None)
+        if any(value is None for value in (projections, gates, feature_gate, refine, gamma)):
+            raise RuntimeError("Unsupported legacy MSR checkpoint layout")
+
+        def component(cls, **attrs):
+            value = cls.__new__(cls)
+            nn.Module.__init__(value)
+            for name, item in attrs.items():
+                setattr(value, name, item)
+            return value
+
+        self.single_scales = nn.ModuleList([
+            component(
+                SingleScaleEvidence, channels=self.channels, kernel=kernel,
+                eps=self.eps, sigma_min=self.sigma_min, z_max=self.z_max,
+                projection=projection,
+            )
+            for kernel, projection in zip(self.kernels, projections)
+        ])
+        self.fusion = component(
+            MultiScaleEvidenceFusion,
+            channels=self.channels, num_scales=len(self.kernels),
+            reduction=4,
+            fusion_mode="adaptive", scale_gates=gates, scale_ids=self.kernels,
+            diagnostics_enabled=False, _last_diagnostics={},
+        )
+        self.modulation = component(EvidenceGuidedModulation, channels=self.channels, gate=feature_gate)
+        self.refinement = component(
+            ResidualRefinement, channels=self.channels, refine=refine, gamma=gamma,
+            diagnostics_enabled=False, sampled_elements=4096, _last_diagnostics={},
+        )
+        self.fusion.scale_ids = self.kernels
+
+
+__all__ = [
+    "MSR",
+    "EvidenceGuidedModulation",
+    "MultiScaleEvidenceFusion",
+    "ResidualRefinement",
+    "SingleScaleEvidence",
+    "load_p2_relocated_weights",
+]

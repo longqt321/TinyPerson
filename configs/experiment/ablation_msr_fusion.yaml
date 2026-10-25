@@ -1,0 +1,75 @@
+# MSR fusion ablation on fixed A2 P2 architecture.
+# For the final variance estimate, replace seed with seeds: [42, 43, 44].
+seed: 42
+comparisons:
+  - name: mean_vs_adaptive
+    control: msr_fusion_adaptive
+    treatment: msr_fusion_mean
+  - name: max_vs_adaptive
+    control: msr_fusion_adaptive
+    treatment: msr_fusion_max
+  - name: sk_softmax_vs_adaptive
+    control: msr_fusion_adaptive
+    treatment: msr_fusion_sk_softmax
+data:
+  config: /mnt/data/tinyperson_official_v1/data.yaml
+train:
+  epochs: 50
+  patience: 15
+  imgsz: 1280
+  batch: 8
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: true
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: A10
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+diagnostics:
+  enabled: true
+  collect_interval_steps: 100
+  terminal_interval_steps: 100
+  file_interval_steps: 100
+  wandb_interval_epochs: 1
+  gradient_interval_steps: 100
+  epoch_summary: true
+  file_logging: true
+  gate_metrics: true
+  feature_metrics: true
+  residual_metrics: true
+  gradient_metrics: true
+  numerical_health: true
+  performance_metrics: false
+  cuda_timing: false
+  sampled_elements: 4096
+  flush_records: 10
+models:
+  - name: msr_fusion_adaptive
+    config: configs/model/yolo26n_tiny_A2_p2_msr.yaml
+  - name: msr_fusion_mean
+    config: configs/model/yolo26n_tiny_A2_p2_msr_mean.yaml
+  - name: msr_fusion_max
+    config: configs/model/yolo26n_tiny_A2_p2_msr_max.yaml
+  - name: msr_fusion_sk_softmax
+    config: configs/model/yolo26n_tiny_A2_p2_msr_sk_softmax.yaml

@@ -2,6 +2,7 @@
 nc: 1
 end2end: True
 reg_max: 1
+tal_beta: 6.0
 scale: n
 scales:
   n: [0.50, 0.25, 1024]

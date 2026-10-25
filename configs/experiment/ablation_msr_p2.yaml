@@ -1,5 +1,13 @@
 # Paired MSR ablation on P2; only E1/E3 add the P2 refinement module.
+# For the final variance estimate, replace seed with seeds: [42, 43, 44].
 seed: 42
+comparisons:
+  - name: msr_with_sppf
+    control: msr_p2_e0_a2_baseline
+    treatment: msr_p2_e1_a2_msr
+  - name: msr_without_sppf
+    control: msr_p2_e2_a3_no_sppf
+    treatment: msr_p2_e3_a3_no_sppf_msr
 data:
   config: /mnt/data/tinyperson_official_v1/data.yaml
 train:
@@ -31,10 +39,28 @@ train:
   multi_scale: 0.0
   compile: false
 hardware:
-  gpu: L4
+  gpu: A10
 output:
   root: /mnt/runs
   wandb_project: tiny-person-research
+diagnostics:
+  enabled: true
+  collect_interval_steps: 100
+  terminal_interval_steps: 100
+  file_interval_steps: 100
+  wandb_interval_epochs: 1
+  gradient_interval_steps: 100
+  epoch_summary: true
+  file_logging: true
+  gate_metrics: true
+  feature_metrics: true
+  residual_metrics: true
+  gradient_metrics: true
+  numerical_health: true
+  performance_metrics: false
+  cuda_timing: false
+  sampled_elements: 4096
+  flush_records: 10
 models:
   - name: msr_p2_e0_a2_baseline
     config: configs/model/yolo26n_tiny_A2_p2.yaml
