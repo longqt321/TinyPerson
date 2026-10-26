@@ -4,8 +4,6 @@ from typing import Any
 
 import yaml
 
-from tinydet.diagnostics.config import DiagnosticsConfig
-
 
 @dataclass(frozen=True)
 class ExperimentConfig:
@@ -49,5 +47,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
             raise ValueError(f"Missing {section} fields: {', '.join(sorted(missing))}")
     if raw["train"]["epochs"] <= 0 or raw["train"]["imgsz"] <= 0 or raw["train"]["batch"] <= 0:
         raise ValueError("epochs, imgsz and batch must be positive")
-    diagnostics = DiagnosticsConfig.parse(raw.get("diagnostics")).to_dict()
+    diagnostics = raw.get("diagnostics") or {}
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
     return ExperimentConfig(**{**{key: raw[key] for key in required}, "diagnostics": diagnostics})

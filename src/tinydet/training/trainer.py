@@ -5,7 +5,6 @@ from time import monotonic
 
 import torch
 
-from tinydet.diagnostics.trainer_callback import MSRDiagnosticsCallback
 from tinydet.models.registry import build_model
 from tinydet.training.iou_logging import log_ap_by_iou
 from tinydet.training.wandb_media import WandbMediaCallback
@@ -101,37 +100,7 @@ def train(
                 ("on_train_end", media.on_train_end),
             ):
                 model.callbacks[event].insert(0, callback)
-        from tinydet.modules.msr import MSR
 
-        if config.diagnostics.get("enabled", False) and any(
-            isinstance(module, MSR) for module in model.model.modules()
-        ):
-            diagnostics = MSRDiagnosticsCallback(config.diagnostics, wandb_enabled=bool(project))
-            try:
-                for event, callback in (
-                    ("on_train_start", diagnostics.on_train_start),
-                    ("on_train_epoch_start", diagnostics.on_train_epoch_start),
-                    ("on_train_batch_start", diagnostics.on_train_batch_start),
-                    ("on_train_batch_end", diagnostics.on_train_batch_end),
-                    ("on_train_epoch_end", diagnostics.on_train_epoch_end),
-                    ("on_train_end", diagnostics.on_train_end),
-                ):
-                    model.callbacks[event].insert(0, callback)
-            except (AttributeError, KeyError, RuntimeError, TypeError) as exc:
-                diagnostics._fail("registration", exc)
-
-        def wrap_composite_loss(trainer):
-            """Callback bọc hàm Loss gốc của YOLO bằng CompositeCriterion ngay khi Trainer khởi tạo xong."""
-            from tinydet.modules.composite import CompositeCriterion
-
-            if (
-                hasattr(trainer.model, "model")
-                and type(trainer.model.model[-1]).__name__ == "CompositeDetect"
-            ):
-                trainer.loss = CompositeCriterion(trainer.model, trainer.loss)
-
-        # Chèn hook vào sự kiện khởi tạo vòng lặp huấn luyện
-        model.callbacks["on_train_start"].insert(0, wrap_composite_loss)
         started = monotonic()
         torch.cuda.reset_peak_memory_stats()
 

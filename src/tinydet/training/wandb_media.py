@@ -11,9 +11,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from tinydet.modules.btrm import BTRM
-from tinydet.modules.msr import MSR
-
 FEATURE_INTERVAL_EPOCHS = 10
 FEATURE_IMAGES = 2
 FEATURE_SIDE = 160
@@ -69,15 +66,6 @@ class WandbMediaCallback:
 
     def on_train_start(self, trainer) -> None:
         try:
-            named = next(
-                ((name, module) for name, module in trainer.model.named_modules()
-                 if isinstance(module, (MSR, BTRM))),
-                None,
-            )
-            if named is not None:
-                name, module = named
-                self._label = f"features/{(name or type(module).__name__).replace('.', '/')}"
-                self._hook = module.register_forward_hook(self._capture)
             validator = getattr(trainer, "validator", None)
             if validator is not None:
                 self._validator = validator
