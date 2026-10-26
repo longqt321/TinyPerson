@@ -75,7 +75,8 @@ class MSR(nn.Module):
             raise ValueError(f"Expected floating BCHW input with C={self.channels}")
         with torch.autocast(device_type=x.device.type, enabled=False):
             x32 = x.float()
-        evidence_by_scale = [scale(x, x32=x32) for scale in self.single_scales]
+            x32_sq = x32.square()
+        evidence_by_scale = [scale(x, x32=x32, x32_sq=x32_sq) for scale in self.single_scales]
         evidence = self.fusion(evidence_by_scale)
         modulated = self.modulation(x, evidence)
         return self.refinement(x, modulated)

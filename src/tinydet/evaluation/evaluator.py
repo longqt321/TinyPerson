@@ -149,15 +149,16 @@ def finalize_predictions(run: Path, artifact: Path, split: str):
                 "im_name": Path(batch["im_file"]).name,
             }
         )
-        scaled = validator.scale_preds(pred, batch)
-        exported.append(
-            {
-                "path": batch["im_file"],
-                "boxes": scaled["bboxes"].tolist(),
-                "scores": pred["conf"].tolist(),
-                "classes": pred["cls"].tolist(),
-            }
-        )
+        if split == "test":
+            scaled = validator.scale_preds(pred, batch)
+            exported.append(
+                {
+                    "path": batch["im_file"],
+                    "boxes": scaled["bboxes"].tolist(),
+                    "scores": pred["conf"].tolist(),
+                    "classes": pred["cls"].tolist(),
+                }
+            )
     validator.metrics.process(plot=False)
     result = metric_summary(validator.metrics)
     write_json(run / "metrics" / f"{split}.json", {**result, "source": "evaluation"})

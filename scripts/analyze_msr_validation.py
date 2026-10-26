@@ -11,6 +11,10 @@ import torch
 from PIL import Image, ImageDraw
 from ultralytics import YOLO
 
+from tinydet.models.ultralytics import register_ultralytics_modules
+
+register_ultralytics_modules()
+
 SIZE_BINS = ((0, 8, "0-8px"), (8, 16, "8-16px"), (16, 32, "16-32px"), (32, float("inf"), "32px+"))
 GEOMETRY_BINS = ((0, 1, "<=1px"), (1, 2, "1-2px"), (2, 3, "2-3px"), (3, float("inf"), ">3px"))
 
@@ -239,23 +243,30 @@ def main() -> None:
         print(f"Predicting {model_name} from {checkpoint}", flush=True)
         model = YOLO(str(checkpoint))
         raw_predictions: dict[str, list[dict]] = {}
-        results = model.predict(
-            source=[str(path.resolve()) for path in images],
-            stream=True,
-            imgsz=args.imgsz,
-            batch=1,
-            conf=args.conf,
-            max_det=args.max_det,
-            classes=[0],
-            device=args.device,
-            verbose=False,
-        )
-        for result in results:
-            boxes = result.boxes
-            raw_predictions[Path(result.path).name] = [] if boxes is None else [
-                {"box": [float(v) for v in box], "score": float(score)}
-                for box, score in zip(boxes.xyxy.cpu().tolist(), boxes.conf.cpu().tolist())
-            ]
+        if torch.cuda.is_available() and "cuda" in str(args.device):
+            torch.cuda.empty_cache()
+        with torch.inference_mode():
+            for image_path in images:
+                res = model.predict(
+                    source=str(image_path.resolve()),
+                    imgsz=args.imgsz,
+                    conf=args.conf,
+                    max_det=args.max_det,
+                    classes=[0],
+                    device=args.device,
+                    verbose=False,
+                )[0]
+                boxes = res.boxes
+                raw_predictions[image_path.name] = (
+                    []
+                    if boxes is None
+                    else [
+                        {"box": [float(v) for v in box], "score": float(score)}
+                        for box, score in zip(boxes.xyxy.cpu().tolist(), boxes.conf.cpu().tolist())
+                    ]
+                )
+        if torch.cuda.is_available() and "cuda" in str(args.device):
+            torch.cuda.empty_cache()
         if len(raw_predictions) != len(images):
             raise RuntimeError(f"{model_name}: predicted {len(raw_predictions)} of {len(images)} images")
         (args.output / "predictions" / f"{model_name}.json").write_text(

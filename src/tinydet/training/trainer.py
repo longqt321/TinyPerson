@@ -10,6 +10,7 @@ from tinydet.models.registry import build_model
 from tinydet.training.iou_logging import log_ap_by_iou
 from tinydet.training.wandb_media import WandbMediaCallback
 from tinydet.utils.config import load_config
+from tinydet.utils.dataset import resolve_dataset_yaml
 from tinydet.utils.experiment import create_run, metadata, update_status, write_json
 from tinydet.utils.seed import set_seed
 
@@ -17,6 +18,7 @@ from tinydet.utils.seed import set_seed
 def _init_wandb(project: str, name: str, group: str | None, config: dict):
     try:
         import wandb
+
         run = wandb.init(
             project=project,
             name=name,
@@ -43,11 +45,20 @@ def train(
     if not torch.cuda.is_available():
         raise RuntimeError("Training requires Modal GPU")
     config = load_config(config_path)
-    effective_dataset_config = Path(dataset_config or config.data["config"])
-    if not effective_dataset_config.is_file():
-        raise ValueError(f"Dataset config does not exist: {effective_dataset_config}")
-    if config.model.get("pretrained") and not Path(config.model["pretrained"]).is_file():
-        raise ValueError(f"Pretrained checkpoint does not exist: {config.model['pretrained']}")
+    effective_dataset_config = resolve_dataset_yaml(dataset_config or config.data["config"])
+    if config.model.get("pretrained"):
+        pretrained_path = Path(config.model["pretrained"])
+        if not pretrained_path.is_file():
+            if "checkpoints" in pretrained_path.parts:
+                alt = Path(str(pretrained_path).replace("/checkpoints/", "/training/weights/"))
+                if alt.is_file():
+                    config.model["pretrained"] = str(alt)
+            elif "training/weights" in str(pretrained_path):
+                alt = Path(str(pretrained_path).replace("/training/weights/", "/checkpoints/"))
+                if alt.is_file():
+                    config.model["pretrained"] = str(alt)
+        if not Path(config.model["pretrained"]).is_file():
+            raise ValueError(f"Pretrained checkpoint does not exist: {config.model['pretrained']}")
     set_seed(config.seed, config.train["deterministic"])
     run = create_run(config, source_git)
     if dataset_audit is not None:
@@ -78,7 +89,9 @@ def train(
             if wandb_run is None:
                 project = None
                 SETTINGS.update({"wandb": False})
-        model.callbacks["on_fit_epoch_end"].insert(0, partial(log_ap_by_iou, wandb_enabled=bool(project)))
+        model.callbacks["on_fit_epoch_end"].insert(
+            0, partial(log_ap_by_iou, wandb_enabled=bool(project))
+        )
         if project:
             media = WandbMediaCallback(run, effective_dataset_config)
             for event, callback in (
@@ -106,10 +119,34 @@ def train(
                     model.callbacks[event].insert(0, callback)
             except (AttributeError, KeyError, RuntimeError, TypeError) as exc:
                 diagnostics._fail("registration", exc)
+
+        def wrap_composite_loss(trainer):
+            """Callback bọc hàm Loss gốc của YOLO bằng CompositeCriterion ngay khi Trainer khởi tạo xong."""
+            from tinydet.modules.composite import CompositeCriterion
+
+            if (
+                hasattr(trainer.model, "model")
+                and type(trainer.model.model[-1]).__name__ == "CompositeDetect"
+            ):
+                trainer.loss = CompositeCriterion(trainer.model, trainer.loss)
+
+        # Chèn hook vào sự kiện khởi tạo vòng lặp huấn luyện
+        model.callbacks["on_train_start"].insert(0, wrap_composite_loss)
         started = monotonic()
         torch.cuda.reset_peak_memory_stats()
-        model.train(data=str(dataset_config or config.data["config"]), project=str(run), name="training", exist_ok=True, save=True, save_period=-1, seed=config.seed, **{**config.train, "plots": bool(project)})
-        # Ultralytics already validates the stripped best.pt at the end of training.
+
+        model.train(
+            data=str(effective_dataset_config),
+            project=str(run),
+            name="training",
+            exist_ok=True,
+            save=True,
+            save_period=-1,
+            seed=config.seed,
+            **{**config.train, "plots": bool(project)},
+        )
+
+        #   Ultralytics already validates the stripped best.pt at the end of training.
         # Keep this result for compare; explicit evaluate still performs fresh validation.
         if Path(model.trainer.best).is_file() and model.trainer.validator.metrics.box.all_ap.size:
             from tinydet.evaluation.evaluator import metric_summary

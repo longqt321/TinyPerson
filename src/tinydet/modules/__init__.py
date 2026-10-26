@@ -19,6 +19,12 @@ from tinydet.modules.msr import (
     ResidualRefinement,
     SingleScaleEvidence,
 )
+from tinydet.modules.qac import QACDetect, QualityAwareDetectionLoss, QualityAwareE2ELoss
+from tinydet.modules.qac_v2 import (
+    QACDetectV2,
+    QualityAwareDetectionLossV2,
+    QualityAwareE2ELossV2,
+)
 
 __all__ = [
     "BTRM",
@@ -32,6 +38,12 @@ __all__ = [
     "DuplicateScorer",
     "EvidenceGuidedModulation",
     "MultiScaleEvidenceFusion",
+    "QACDetect",
+    "QACDetectV2",
+    "QualityAwareDetectionLoss",
+    "QualityAwareDetectionLossV2",
+    "QualityAwareE2ELoss",
+    "QualityAwareE2ELossV2",
     "QualityHead",
     "ResidualRefinement",
     "ScaleAligner",

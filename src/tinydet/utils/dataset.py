@@ -7,11 +7,29 @@ from pathlib import Path
 import yaml
 
 
+def resolve_dataset_yaml(path: str | Path) -> Path:
+    """Resolve a dataset path (either a YAML file or a directory containing a YAML file) to a Path."""
+    p = Path(path).expanduser().resolve()
+    if p.is_dir():
+        for name in ("data.yaml", "dataset.yaml"):
+            candidate = p / name
+            if candidate.is_file():
+                return candidate
+        candidates = sorted(p.glob("*.yaml")) + sorted(p.glob("*.yml"))
+        if candidates:
+            return candidates[0]
+        raise FileNotFoundError(f"No YAML configuration file found in dataset directory: {p}")
+    if not p.is_file():
+        raise FileNotFoundError(f"Dataset config does not exist: {p}")
+    return p
+
+
 def dataset_images(dataset_file: Path, split: str = "val") -> list[Path]:
-    data = yaml.safe_load(dataset_file.read_text())
-    root = Path(data["path"]) if data.get("path") else dataset_file.parent
+    resolved_file = resolve_dataset_yaml(dataset_file)
+    data = yaml.safe_load(resolved_file.read_text())
+    root = Path(data["path"]) if data.get("path") else resolved_file.parent
     if data.get("path") and not root.is_absolute():
-        root = dataset_file.parent / root
+        root = resolved_file.parent / root
     source = root / data[split]
     if source.is_file():
         return [Path(line) if Path(line).is_absolute() else root / line
@@ -29,7 +47,7 @@ def label_path(image_path: Path) -> Path:
 
 def normalize_dataset_yaml(path: str | Path) -> Path:
     """Return a portable YAML copy whose relative split paths resolve beside source YAML."""
-    source = Path(path).expanduser().resolve()
+    source = resolve_dataset_yaml(path)
     config = yaml.safe_load(source.read_text())
     if not isinstance(config, dict):
         raise TypeError(f"Dataset YAML must be a mapping: {source}")

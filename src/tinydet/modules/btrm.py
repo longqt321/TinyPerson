@@ -50,14 +50,24 @@ class BTRM(nn.Module):
             2 * far_radius + 1,
             stride=1,
         )
+        kx = (
+            self.kernel_x
+            if self.kernel_x.dtype == values.dtype
+            else self.kernel_x.to(dtype=values.dtype)
+        )
+        ky = (
+            self.kernel_y
+            if self.kernel_y.dtype == values.dtype
+            else self.kernel_y.to(dtype=values.dtype)
+        )
         gradient_x = F.conv2d(
             F.pad(values, (1, 1, 0, 0), mode="replicate"),
-            self.kernel_x.to(dtype=values.dtype),
+            kx,
             groups=self.channels,
         )
         gradient_y = F.conv2d(
             F.pad(values, (0, 0, 1, 1), mode="replicate"),
-            self.kernel_y.to(dtype=values.dtype),
+            ky,
             groups=self.channels,
         )
         magnitude = gradient_x.abs() + gradient_y.abs()

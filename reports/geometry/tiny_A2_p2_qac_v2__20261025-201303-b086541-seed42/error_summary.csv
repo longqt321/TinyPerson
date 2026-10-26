@@ -1,0 +1,2 @@
+model,checkpoint,run_status,completed_epochs,images,objects,detected,misses,localization_errors,false_positives,background_fp,duplicate,localization_fp,recall_conf025_iou050
+A2,/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/tiny_A2_p2_qac_v2/20261025-201303-b086541-seed42/training/weights/best.pt,TRAINED,50,84,3608,1276,998,1334,3248,1047,568,1633,0.35365853658536583

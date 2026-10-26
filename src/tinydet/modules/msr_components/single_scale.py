@@ -35,19 +35,22 @@ class SingleScaleEvidence(nn.Module):
             nn.SiLU(inplace=True),
         )
 
-    def forward(self, x: Tensor, *, x32: Tensor | None = None) -> Tensor:
+    def forward(
+        self, x: Tensor, *, x32: Tensor | None = None, x32_sq: Tensor | None = None
+    ) -> Tensor:
         if x.ndim != 4 or not x.is_floating_point() or x.shape[1] != self.channels:
             raise ValueError(f"Expected floating BCHW input with C={self.channels}")
         if x32 is not None and (x32.shape != x.shape or x32.dtype != torch.float32):
             raise ValueError("x32 must be an FP32 tensor with the same shape as x")
         with torch.autocast(device_type=x.device.type, enabled=False):
             values = x.float() if x32 is None else x32
+            values_sq = values.square() if x32_sq is None else x32_sq
             pad = self.kernel // 2
             mean = F.avg_pool2d(
                 values, self.kernel, stride=1, padding=pad, count_include_pad=False
             )
             second = F.avg_pool2d(
-                values.square(), self.kernel, stride=1, padding=pad, count_include_pad=False
+                values_sq, self.kernel, stride=1, padding=pad, count_include_pad=False
             )
             std = (second.sub(mean.square()).clamp_min(0).add(self.eps).sqrt()
                    .clamp_min(self.sigma_min))

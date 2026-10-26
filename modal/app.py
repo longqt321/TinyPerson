@@ -20,12 +20,21 @@ models = modal.Volume.from_name("tiny-person-models", create_if_missing=True)
 runs = modal.Volume.from_name("tiny-person-runs", create_if_missing=True)
 wandb_secret = modal.Secret.from_name("wandb-secret", required_keys=["WANDB_API_KEY"])
 mounts = {str(DATA_ROOT): data, str(MODEL_ROOT): models, str(RUN_ROOT): runs}
-CPU_LIMIT = (2.0, 4.0)
-MEMORY_LIMIT_MB = (8192, 24576)
+CPU_LIMIT = (8.0, 16.0)
+MEMORY_LIMIT_MB = (16384, 49152)
 
 
 def _dataset_yaml_path(path: str | Path) -> Path:
-    dataset_yaml = Path(os.path.normpath(path))
+    p = Path(os.path.normpath(path))
+    if p.suffix not in (".yaml", ".yml"):
+        for name in ("data.yaml", "dataset.yaml"):
+            candidate = p / name
+            if candidate.is_file():
+                p = candidate
+                break
+        else:
+            p = p / "data.yaml"
+    dataset_yaml = p
     try:
         dataset_yaml.relative_to(DATA_ROOT)
     except ValueError as exc:
@@ -66,13 +75,28 @@ def _audit_original_dataset(dataset_yaml: str, imgsz: int, audit_id: str):
     dataset_yaml = _dataset_yaml_path(dataset_yaml)
     if not dataset_yaml.is_file():
         raise FileNotFoundError(f"Dataset config does not exist: {dataset_yaml}")
+
+    # 1. Tái sử dụng kết quả audit nếu dataset và imgsz chưa từng thay đổi
+    cache_key_data = f"{dataset_yaml}\0{imgsz}\0".encode() + dataset_yaml.read_bytes()
+    cache_key = hashlib.sha256(cache_key_data).hexdigest()[:16]
+    cache_file = RUN_ROOT / "preflight" / f"cache-{cache_key}.json"
+    if cache_file.is_file():
+        try:
+            cached_result = json.loads(cache_file.read_text())
+            print(f"Tái sử dụng kết quả audit đã có: {cache_file.name} (0s, không copy lặp lại)", flush=True)
+            return cached_result
+        except (json.JSONDecodeError, KeyError, OSError) as exc:
+            print(f"Cache preflight không hợp lệ ({exc}), tiến hành audit mới...", flush=True)
+
+    # 2. Nếu chưa có cache, stream decode trực tiếp đa luồng từ Modal Volume (không copy thừa ra /tmp)
     report_path = RUN_ROOT / "preflight" / f"dataset-audit-{audit_id}.json"
     normalized_yaml = normalize_dataset_yaml(dataset_yaml)
-    report = audit_dataset(normalized_yaml, imgsz, report_path)
-    runs.commit()
-    return {
+    print(f"Bắt đầu audit trực tiếp đa luồng từ {dataset_yaml}...", flush=True)
+    report = audit_dataset(normalized_yaml, imgsz, report_path, workers=24)
+
+    result = {
         "passed": report["passed"],
-        "data_yaml": report["data_yaml"],
+        "data_yaml": str(dataset_yaml),
         "imgsz": report["imgsz"],
         "measurement_basis": report["measurement_basis"],
         "dataset_signature_metadata_sha256": report["dataset_signature_metadata_sha256"],
@@ -91,6 +115,12 @@ def _audit_original_dataset(dataset_yaml: str, imgsz: int, audit_id: str):
         "report_path": str(report_path),
     }
 
+    # Lưu vào cache để mọi lần chạy sau không bao giờ phải audit hay copy lại
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(json.dumps(result, indent=2))
+    runs.commit()
+    return result
+
 
 @app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=21600)
 def _train(config: str, commit: str, dirty: bool, config_text: str | None = None, wandb_group: str | None = None, dataset_audit: dict | None = None):
@@ -101,22 +131,30 @@ def _train(config: str, commit: str, dirty: bool, config_text: str | None = None
     if not volume_yaml.is_file():
         raise FileNotFoundError(f"Dataset config does not exist: {volume_yaml}")
 
-    with tempfile.TemporaryDirectory(prefix="tinydet-data-", dir="/tmp") as temporary:
-        local_dataset = Path(temporary) / "tinyperson"
-        print(f"Copying dataset from {volume_dataset} to local container disk", flush=True)
+    local_cache_root = Path("/tmp/tinydet-datasets")
+    local_dataset = local_cache_root / volume_dataset.name
+    local_yaml = local_dataset / "data.yaml"
+
+    if not local_yaml.is_file():
+        print(f"Copying dataset from {volume_dataset} to local container disk {local_dataset}", flush=True)
+        local_dataset.mkdir(parents=True, exist_ok=True)
         copytree_concurrent(volume_dataset, local_dataset)
-        local_yaml = local_dataset / "data.yaml"
         dataset_config = yaml.safe_load(local_yaml.read_text())
         dataset_config["path"] = str(local_dataset.resolve())
         local_yaml.write_text(yaml.safe_dump(dataset_config, sort_keys=False))
         print("Dataset copy complete; starting training", flush=True)
-        if config_text is not None:
+    else:
+        print(f"Reusing cached local dataset at {local_dataset} (0s copy overhead)", flush=True)
+
+    if config_text is not None:
+        with tempfile.TemporaryDirectory(prefix="tinydet-cfg-", dir="/tmp") as temporary:
             config_file = Path(temporary) / "experiment.yaml"
             config_file.write_text(config_text)
-            config = str(config_file)
+            run = train_model(str(config_file), (commit, dirty), local_yaml, wandb_group, dataset_audit)
+    else:
         run = train_model(config, (commit, dirty), local_yaml, wandb_group, dataset_audit)
-        runs.commit()
-        return str(run)
+    runs.commit()
+    return str(run)
 
 
 @app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, scaledown_window=2, volumes={str(RUN_ROOT): runs}, timeout=1800)
@@ -138,7 +176,7 @@ def _finalize_pipeline(run: str):
         _organize_wandb.remote(project)
 
 
-@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
+@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=3600)
 def _evaluate(run: str, split: str):
     from tinydet.evaluation.evaluator import collect_predictions
     from tinydet.utils.experiment import resolve_run
@@ -149,7 +187,7 @@ def _evaluate(run: str, split: str):
     return str(result)
 
 
-@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1, volumes=mounts, timeout=3600)
+@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=3600)
 def _benchmark(run: str):
     from tinydet.evaluation.benchmark import benchmark
     from tinydet.utils.experiment import resolve_run
@@ -162,7 +200,7 @@ def _benchmark(run: str):
 
 @app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0,
               scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
-              max_containers=1, volumes=mounts, timeout=3600)
+              max_containers=4, volumes=mounts, timeout=3600)
 def _analyze_geometry(run: str, split: str = "val", iou: float = 0.5):
     """Measure per-GT center and size errors without using local RAM."""
     import subprocess
@@ -188,19 +226,30 @@ def _analyze_geometry(run: str, split: str = "val", iou: float = 0.5):
     if not checkpoint.is_file():
         raise FileNotFoundError(f"No best.pt under {run_dir}")
     output = RUN_ROOT / "error_analysis" / run.replace("/", "__") / f"geometry-{split}"
-    subprocess.run(
-        [
-            sys.executable, "/root/scripts/analyze_msr_validation.py",
-            "--images", str(root / f"images/{split}"),
-            "--labels", str(root / f"labels/{split}"),
-            "--checkpoint", f"A2={checkpoint}", "--output", str(output),
-            "--imgsz", str(config["train"]["imgsz"]), "--device", "cuda:0",
-            "--cpu-threads", "4", "--iou", str(iou),
-        ],
-        check=True,
-    )
-    runs.commit()
-    return {"output": str(output), "geometry_summary": str(output / "geometry_summary.csv")}
+    if not (output / "geometry_summary.csv").is_file():
+        env = os.environ.copy()
+        env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        subprocess.run(
+            [
+                sys.executable, "/root/scripts/analyze_msr_validation.py",
+                "--images", str(root / f"images/{split}"),
+                "--labels", str(root / f"labels/{split}"),
+                "--checkpoint", f"A2={checkpoint}", "--output", str(output),
+                "--imgsz", str(config["train"]["imgsz"]), "--device", "cuda:0",
+                "--cpu-threads", "4", "--iou", str(iou),
+            ],
+            env=env,
+            check=True,
+        )
+        runs.commit()
+
+    return {
+        "output": str(output),
+        "geometry_summary_csv": (output / "geometry_summary.csv").read_text() if (output / "geometry_summary.csv").is_file() else "",
+        "size_summary_csv": (output / "size_summary.csv").read_text() if (output / "size_summary.csv").is_file() else "",
+        "error_summary_csv": (output / "error_summary.csv").read_text() if (output / "error_summary.csv").is_file() else "",
+        "report_json": (output / "report.json").read_text() if (output / "report.json").is_file() else "{}",
+    }
 
 
 @app.function(image=image, cpu=1.0, memory=1024, max_containers=1, volumes={str(RUN_ROOT): runs}, timeout=300)
@@ -402,7 +451,22 @@ def benchmark(run: str):
 
 @app.local_entrypoint()
 def analyze_geometry(run: str, split: str = "val", iou: float = 0.5):
-    print(json.dumps(_analyze_geometry.remote(run, split, iou), indent=2))
+    res = _analyze_geometry.remote(run, split, iou)
+    out_dir = Path("reports/geometry") / run.replace("/", "__")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if res.get("geometry_summary_csv"):
+        (out_dir / "geometry_summary.csv").write_text(res["geometry_summary_csv"])
+    if res.get("size_summary_csv"):
+        (out_dir / "size_summary.csv").write_text(res["size_summary_csv"])
+    if res.get("error_summary_csv"):
+        (out_dir / "error_summary.csv").write_text(res["error_summary_csv"])
+    if res.get("report_json"):
+        (out_dir / "report.json").write_text(res["report_json"])
+    print(f"Artifacts successfully saved locally to {out_dir}")
+    print("\n" + "=" * 35 + " GEOMETRY SUMMARY " + "=" * 35)
+    print(res.get("geometry_summary_csv", ""))
+    print("\n" + "=" * 35 + " SIZE SUMMARY " + "=" * 35)
+    print(res.get("size_summary_csv", ""))
 
 
 @app.function(image=image, cpu=1.0, memory=1024, max_containers=1, scaledown_window=2, secrets=[wandb_secret], timeout=300)
@@ -443,8 +507,18 @@ def _preflight(run: str, split: str = "", image_path: str = "", reuse_training: 
 
     runs.reload()
     target = resolve_run(RUN_ROOT, run)
-    if not (target / "checkpoints" / "best.pt").is_file():
-        raise FileNotFoundError(target / "checkpoints" / "best.pt")
+    checkpoint = target / "checkpoints" / "best.pt"
+    if not checkpoint.is_file():
+        alt = target / "training" / "weights" / "best.pt"
+        if alt.is_file():
+            (target / "checkpoints").mkdir(parents=True, exist_ok=True)
+            shutil.copy2(alt, checkpoint)
+            last_alt = target / "training" / "weights" / "last.pt"
+            if last_alt.is_file():
+                shutil.copy2(last_alt, target / "checkpoints" / "last.pt")
+            runs.commit()
+    if not checkpoint.is_file():
+        raise FileNotFoundError(checkpoint)
     if image_path and not Path(image_path).is_file():
         raise FileNotFoundError(image_path)
     if split:

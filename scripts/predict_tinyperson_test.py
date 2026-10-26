@@ -3,11 +3,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import torch
 from PIL import Image
 from ultralytics import YOLO
+
+from tinydet.models.ultralytics import register_ultralytics_modules
+
+register_ultralytics_modules()
 
 
 def main() -> None:
@@ -32,8 +39,8 @@ def main() -> None:
         raise FileNotFoundError(args.checkpoint)
 
     annotation = json.loads(args.annotations.read_text())
-    paths = []
-    for row in annotation["images"]:
+
+    def _check_image(row: dict) -> Path:
         path = args.image_root / row["file_name"]
         if not path.is_file():
             raise FileNotFoundError(f"Missing official test image: {path}")
@@ -45,12 +52,15 @@ def main() -> None:
                 f"Source raster mismatch for {path.name}: actual={actual}, COCO={expected}. "
                 "Do not evaluate resized/reconstructed images as original-resolution TinyPerson."
             )
-        paths.append(path)
+        return path
+
+    with ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 4) * 2)) as executor:
+        paths = list(executor.map(_check_image, annotation["images"]))
 
     if args.device in (None, "cpu") and args.cpu_threads:
-        import torch
-
         torch.set_num_threads(args.cpu_threads)
+
+    use_half = (args.device != "cpu" and torch.cuda.is_available()) if args.device is None else (args.device != "cpu")
     model = YOLO(str(args.checkpoint))
     predictions = []
     with tempfile.TemporaryDirectory(prefix="tinyperson-test-") as temporary:
@@ -59,7 +69,7 @@ def main() -> None:
         results = model.predict(
             source=str(source_list), stream=True, imgsz=args.imgsz,
             batch=args.batch_size, conf=args.conf, max_det=200,
-            device=args.device, verbose=False,
+            device=args.device, half=use_half, verbose=False,
         )
         for result in results:
             boxes = result.boxes

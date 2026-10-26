@@ -1,0 +1,54 @@
+# Three-way comparison experiment:
+# Baseline A2 vs. QAC v1 vs. QAC v2 on TinyPerson.
+seed: 42
+comparisons:
+  - name: qac_v1_on_p2
+    control: tiny_A2_p2
+    treatment: tiny_A2_p2_qac
+  - name: qac_v2_on_p2
+    control: tiny_A2_p2
+    treatment: tiny_A2_p2_qac_v2
+data:
+  config: /mnt/data/tinyperson_official_v1/data.yaml
+train:
+  epochs: 50
+  patience: 15
+  imgsz: 1280
+  batch: 8
+  workers: 4
+  optimizer: AdamW
+  lr0: 0.001
+  amp: true
+  deterministic: false
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: A10
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+models:
+  - name: tiny_A2_p2
+    config: configs/model/yolo26n_tiny_A2_p2.yaml
+  - name: tiny_A2_p2_qac
+    config: configs/model/yolo26n_tiny_A2_p2_qac.yaml
+  - name: tiny_A2_p2_qac_v2
+    config: configs/model/yolo26n_tiny_A2_p2_qac_v2.yaml
+

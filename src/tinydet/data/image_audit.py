@@ -12,12 +12,15 @@ import json
 import math
 import statistics
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 from PIL import Image, UnidentifiedImageError
+
+from tinydet.utils.dataset import resolve_dataset_yaml
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 ORIENTATION_TAG = 274
@@ -189,17 +192,85 @@ def _parse_yolo_label(path: Path, width: int, height: int) -> tuple[list[dict[st
     return objects, errors
 
 
+def _audit_single_image(
+    image_path: Path, root: Path, imgsz: int
+) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        stat = image_path.stat()
+        with Image.open(image_path) as image:
+            native_width, native_height = image.size
+            image_format = image.format or image_path.suffix.lstrip(".").upper()
+            image_mode = image.mode
+            exif = image.getexif()
+            orientation = int(exif.get(ORIENTATION_TAG, 1))
+            image.load()  # Decode the original raster; no resize is performed.
+        if native_width <= 0 or native_height <= 0:
+            raise ValueError(f"Invalid native dimensions {native_width}x{native_height}")
+    except (OSError, ValueError, UnidentifiedImageError) as exc:
+        return None, f"Cannot decode original image {image_path}: {exc}"
+
+    scale = min(imgsz / native_width, imgsz / native_height)
+    resized_width = round(native_width * scale)
+    resized_height = round(native_height * scale)
+    try:
+        relative_path = image_path.relative_to(root).as_posix()
+    except ValueError:
+        relative_path = image_path.as_posix()
+
+    label_path = next(
+        (candidate for candidate in _label_candidates(image_path, root)
+         if candidate.is_file()),
+        None,
+    )
+    objects: list[dict[str, float]] = []
+    label_errors: list[str] = []
+    label_rows = 0
+    label_stamp = ""
+    if label_path is not None:
+        try:
+            label_text = label_path.read_text()
+            label_rows = sum(1 for line in label_text.splitlines() if line.strip())
+            objects, label_errors = _parse_yolo_label(
+                label_path, native_width, native_height
+            )
+            label_stat = label_path.stat()
+            label_stamp = f"{label_stat.st_size}\0{label_stat.st_mtime_ns}"
+        except OSError as exc:
+            label_errors = [f"Cannot read labels {label_path}: {exc}"]
+            label_stamp = "unstatable"
+
+    record = {
+        "image_path": image_path,
+        "relative_path": relative_path,
+        "native_width": native_width,
+        "native_height": native_height,
+        "image_format": image_format,
+        "image_mode": image_mode,
+        "orientation": orientation,
+        "stat_size": stat.st_size,
+        "stat_mtime_ns": stat.st_mtime_ns,
+        "scale": scale,
+        "resized_width": resized_width,
+        "resized_height": resized_height,
+        "label_path": label_path,
+        "label_rows": label_rows,
+        "label_stamp": label_stamp,
+        "objects": objects,
+        "label_errors": label_errors,
+    }
+    return record, None
+
+
 def audit_dataset(
     data_yaml: str | Path,
     imgsz: int,
     output_path: str | Path | None = None,
+    workers: int = 16,
 ) -> dict[str, Any]:
     """Audit original on-disk raster dimensions and normalized YOLO labels."""
-    yaml_path = Path(data_yaml).expanduser().resolve()
+    yaml_path = resolve_dataset_yaml(data_yaml)
     if type(imgsz) is not int or imgsz <= 0:
         raise ValueError("imgsz must be a positive integer")
-    if not yaml_path.is_file():
-        raise FileNotFoundError(f"Dataset YAML does not exist: {yaml_path}")
 
     config = yaml.safe_load(yaml_path.read_text())
     if not isinstance(config, dict):
@@ -264,36 +335,39 @@ def audit_dataset(
         split_out_of_range = 0
         split_image_records = []
 
-        for image_path in image_paths:
-            try:
-                stat = image_path.stat()
-                with Image.open(image_path) as image:
-                    native_width, native_height = image.size
-                    image_format = image.format or image_path.suffix.lstrip(".").upper()
-                    image_mode = image.mode
-                    exif = image.getexif()
-                    orientation = int(exif.get(ORIENTATION_TAG, 1))
-                    image.load()  # Decode the original raster; no resize is performed.
-                if native_width <= 0 or native_height <= 0:
-                    raise ValueError(f"Invalid native dimensions {native_width}x{native_height}")
-            except (OSError, ValueError, UnidentifiedImageError) as exc:
+        if workers and workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                items = list(executor.map(lambda p: _audit_single_image(p, root, imgsz), image_paths))
+        else:
+            items = [_audit_single_image(p, root, imgsz) for p in image_paths]
+
+        for item, err in items:
+            if item is None:
                 split_corrupt += 1
                 global_corrupt += 1
-                errors.append(f"Cannot decode original image {image_path}: {exc}")
+                if err:
+                    errors.append(err)
                 continue
 
-            scale = min(imgsz / native_width, imgsz / native_height)
-            resized_width = round(native_width * scale)
-            resized_height = round(native_height * scale)
-            try:
-                relative_path = image_path.relative_to(root).as_posix()
-            except ValueError:
-                relative_path = image_path.as_posix()
+            native_width = item["native_width"]
+            native_height = item["native_height"]
+            image_format = item["image_format"]
+            image_mode = item["image_mode"]
+            orientation = item["orientation"]
+            scale = item["scale"]
+            relative_path = item["relative_path"]
+            stat_size = item["stat_size"]
+            stat_mtime_ns = item["stat_mtime_ns"]
+            label_path = item["label_path"]
+            label_rows = item["label_rows"]
+            label_stamp = item["label_stamp"]
+            objects = item["objects"]
+            image_path = item["image_path"]
 
             widths.append(native_width)
             heights.append(native_height)
             ratios.append(native_width / native_height)
-            file_bytes.append(stat.st_size)
+            file_bytes.append(stat_size)
             resize_factors.append(scale)
             formats[image_format] += 1
             modes[image_mode] += 1
@@ -311,26 +385,12 @@ def audit_dataset(
             bit_depths[depth] += 1
             exif_orientations[str(orientation)] += 1
 
-            label_path = next(
-                (candidate for candidate in _label_candidates(image_path, root)
-                 if candidate.is_file()),
-                None,
-            )
-            objects: list[dict[str, float]] = []
-            label_errors: list[str] = []
-            label_rows = 0
+            if item["label_errors"]:
+                errors.extend(item["label_errors"])
+
             if label_path is not None:
                 split_label_files += 1
                 global_label_files += 1
-                try:
-                    label_text = label_path.read_text()
-                    label_rows = sum(1 for line in label_text.splitlines() if line.strip())
-                    objects, label_errors = _parse_yolo_label(
-                        label_path, native_width, native_height
-                    )
-                except OSError as exc:
-                    label_errors = [f"Cannot read labels {label_path}: {exc}"]
-                errors.extend(label_errors)
                 split_label_rows += label_rows
                 global_label_rows += label_rows
                 split_out_of_range += sum(
@@ -352,25 +412,18 @@ def audit_dataset(
                 "format": image_format,
                 "mode": image_mode,
                 "exif_orientation": orientation,
-                "file_bytes": stat.st_size,
+                "file_bytes": stat_size,
                 "letterbox_scale_at_imgsz": round(scale, 6),
-                "simulated_letterbox_width": resized_width,
-                "simulated_letterbox_height": resized_height,
+                "simulated_letterbox_width": item["resized_width"],
+                "simulated_letterbox_height": item["resized_height"],
                 "label_path": str(label_path) if label_path else None,
                 "label_rows": label_rows,
                 "objects_parsed": len(objects),
             })
             if image_path not in signatures:
                 signatures.add(image_path)
-                label_stamp = ""
-                if label_path is not None:
-                    try:
-                        label_stat = label_path.stat()
-                        label_stamp = f"{label_stat.st_size}\0{label_stat.st_mtime_ns}"
-                    except OSError:
-                        label_stamp = "unstatable"
                 signature.update(
-                    f"{relative_path}\0{stat.st_size}\0{stat.st_mtime_ns}\0"
+                    f"{relative_path}\0{stat_size}\0{stat_mtime_ns}\0"
                     f"{native_width}\0{native_height}\0{label_rows}\0{label_stamp}\n".encode()
                 )
 
