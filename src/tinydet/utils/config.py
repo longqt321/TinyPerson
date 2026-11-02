@@ -15,6 +15,7 @@ class ExperimentConfig:
     hardware: dict[str, Any]
     output: dict[str, Any]
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    stage2: dict[str, Any] = field(default_factory=dict)
 
 
 def load_config(path: str | Path) -> ExperimentConfig:
@@ -24,7 +25,9 @@ def load_config(path: str | Path) -> ExperimentConfig:
     raw = yaml.safe_load(path.read_text())
     if not isinstance(raw, dict):
         raise TypeError("Experiment config must be a YAML mapping")
-    unknown = set(raw) - {"name", "seed", "model", "data", "train", "hardware", "output", "diagnostics"}
+    unknown = set(raw) - {
+        "name", "seed", "model", "data", "train", "hardware", "output", "diagnostics", "stage2", "two_stage"
+    }
     if unknown:
         raise ValueError(f"Unknown config fields: {', '.join(sorted(unknown))}")
     required = {"name", "seed", "model", "data", "train", "hardware", "output"}
@@ -35,7 +38,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         raise ValueError("name must contain only letters, digits, '-' or '_'")
     if type(raw["seed"]) is not int or raw["seed"] < 0:
         raise ValueError("seed must be a nonnegative integer")
-    fields = {"model": {"config", "pretrained"}, "data": {"config"}, "train": {"epochs", "imgsz", "batch", "optimizer", "lr0", "amp", "deterministic"}, "hardware": {"gpu"}, "output": {"root"}}
+    fields = {"model": {"config"}, "data": {"config"}, "train": {"epochs", "imgsz", "batch", "optimizer", "lr0", "amp", "deterministic"}, "hardware": {"gpu"}, "output": {"root"}}
     for section, keys in fields.items():
         value = raw[section]
         if not isinstance(value, dict):
@@ -50,4 +53,11 @@ def load_config(path: str | Path) -> ExperimentConfig:
     diagnostics = raw.get("diagnostics") or {}
     if not isinstance(diagnostics, dict):
         diagnostics = {}
-    return ExperimentConfig(**{**{key: raw[key] for key in required}, "diagnostics": diagnostics})
+    stage2 = raw.get("stage2") or raw.get("two_stage") or raw["train"].get("stage2") or raw["train"].get("two_stage") or {}
+    if not isinstance(stage2, dict):
+        stage2 = {}
+    return ExperimentConfig(
+        **{key: raw[key] for key in required},
+        diagnostics=diagnostics,
+        stage2=stage2,
+    )

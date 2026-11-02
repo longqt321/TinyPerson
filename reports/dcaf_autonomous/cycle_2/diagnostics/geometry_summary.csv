@@ -1,0 +1,6 @@
+model,size_bin,objects_with_prediction,best_iou_ge_0.50,best_iou_ge_0.75,center_error_median_px,center_error_p90_px,dx_median_px,dy_median_px,dw_median_px,dh_median_px,center_error_<=1px,center_error_1-2px,center_error_2-3px,center_error_>3px
+A2,all,3608,1888,496,2.583,579.145,-0.089,0.088,0.374,1.087,742,811,392,1663
+A2,0-8px,697,238,31,1.969,640.368,0.027,0.624,1.559,3.985,209,143,39,306
+A2,8-16px,1409,891,225,1.676,498.685,-0.013,0.152,0.631,1.328,369,434,159,447
+A2,16-32px,1121,557,170,3.765,663.166,-0.485,-0.179,-1.138,-0.708,147,196,147,631
+A2,32px+,381,202,70,6.167,360.54,0.009,-1.693,-2.694,-4.987,17,38,47,279
