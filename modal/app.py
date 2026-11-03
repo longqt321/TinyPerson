@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -123,8 +124,17 @@ def _audit_original_dataset(dataset_yaml: str, imgsz: int, audit_id: str):
 
 
 @app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=21600)
-def _train(config: str, commit: str, dirty: bool, config_text: str | None = None, wandb_group: str | None = None, dataset_audit: dict | None = None):
+def _train(
+    config: str,
+    commit: str,
+    dirty: bool,
+    config_text: str | None = None,
+    wandb_group: str | None = None,
+    dataset_audit: dict | None = None,
+    run_id: str | None = None,
+):
     os.chdir("/root")
+    runs.reload()
     raw_config = yaml.safe_load(config_text) if config_text else yaml.safe_load(Path(config).read_text())
     volume_yaml = _dataset_yaml_path(raw_config["data"]["config"])
     volume_dataset = volume_yaml.parent
@@ -146,13 +156,32 @@ def _train(config: str, commit: str, dirty: bool, config_text: str | None = None
     else:
         print(f"Reusing cached local dataset at {local_dataset} (0s copy overhead)", flush=True)
 
+    def on_epoch_commit():
+        runs.commit()
+
     if config_text is not None:
         with tempfile.TemporaryDirectory(prefix="tinydet-cfg-", dir="/tmp") as temporary:
             config_file = Path(temporary) / "experiment.yaml"
             config_file.write_text(config_text)
-            run = train_model(str(config_file), (commit, dirty), local_yaml, wandb_group, dataset_audit)
+            run = train_model(
+                str(config_file),
+                (commit, dirty),
+                local_yaml,
+                wandb_group,
+                dataset_audit,
+                run_id=run_id,
+                on_epoch_end_callback=on_epoch_commit,
+            )
     else:
-        run = train_model(config, (commit, dirty), local_yaml, wandb_group, dataset_audit)
+        run = train_model(
+            config,
+            (commit, dirty),
+            local_yaml,
+            wandb_group,
+            dataset_audit,
+            run_id=run_id,
+            on_epoch_end_callback=on_epoch_commit,
+        )
     runs.commit()
     return str(run)
 
@@ -312,26 +341,45 @@ def train(config: str, preflight_only: bool = False, strict_resolution: bool = F
     print(run)
 
 
-@app.local_entrypoint()
-def compare(
+def _run_comparison_workflow(
     config: str = "configs/experiment/comparison.yaml",
     start_at: str = "",
     parallel: bool = False,
     reuse: bool = False,
     smoke: bool = False,
+    two_stage: bool = False,
     preflight_only: bool = False,
     strict_resolution: bool = False,
     require_source_metadata: bool = False,
+    config_text: str | None = None,
+    commit: str | None = None,
+    dirty: bool | None = None,
 ):
-    """Audit original data first, then compare models; --smoke caps every run at 5 epochs."""
     from tinydet.utils.comparison import load_comparison
     from tinydet.utils.experiment import git_info
 
-    experiments = load_comparison(config)
+    experiments = load_comparison(path=config, raw_text=config_text)
     training = [experiment for experiment in experiments if "run" not in experiment]
     existing = [experiment for experiment in experiments if "run" in experiment]
     if not training:
         raise ValueError("At least one model must be trained")
+
+    if two_stage:
+        for experiment in training:
+            if "stage2" not in experiment and "stage2" not in experiment.get("train", {}):
+                experiment["stage2"] = {
+                    "enabled": True,
+                    "epochs": 50,
+                    "patience": 20,
+                    "lr0": 0.0006,
+                    "lrf": 0.02,
+                    "cos_lr": True,
+                    "warmup_epochs": 3.0,
+                    "close_mosaic": 10,
+                    "mosaic": 0.0,
+                }
+        print("TWO-STAGE MODE: Training Phase 1 + Phase 2 continuously in the same container.", flush=True)
+
     if smoke:
         for experiment in training:
             experiment["train"] = dict(experiment["train"])
@@ -339,7 +387,11 @@ def compare(
             experiment["train"]["patience"] = max(
                 int(experiment["train"].get("patience", 6)), 6
             )
-        print("SMOKE MODE: every model is limited to 5 epochs.", flush=True)
+            stage2_dict = experiment.get("stage2") or experiment.get("train", {}).get("stage2")
+            if isinstance(stage2_dict, dict) and stage2_dict.get("enabled"):
+                stage2_dict["epochs"] = 3
+                stage2_dict["patience"] = max(int(stage2_dict.get("patience", 5)), 5)
+        print("SMOKE MODE: every model is capped (Stage 1: 5 epochs, Stage 2: 3 epochs).", flush=True)
 
     configured_paths = {Path(experiment["data"]["config"]) for experiment in training}
     if len(configured_paths) != 1:
@@ -362,7 +414,7 @@ def compare(
         )
     if preflight_only:
         print("Preflight complete; no training GPU was launched.", flush=True)
-        return
+        return {"preflight": audit}
 
     # A stable data signature makes reuse conditional on the same source dataset.
     for experiment in training:
@@ -378,7 +430,8 @@ def compare(
     existing = [experiment for experiment in experiments if "run" in experiment]
     if any(experiment["hardware"]["gpu"] != "A10" for experiment in training):
         raise ValueError("Only A10 GPU is allowed by the resource cap")
-    commit, dirty = git_info()
+    if commit is None or dirty is None:
+        commit, dirty = git_info()
     wandb_group = f"compare-{uuid.uuid4().hex[:8]}"
 
     def finish(reference: str, val_done: bool = False, benchmark_done: bool = False):
@@ -412,30 +465,229 @@ def compare(
         else:
             to_train.append(experiment)
 
+    session_ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    results = []
+
     if parallel:
         for offset in range(0, len(to_train), 4):
             pending = []
             for experiment in to_train[offset:offset + 4]:
                 print(f"Training {experiment['name']}", flush=True)
                 options = {"secrets": [wandb_secret]} if experiment["output"].get("wandb_project") else {}
+                stable_run_id = f"{session_ts}-{commit}-seed{experiment.get('seed', 42)}"
                 pending.append(_train.with_options(**options).spawn(
-                    config, commit, dirty, yaml.safe_dump(experiment), wandb_group, audit
+                    config, commit, dirty, yaml.safe_dump(experiment), wandb_group, audit, run_id=stable_run_id
                 ))
             completed = [call.get() for call in pending]
             for run in completed:
                 reference = str(Path(run).relative_to(RUN_ROOT))
                 _finalize_pipeline(reference)
                 finish(reference)
+                results.append(reference)
     else:
         for experiment in to_train:
             print(f"Training {experiment['name']}", flush=True)
             options = {"secrets": [wandb_secret]} if experiment["output"].get("wandb_project") else {}
+            stable_run_id = f"{session_ts}-{commit}-seed{experiment.get('seed', 42)}"
             run = _train.with_options(**options).remote(
-                config, commit, dirty, yaml.safe_dump(experiment), wandb_group, audit
+                config, commit, dirty, yaml.safe_dump(experiment), wandb_group, audit, run_id=stable_run_id
             )
             reference = str(Path(run).relative_to(RUN_ROOT))
             _finalize_pipeline(reference)
             finish(reference)
+            results.append(reference)
+
+    return {"status": "SUCCESS", "runs": results, "session_ts": session_ts}
+
+
+@app.function(
+    image=image,
+    cpu=CPU_LIMIT,
+    memory=MEMORY_LIMIT_MB,
+    timeout=86400,
+    volumes=mounts,
+    secrets=[wandb_secret],
+)
+def run_comparison(
+    config: str = "configs/experiment/comparison.yaml",
+    start_at: str = "",
+    parallel: bool = False,
+    reuse: bool = False,
+    smoke: bool = False,
+    two_stage: bool = False,
+    preflight_only: bool = False,
+    strict_resolution: bool = False,
+    require_source_metadata: bool = False,
+    config_text: str | None = None,
+    commit: str | None = None,
+    dirty: bool | None = None,
+):
+    """Cloud-hosted comparison orchestrator. Safe to detach with `modal run --detach`."""
+    return _run_comparison_workflow(
+        config=config,
+        start_at=start_at,
+        parallel=parallel,
+        reuse=reuse,
+        smoke=smoke,
+        two_stage=two_stage,
+        preflight_only=preflight_only,
+        strict_resolution=strict_resolution,
+        require_source_metadata=require_source_metadata,
+        config_text=config_text,
+        commit=commit,
+        dirty=dirty,
+    )
+
+
+@app.local_entrypoint()
+def compare(
+    config: str = "configs/experiment/comparison.yaml",
+    start_at: str = "",
+    parallel: bool = False,
+    reuse: bool = False,
+    smoke: bool = False,
+    two_stage: bool = False,
+    kitty: bool = False,
+    kitty_mode: str = "auto",
+    preflight_only: bool = False,
+    strict_resolution: bool = False,
+    require_source_metadata: bool = False,
+):
+    """Audit original data first, then compare models; supports spawning Kitty terminals with --kitty."""
+    if kitty:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        from launch_parallel_kitty import launch_kitty_terminals
+
+        launch_kitty_terminals(
+            config=config,
+            mode=kitty_mode,
+            smoke=smoke,
+            two_stage=two_stage,
+        )
+        return
+
+    from tinydet.utils.experiment import git_info
+
+    config_path = Path(config)
+    config_text = config_path.read_text() if config_path.is_file() else None
+    commit, dirty = git_info()
+
+    res = run_comparison.remote(
+        config=config,
+        start_at=start_at,
+        parallel=parallel,
+        reuse=reuse,
+        smoke=smoke,
+        two_stage=two_stage,
+        preflight_only=preflight_only,
+        strict_resolution=strict_resolution,
+        require_source_metadata=require_source_metadata,
+        config_text=config_text,
+        commit=commit,
+        dirty=dirty,
+    )
+    print(f"Comparison workflow finished: {res}")
+
+
+@app.local_entrypoint()
+def train_comparison_model(
+    config: str = "configs/experiment/comparison.yaml",
+    model_name: str = "",
+    wandb_group: str = "",
+    session_ts: str = "",
+    smoke: bool = False,
+    two_stage: bool = False,
+):
+    """Train a single model extracted from a comparison YAML with full streaming logs in this terminal."""
+    from tinydet.utils.comparison import load_comparison
+    from tinydet.utils.experiment import git_info
+
+    if not model_name:
+        raise ValueError("--model-name must be specified")
+
+    experiments = load_comparison(path=config)
+    matching = [exp for exp in experiments if exp["name"] == model_name]
+    if not matching:
+        available = [exp["name"] for exp in experiments]
+        raise ValueError(f"Model '{model_name}' not found in {config}. Available models: {available}")
+
+    experiment = matching[0]
+    if "run" in experiment:
+        raise ValueError(f"Model '{model_name}' is already an existing run reference: {experiment['run']}")
+
+    if (
+        (two_stage or experiment.get("stage2", {}).get("enabled"))
+        and "stage2" not in experiment
+        and "stage2" not in experiment.get("train", {})
+    ):
+        experiment["stage2"] = {
+                "enabled": True,
+                "epochs": 50,
+                "patience": 20,
+                "lr0": 0.0006,
+                "lrf": 0.02,
+                "cos_lr": True,
+                "warmup_epochs": 3.0,
+                "close_mosaic": 10,
+                "mosaic": 0.0,
+            }
+
+    if smoke:
+        experiment["train"] = dict(experiment["train"])
+        experiment["train"]["epochs"] = 5
+        experiment["train"]["patience"] = max(int(experiment["train"].get("patience", 6)), 6)
+        stage2_dict = experiment.get("stage2") or experiment.get("train", {}).get("stage2")
+        if isinstance(stage2_dict, dict) and stage2_dict.get("enabled"):
+            stage2_dict["epochs"] = 3
+            stage2_dict["patience"] = max(int(stage2_dict.get("patience", 5)), 5)
+
+    configured_data = _dataset_yaml_path(experiment["data"]["config"])
+    imgsz = int(experiment["train"]["imgsz"])
+    audit = _audit_original_dataset.remote(str(configured_data), imgsz, uuid.uuid4().hex[:12])
+    if not audit["passed"]:
+        raise ValueError(f"Dataset preflight failed for {model_name}")
+
+    experiment["data"]["preflight_signature"] = audit["dataset_signature_metadata_sha256"]
+    commit, dirty = git_info()
+    if not session_ts:
+        session_ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    if not wandb_group:
+        wandb_group = f"compare-{uuid.uuid4().hex[:8]}"
+
+    stable_run_id = f"{session_ts}-{commit}-seed{experiment.get('seed', 42)}"
+    options = {"gpu": experiment["hardware"]["gpu"]}
+    if experiment["output"].get("wandb_project"):
+        options["secrets"] = [wandb_secret]
+
+    print("=" * 70, flush=True)
+    print(f"Launching training for {model_name} (Run ID: {stable_run_id})", flush=True)
+    print(f"W&B Group: {wandb_group}", flush=True)
+    print("=" * 70, flush=True)
+
+    run = _train.with_options(**options).remote(
+        config,
+        commit,
+        dirty,
+        config_text=yaml.safe_dump(experiment),
+        wandb_group=wandb_group,
+        dataset_audit=audit,
+        run_id=stable_run_id,
+    )
+
+    reference = str(Path(run).relative_to(RUN_ROOT))
+    _finalize_pipeline(reference)
+
+    print(f"Evaluating {reference}...", flush=True)
+    _evaluate_pipeline(reference, "val", reuse_training=True)
+
+    print(f"Benchmarking {reference}...", flush=True)
+    _benchmark.remote(reference)
+
+    print("=" * 70, flush=True)
+    print(f"SUCCESS: Completed training, evaluation, and benchmark for {model_name}", flush=True)
+    print(f"Run reference: {reference}", flush=True)
+    print("=" * 70, flush=True)
 
 
 @app.local_entrypoint()
@@ -540,3 +792,455 @@ def _evaluate_pipeline(run: str, split: str, reuse_training: bool = False):
     return _finish_evaluation.remote(run, artifact, split)
 
 
+@app.function(
+    image=image,
+    gpu="A10",
+    min_containers=0,
+    buffer_containers=0,
+    scaledown_window=2,
+    cpu=CPU_LIMIT,
+    memory=MEMORY_LIMIT_MB,
+    max_containers=1,
+    volumes=mounts,
+    timeout=3600,
+)
+def _run_comparison_report():
+    import subprocess
+    import sys
+
+    from ultralytics import YOLO
+
+    from tinydet.evaluation.iou_metrics import ap_by_iou
+    from tinydet.models.ultralytics import register_ultralytics_modules
+    from tinydet.utils.dataset import normalize_dataset_yaml
+
+    register_ultralytics_modules()
+    runs.reload()
+    data.reload()
+
+    ckpts = {
+        "QAC_v3_ep50": RUN_ROOT / "tiny_A2_p2_qac_v3" / "20261026-110551-6fceb3b-seed42" / "stage1" / "weights" / "best.pt",
+        "DFL16_ep50": RUN_ROOT / "tiny_A2_p2_dfl16" / "20261026-110551-6fceb3b-seed42" / "stage1" / "weights" / "best.pt",
+        "DFL16_ep100": RUN_ROOT / "tiny_A2_p2_dfl16" / "20261026-110551-6fceb3b-seed42" / "checkpoints" / "best.pt",
+    }
+    for name, p in ckpts.items():
+        if not p.is_file():
+            alt = RUN_ROOT / "tiny_A2_p2_dfl16" / "20261026-110551-6fceb3b-seed42" / "training" / "weights" / "best.pt"
+            if name == "DFL16_ep100" and alt.is_file():
+                ckpts[name] = alt
+            else:
+                raise FileNotFoundError(f"Missing checkpoint for {name}: {p}")
+
+    raw_data_yaml = DATA_ROOT / "tinyperson-yolo" / "data.yaml"
+    if not raw_data_yaml.is_file():
+        raise FileNotFoundError(f"Data yaml not found: {raw_data_yaml}")
+    data_yaml = normalize_dataset_yaml(raw_data_yaml)
+
+    # 1. Measure official Ultralytics mAP metrics
+    map_results = {}
+    for name, p in ckpts.items():
+        print(f"--> Validating mAP for {name} from {p}...", flush=True)
+        model = YOLO(str(p))
+        val_res = model.val(
+            data=str(data_yaml),
+            split="val",
+            imgsz=1280,
+            batch=8,
+            device="cuda:0",
+            plots=False,
+            save_json=False,
+            verbose=False,
+        )
+        box = val_res.box
+        map_results[name] = {
+            "mAP50-95": float(box.map),
+            "mAP50": float(box.map50),
+            "mAP75": float(box.map75),
+            "precision": float(box.mp),
+            "recall": float(box.mr),
+            **ap_by_iou(box),
+        }
+        del model
+
+    # 2. Measure per-bin accuracy & geometry errors using analyze_msr_validation.py
+    out_dir = RUN_ROOT / "comparison_report_qac_v3_vs_dfl16"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    img_dir = DATA_ROOT / "tinyperson-yolo" / "images" / "val"
+    lbl_dir = DATA_ROOT / "tinyperson-yolo" / "labels" / "val"
+
+    cmd = [
+        sys.executable,
+        "/root/scripts/analyze_msr_validation.py",
+        "--images", str(img_dir),
+        "--labels", str(lbl_dir),
+        "--imgsz", "1280",
+        "--device", "cuda:0",
+        "--cpu-threads", "4",
+        "--output", str(out_dir),
+    ]
+    for name, p in ckpts.items():
+        cmd.extend(["--checkpoint", f"{name}={p}"])
+
+    print("--> Running size-bin & geometry analysis...", flush=True)
+    subprocess.run(cmd, check=True)
+    runs.commit()
+
+    return {
+        "map_results": map_results,
+        "size_summary_csv": (out_dir / "size_summary.csv").read_text(),
+        "geometry_summary_csv": (out_dir / "geometry_summary.csv").read_text(),
+        "error_summary_csv": (out_dir / "error_summary.csv").read_text(),
+        "model_comparison_csv": (out_dir / "model_comparison.csv").read_text() if (out_dir / "model_comparison.csv").is_file() else "",
+    }
+
+
+@app.local_entrypoint()
+def generate_comparison_report():
+    res = _run_comparison_report.remote()
+    local_dir = Path("reports/comparison_qac_v3_vs_dfl16")
+    local_dir.mkdir(parents=True, exist_ok=True)
+    (local_dir / "map_results.json").write_text(json.dumps(res["map_results"], indent=2))
+    (local_dir / "size_summary.csv").write_text(res["size_summary_csv"])
+    (local_dir / "geometry_summary.csv").write_text(res["geometry_summary_csv"])
+    (local_dir / "error_summary.csv").write_text(res["error_summary_csv"])
+    if res.get("model_comparison_csv"):
+        (local_dir / "model_comparison.csv").write_text(res["model_comparison_csv"])
+    print(f"Results successfully saved locally to {local_dir}")
+
+
+def _subset_annotations(
+    annotation_source: Path, data_yaml: Path, split: str, destination: Path
+) -> Path:
+    """Restrict an official COCO JSON to the images of one YOLO split.
+
+    The repository's TinyPerson evaluator refuses partial predictions, so the
+    official train JSON (746 images) cannot be scored against a 84-image
+    validation split directly. Filtering the annotations is the only way to keep
+    the ignore/uncertain/dense metadata intact on a subset.
+    """
+    from tinydet.utils.dataset import dataset_images
+
+    wanted = {path.name for path in dataset_images(data_yaml, split)}
+    if not wanted:
+        raise ValueError(f"No images for split {split!r} in {data_yaml}")
+    payload = json.loads(annotation_source.read_text())
+    keep_ids = {int(row["id"]) for row in payload["images"] if Path(row["file_name"]).name in wanted}
+    images = [row for row in payload["images"] if int(row["id"]) in keep_ids]
+    annotations = [row for row in payload["annotations"] if int(row["image_id"]) in keep_ids]
+    covered = {Path(row["file_name"]).name for row in images}
+    missing = wanted - covered
+    if missing:
+        raise ValueError(
+            f"{len(missing)} {split} image(s) have no annotation in {annotation_source}; "
+            f"examples={sorted(missing)[:5]}"
+        )
+    destination.write_text(
+        json.dumps({**payload, "images": images, "annotations": annotations}, indent=2) + "\n"
+    )
+    return destination
+
+
+@app.function(
+    image=image,
+    gpu="A10",
+    min_containers=0,
+    buffer_containers=0,
+    scaledown_window=2,
+    cpu=CPU_LIMIT,
+    memory=MEMORY_LIMIT_MB,
+    max_containers=2,
+    volumes=mounts,
+    timeout=10800,
+)
+def _run_checkpoint_evaluation(relative_checkpoint: str, name: str, split: str = "val"):
+    """Run the full evaluation stack (benchmark, AP75 oracles, error analysis) on one checkpoint.
+
+    Deliberately bypasses `preflight()`: a probe checkpoint lives outside a run
+    directory and has no `config.yaml`, but `scripts/evaluate_checkpoint.py` only
+    needs the checkpoint, the split YAML and the annotation JSON.
+    """
+    import subprocess
+    import sys
+
+    from tinydet.utils.dataset import normalize_dataset_yaml
+
+    runs.reload()
+    data.reload()
+
+    checkpoint = Path(relative_checkpoint)
+    if not checkpoint.is_absolute():
+        checkpoint = RUN_ROOT / relative_checkpoint
+    if not checkpoint.is_file() and checkpoint.name == "best.pt":
+        # A finalized run may still keep its weights under the training folder.
+        for candidate in (
+            checkpoint.parent.parent / "training" / "weights" / "best.pt",
+            checkpoint.parent.parent / "stage1" / "weights" / "best.pt",
+        ):
+            if candidate.is_file():
+                checkpoint = candidate
+                break
+    if not checkpoint.is_file():
+        raise FileNotFoundError(checkpoint)
+
+    data_yaml = normalize_dataset_yaml(DATA_ROOT / "tinyperson-yolo" / "data.yaml")
+    if split == "test":
+        annotation_source = DATA_ROOT / "tinyperson-yolo" / "annotations" / "tiny_set_test_with_dense.json"
+    else:
+        annotation_source = DATA_ROOT / "tinyperson-yolo" / "annotations" / "tiny_set_train_with_dense.json"
+    if not annotation_source.is_file():
+        raise FileNotFoundError(annotation_source)
+
+    output_dir = RUN_ROOT / "eval" / name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    annotations = _subset_annotations(
+        annotation_source, data_yaml, split, output_dir / f"annotations_{split}.json"
+    )
+
+    command = [
+        sys.executable,
+        "/root/scripts/evaluate_checkpoint.py",
+        "--checkpoint", str(checkpoint),
+        "--annotations", str(annotations),
+        "--data", str(data_yaml),
+        "--output", str(output_dir),
+        "--split", split,
+        "--imgsz", "1280",
+        "--batch-size", "8",
+        "--device", "cuda:0",
+        "--workers", "4",
+    ]
+    print("-->", " ".join(command), flush=True)
+    completed = subprocess.run(
+        command,
+        cwd="/root",
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+    )
+    print(completed.stdout[-4000:], flush=True)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"evaluation failed ({completed.returncode})\n"
+            f"{completed.stdout[-4000:]}\n{completed.stderr[-4000:]}"
+        )
+    summary = json.loads((output_dir / "summary.json").read_text())
+    runs.commit()
+    return {
+        "name": name,
+        "checkpoint": str(checkpoint),
+        "output": str(output_dir),
+        "summary": summary,
+    }
+
+
+@app.local_entrypoint()
+def evaluate_checkpoint(
+    checkpoint: str,
+    name: str,
+    split: str = "val",
+):
+    """Evaluate one checkpoint with the repository stack (benchmark + oracles + error analysis).
+
+    `checkpoint` is a path inside the runs Volume, either absolute or relative to its root.
+    """
+    result = _run_checkpoint_evaluation.remote(checkpoint, name, split)
+    output = Path("reports/eval")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
+    summary = result["summary"]
+    print(json.dumps({
+        "name": name,
+        "checkpoint": result["checkpoint"],
+        "benchmark_all": summary.get("benchmark", {}).get("all"),
+        "oracle_AP75": {
+            arm: value["metrics"]["all"]["AP@0.75"]
+            for arm, value in (summary.get("oracle") or {}).items()
+            if isinstance(value, dict) and "metrics" in value
+        },
+    }, indent=2))
+
+
+
+
+
+
+
+
+@app.function(
+    image=image,
+    gpu="A10",
+    min_containers=0,
+    buffer_containers=0,
+    scaledown_window=2,
+    cpu=CPU_LIMIT,
+    memory=MEMORY_LIMIT_MB,
+    max_containers=2,
+    volumes=mounts,
+    timeout=10800,
+)
+def _run_tiled_checkpoint_evaluation(relative_checkpoint: str, name: str):
+    """Run tiled crop + merge evaluation (640x512, overlap 100) on test split."""
+    import json
+
+    from PIL import Image
+    from ultralytics import YOLO
+
+    from tinydet.evaluation.tiled_inference import predict_tiled_image
+    from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
+    from tinydet.models.ultralytics import register_ultralytics_modules
+    from tinydet.utils.dataset import normalize_dataset_yaml
+
+    register_ultralytics_modules()
+    runs.reload()
+    data.reload()
+
+    checkpoint = Path(relative_checkpoint)
+    if not checkpoint.is_absolute():
+        checkpoint = RUN_ROOT / relative_checkpoint
+    if not checkpoint.is_file():
+        raise FileNotFoundError(checkpoint)
+
+    model = YOLO(checkpoint)
+    # Use the filtered 786-image test annotations
+    data_yaml = normalize_dataset_yaml(DATA_ROOT / "tinyperson-yolo" / "data.yaml")
+    raw_annotation_source = DATA_ROOT / "tinyperson-yolo" / "annotations" / "tiny_set_test_with_dense.json"
+    if not raw_annotation_source.is_file():
+        raise FileNotFoundError(raw_annotation_source)
+
+    output_dir = RUN_ROOT / "eval" / name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    annotation_source = _subset_annotations(
+        raw_annotation_source, data_yaml, "test", output_dir / "annotations_test.json"
+    )
+
+    data_payload = json.loads(annotation_source.read_text())
+    image_dir = DATA_ROOT / "tinyperson-yolo" / "images" / "test"
+
+    predictions = []
+    print(f"--> Starting tiled inference for {len(data_payload['images'])} images...", flush=True)
+
+    for idx, img_info in enumerate(data_payload["images"]):
+        file_name = img_info["file_name"]
+        basename = Path(file_name).name
+        img_path = image_dir / basename
+        if not img_path.is_file():
+            # Check recursive
+            found = list(image_dir.rglob(basename))
+            if found:
+                img_path = found[0]
+            else:
+                continue
+
+        with Image.open(img_path) as pil_img:
+            boxes, scores, classes = predict_tiled_image(
+                model=model,
+                img=pil_img,
+                tile_w=640,
+                tile_h=512,
+                overlap=100,
+                conf=0.001,
+                merge_iou=0.50,
+                nms_pre=2000,
+                max_per_img=1000,
+                device="cuda:0",
+            )
+
+        predictions.append({
+            "path": str(img_path),
+            "boxes": boxes,
+            "scores": scores,
+            "classes": classes,
+        })
+        if (idx + 1) % 100 == 0:
+            print(f"    Processed {idx + 1}/{len(data_payload['images'])} images...", flush=True)
+
+    pred_file = output_dir / "predictions_tiled.json"
+    pred_file.write_text(json.dumps({"images": predictions}))
+
+    print("--> Running standardized TinyPerson benchmark on merged predictions...", flush=True)
+    bench_result = evaluate_tinyperson(annotation_source, pred_file, workers=4)
+    (output_dir / "benchmark.json").write_text(json.dumps(bench_result, indent=2))
+
+    summary = {
+        "checkpoint": str(checkpoint),
+        "name": name,
+        "protocol": "Tiled crop 640x512 + NMS merge 0.50",
+        "benchmark": bench_result,
+    }
+    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    runs.commit()
+
+    return {
+        "name": name,
+        "checkpoint": str(checkpoint),
+        "summary": summary,
+    }
+
+
+@app.function(
+    image=image,
+    gpu="A10",
+    min_containers=0,
+    buffer_containers=0,
+    scaledown_window=2,
+    cpu=CPU_LIMIT,
+    memory=MEMORY_LIMIT_MB,
+    max_containers=4,
+    volumes=mounts,
+    timeout=3600,
+)
+def _run_visdrone_val(relative_checkpoint: str, name: str, split: str = "val"):
+    """Evaluate a checkpoint on VisDrone dataset using YOLO validator."""
+    import json
+
+    from ultralytics import YOLO
+
+    from tinydet.models.ultralytics import register_ultralytics_modules
+
+    register_ultralytics_modules()
+    runs.reload()
+    data.reload()
+
+    checkpoint = Path(relative_checkpoint)
+    if not checkpoint.is_absolute():
+        checkpoint = RUN_ROOT / relative_checkpoint
+    if not checkpoint.is_file():
+        raise FileNotFoundError(checkpoint)
+
+    data_yaml = str(DATA_ROOT / "visdrone-yolo" / "data.yaml")
+    output_dir = RUN_ROOT / "eval" / name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"--> Validating {checkpoint} on VisDrone {split} split...", flush=True)
+    model = YOLO(str(checkpoint))
+    metrics = model.val(
+        data=data_yaml,
+        split=split,
+        imgsz=1280,
+        batch=8,
+        workers=4,
+        device="cuda:0",
+        project=str(output_dir.parent),
+        name=name,
+        exist_ok=True,
+        plots=False,
+    )
+
+    results = {
+        "checkpoint": str(checkpoint),
+        "name": name,
+        "split": split,
+        "map50_95": float(metrics.box.map),
+        "map50": float(metrics.box.map50),
+        "map75": float(metrics.box.map75),
+        "maps_per_class": [float(x) for x in metrics.box.maps],
+        "precision": float(metrics.box.mp),
+        "recall": float(metrics.box.mr),
+    }
+
+    result_file = output_dir / "val_summary.json"
+    result_file.write_text(json.dumps(results, indent=2))
+    runs.commit()
+    print(f"--> Validation completed: mAP50={results['map50']:.4f}, mAP50-95={results['map50_95']:.4f}", flush=True)
+    return results

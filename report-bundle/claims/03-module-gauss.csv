@@ -1,0 +1,12 @@
+id,section,sentence,claim_type,evidence_ref,source_verified,strength,action,note
+C301,3.1,"Module nhận C2(64ch), P3(64ch), P4(128ch), xuất 32 kênh cho đầu dò P2",SELF,"config yaml + src/tinydet/modules/dcaf.py",Y,ABSOLUTE,KEEP,"Đọc trực tiếp từ code và config"
+C302,3.1,"Detect nối trên [P2_GauSS, P3, P4, P5]",SELF,"config yaml tầng 30",Y,ABSOLUTE,KEEP,"Config: [[20,23,26,29],1,Detect,[nc]]"
+C303,3.1,"Bổ sung 34.666 tham số",SELF,"Bảng 4.7",Y,ABSOLUTE,KEEP,"Khớp model info"
+C304,3.2.1,"Phân rã Bh=X-L1, Bm=L1-L2, Bl=L2 qua Gaussian separable 1D",SELF,"src/tinydet/modules/dcaf.py Block 1",Y,ABSOLUTE,KEEP,"Đã đối chiếu code; lý thuyết Gaussian cần nguồn bên ngoài ở báo cáo"
+C305,3.2.2,"Bốn tham số sigma theo kênh, chặn sigmoid, init 0,65/1,45",SELF,"src/tinydet/modules/dcaf.py",Y,ABSOLUTE,KEEP,"Đọc trực tiếp từ implementation; cần rà giá trị init chính xác trong code trước xuất bản"
+C306,3.2.2,"Sigma được tham số hóa riêng theo trục x/y từng kênh",SELF,"src/tinydet/modules/dcaf.py",Y,ABSOLUTE,KEEP,"Không suy diễn về hình dạng người/sóng biển nếu chưa phân tích log"
+C307,3.3,"Router sinh ba trọng số softmax cho dải tần và một cổng sigmoid trộn detail/structure theo vị trí",SELF,"src/tinydet/modules/dcaf.py lines 361-389",Y,ABSOLUTE,KEEP,""
+C308,3.3,"Nhánh detail nhận gamma_h * dải cao trực tiếp; nhánh structure nhận dải thấp qua saliency attenuation",SELF,"src/tinydet/modules/dcaf.py lines 373-389",Y,ABSOLUTE,KEEP,"Không phải P3 làm neo biên"
+C309,3.3,"reg_max=1 giữ nguyên cấu hình detect head",SELF,"config yaml + Mục 4.3",Y,ABSOLUTE,KEEP,"Không khẳng định cô lập hoàn hảo biến số"
+C310,3.4,"Ảnh vào 1280, bản đồ P2 320x320",SELF,"Mục 4.2",Y,ABSOLUTE,KEEP,"stride 4"
+C311,3.2.1,"Gaussian scale-space là cơ sở lý thuyết của phép làm mượt đa tỷ lệ",CIT,"Lindeberg, 1994; references/danh-muc.md chưa có",Y,MODERATE,CITE,"Đã xác minh metadata Crossref; placeholder giữ tới khi người dùng thêm danh mục"

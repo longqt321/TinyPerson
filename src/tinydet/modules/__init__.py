@@ -1,17 +1,27 @@
-"""Tiny object detection modules: QAC and QAC v2."""
+"""Tiny object detection modules: DCAF v2.1."""
 
-from tinydet.modules.qac import QACDetect, QualityAwareDetectionLoss, QualityAwareE2ELoss
-from tinydet.modules.qac_v2 import (
-    QACDetectV2,
-    QualityAwareDetectionLossV2,
-    QualityAwareE2ELossV2,
+from tinydet.modules.dcaf import (
+    CONTROL_PARAM_SUFFIXES,
+    DCAF,
+    BandBranch,
+    DilatedContextBranch,
+    LearnableGaussianScaleSpace,
+    RefinementBranch,
+    collect_dcaf_control_params,
+    compute_dcaf_analytical_macs,
+    configure_dcaf_control_param_group,
+    is_dcaf_control_param_name,
 )
 
 __all__ = [
-    "QACDetect",
-    "QACDetectV2",
-    "QualityAwareDetectionLoss",
-    "QualityAwareDetectionLossV2",
-    "QualityAwareE2ELoss",
-    "QualityAwareE2ELossV2",
+    "CONTROL_PARAM_SUFFIXES",
+    "DCAF",
+    "BandBranch",
+    "DilatedContextBranch",
+    "LearnableGaussianScaleSpace",
+    "RefinementBranch",
+    "collect_dcaf_control_params",
+    "compute_dcaf_analytical_macs",
+    "configure_dcaf_control_param_group",
+    "is_dcaf_control_param_name",
 ]

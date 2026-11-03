@@ -18,4 +18,4 @@ def log_ap_by_iou(trainer, wandb_enabled: bool = False) -> None:
         import wandb
 
         if wandb.run is not None:
-            wandb.log({f"metrics/{name}(B)": value for name, value in values.items()}, step=epoch, commit=False)
+            wandb.log({f"metrics/{name}(B)": value for name, value in values.items()}, commit=False)

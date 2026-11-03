@@ -1,0 +1,38 @@
+{
+  "baseline": {
+    "params": 2516240,
+    "flops_1280_gflops": 31.97,
+    "flops_640_gflops": 7.62,
+    "performance": {
+      "full_1280": {
+        "latency_ms": 11.85,
+        "fps": 84.4,
+        "peak_vram_mb": 244.65
+      },
+      "tiled_640x512": {
+        "latency_ms": 11.28,
+        "fps": 88.6,
+        "peak_vram_mb": 91.51
+      }
+    },
+    "gpu": "NVIDIA A10G"
+  },
+  "dcaf_v2_1": {
+    "params": 2550906,
+    "flops_1280_gflops": 33.99,
+    "flops_640_gflops": 8.13,
+    "performance": {
+      "full_1280": {
+        "latency_ms": 16.58,
+        "fps": 60.3,
+        "peak_vram_mb": 367.16
+      },
+      "tiled_640x512": {
+        "latency_ms": 15.19,
+        "fps": 65.8,
+        "peak_vram_mb": 122.1
+      }
+    },
+    "gpu": "NVIDIA A10G"
+  }
+}

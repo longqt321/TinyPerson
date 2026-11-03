@@ -1,0 +1,11 @@
+id,section,sentence,claim_type,evidence_ref,source_verified,strength,action,note
+C201,2.1.1,"TinyPerson định nghĩa các nhóm kích thước theo AS=sqrt(w*h)",CIT,"[1]",Y,MODERATE,KEEP,"Đã đọc nguồn CVF; citation khớp danh mục"
+C202,2.1.1,"TinyPerson dùng Miss Rate trong benchmark phát hiện người tí hon",CIT,"Yu et al., WACV 2020; references/danh-muc.md chưa có",Y,MODERATE,CITE,"Đã đọc paper; cần đưa nguồn vào danh mục trước khi thay placeholder"
+C203,2.1.2,"FPN xây dựng đặc trưng đa tỷ lệ; P2-P5 với stride 4,8,16,32 là cấu hình detector nghiên cứu này",CIT,"Lin et al., CVPR 2017; references/danh-muc.md chưa có",Y,MODERATE,CITE,"Đã đọc proceedings; cần mục tài liệu tham khảo"
+C204,2.2.1,"Scale-space biểu diễn cấu trúc ở nhiều tỷ lệ bằng làm trơn Gaussian",CIT,"Lindeberg, 1994; DOI 10.1080/757582976; references/danh-muc.md chưa có",Y,MODERATE,CITE,"Metadata xác minh qua Crossref; không dùng DOI sai 10.1080/02664769400000058"
+C205,2.2.1,"Gaussian scale-space xuất hiện trong phương pháp SIFT",CIT,"Lowe, IJCV 2004; DOI 10.1023/B:VISI.0000029664.99615.94; references/danh-muc.md chưa có",Y,MODERATE,CITE,"Đã đọc abstract và metadata Springer; cần mục tài liệu tham khảo"
+C206,2.2.2,"FcaNet dùng phân tích tần số tạo biểu diễn đa phổ cho attention kênh; khác phân rã Gaussian không gian trong neck GauSS",CIT,"Qin et al., ICCV 2021; references/danh-muc.md chưa có",Y,MODERATE,CITE,"Đã đọc abstract và proceedings ICCV; cần mục tài liệu tham khảo"
+C207,2.2.3,"Ba dải Bh,Bm,Bl tương đương Laplacian pyramid hai lớp với sigma học được",SELF,"Công thức Mục 2.2.3 / code dcaf.py",Y,MODERATE,KEEP,"Cấu trúc đúng theo triển khai"
+C208,2.3.1,"YOLO26n có 2.516.240 tham số; cấu hình nghiên cứu dùng P2",SELF,"Mục 4.7, model info và config model",Y,ABSOLUTE,KEEP,"Anchor-free bỏ khỏi claim; tài liệu hiện tại không đủ xác nhận kiến trúc cụ thể"
+C209,2.3.2,"Tập test TinyBenchmark hiện tại: 786 ảnh, 13.687 GT dương",SELF,"Mục 4.2 / evaluator logs",Y,ABSOLUTE,KEEP,"Giao thức thực nghiệm nội bộ"
+C210,2.3.1,"YOLO26 hỗ trợ head end-to-end tùy chọn và detection head loại DFL",CIT,"Ultralytics YOLO26 docs; references/danh-muc.md chưa có",Y,MODERATE,CITE,"Đã đọc tài liệu chính thức; cần mục tài liệu tham khảo"

@@ -1,0 +1,86 @@
+[
+  {
+    "id": "fig-2-1",
+    "type": "chart",
+    "chart": "bar",
+    "data": "data/ket-qua-thuc-nghiem.csv",
+    "x": "mo_hinh",
+    "y": [
+      "f1_macro"
+    ],
+    "x_label": "Mô hình",
+    "y_label": "Độ đo F1 (macro)",
+    "y_unit": "không thứ nguyên",
+    "decimals": 2,
+    "output": "fig-2-1.png"
+  },
+  {
+    "id": "fig-2-2",
+    "type": "chart",
+    "chart": "line",
+    "data": "data/hoc-curve.csv",
+    "x": "epoch",
+    "y": [
+      "loss_train",
+      "loss_val"
+    ],
+    "series_labels": [
+      "Huấn luyện",
+      "Kiểm định"
+    ],
+    "x_label": "Epoch",
+    "y_label": "Hàm mất mát",
+    "y_unit": "không thứ nguyên",
+    "decimals": 3,
+    "output": "fig-2-2.png"
+  },
+  {
+    "id": "fig-2-3",
+    "type": "chart",
+    "chart": "grouped_bar",
+    "data": "data/ket-qua-thuc-nghiem.csv",
+    "x": "mo_hinh",
+    "y": [
+      "f1_macro",
+      "f1_micro"
+    ],
+    "series_labels": [
+      "Macro",
+      "Micro"
+    ],
+    "x_label": "Mô hình",
+    "y_label": "Độ đo F1",
+    "y_unit": "không thứ nguyên",
+    "decimals": 2,
+    "output": "fig-2-3.png"
+  },
+  {
+    "id": "tab-2-1",
+    "type": "table",
+    "data": "data/ket-qua-thuc-nghiem.csv",
+    "columns": [
+      "mo_hinh",
+      "f1_macro",
+      "f1_micro",
+      "thoi_gian_ms"
+    ],
+    "headers": {
+      "mo_hinh": "Mô hình",
+      "f1_macro": "F1 macro",
+      "f1_micro": "F1 micro",
+      "thoi_gian_ms": "Thời gian (ms)"
+    },
+    "decimals": {
+      "f1_macro": 2,
+      "f1_micro": 2,
+      "thoi_gian_ms": 0
+    },
+    "output": "tab-2-1.md"
+  },
+  {
+    "id": "fig-1-1",
+    "type": "manual",
+    "source": "so-do-he-thong.png",
+    "output": "fig-1-1.png"
+  }
+]

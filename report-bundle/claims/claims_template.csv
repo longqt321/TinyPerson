@@ -1,0 +1,4 @@
+id,section,sentence,claim_type,evidence_ref,source_verified,strength,action,note
+C001,1.1 Đặt vấn đề,"Học sâu đạt độ chính xác cao hơn học máy truyền thống trên nhiều bài toán phân loại ảnh [3], [4].",CIT,"[3],[4]",N,MODERATE,CITE,"Chưa đọc [3],[4]. Cần kiểm tra trước khi giữ."
+C002,4.2 Kết quả,"Mô hình đề xuất đạt F1 = 0,87 trên tập kiểm tra.",SELF,"Bảng 3",Y,MODERATE,KEEP,"Khớp results/run_01.json"
+C003,5 Kết luận,"Phương pháp hoàn toàn vượt trội so với các baseline.",SELF,"Bảng 3",N,ABSOLUTE,REWRITE,"Chỉ vượt baseline B1,B2 trên tập X; không hoàn toàn."

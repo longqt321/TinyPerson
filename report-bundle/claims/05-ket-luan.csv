@@ -1,0 +1,5 @@
+id,section,sentence,claim_type,evidence_ref,source_verified,strength,action,note
+C501,5.1,"Tóm lược: AP50 all 12,94 vs 11,95; tiny2 9,50 vs 6,90; MR50 tiny2 93,52 vs 95,10",SELF,"Chương 4",Y,ABSOLUTE,KEEP,"Lặp lại số liệu đã dẫn nguồn ở C406-C408"
+C502,5.1,"65,8 FPS tiled / 60,3 FPS full-frame, trên ngưỡng 30 FPS",SELF,"Mục 4.7",Y,MODERATE,KEEP,"Chỉ trên A10G; không khẳng định cho thiết bị biên"
+C503,5.1,"Một seed duy nhất; full-frame tăng nhỏ hơn tiled; chưa có ablation",SELF,"Mục 4.9",Y,ABSOLUTE,KEEP,"Hạn chế tự khai, giữ trong kết luận"
+C504,5.2,"Đề xuất ablation, VisDrone, cảnh đông",OPINION,"Hướng tương lai",N,WEAK,KEEP,"Đề xuất, không phải khẳng định kết quả"

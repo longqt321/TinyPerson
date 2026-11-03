@@ -1,0 +1,10 @@
+---
+title: "Tên đề tài đồ án"
+subtitle: "Đồ án môn học"
+author:
+  - "Họ và tên sinh viên"
+date: "Tháng 11 năm 2026"
+lang: vi
+# Chỉ cần khi xuất PDF bằng xelatex; đặt tên font có sẵn trong máy bạn:
+# mainfont: "Times New Roman"
+---

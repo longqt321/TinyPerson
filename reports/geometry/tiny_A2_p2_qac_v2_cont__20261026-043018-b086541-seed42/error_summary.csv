@@ -1,0 +1,2 @@
+model,checkpoint,run_status,completed_epochs,images,objects,detected,misses,localization_errors,false_positives,background_fp,duplicate,localization_fp,recall_conf025_iou050
+A2,/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/tiny_A2_p2_qac_v2_cont/20261026-043018-b086541-seed42/checkpoints/best.pt,unknown,0,84,3608,1377,948,1283,2996,1055,558,1383,0.3816518847006652

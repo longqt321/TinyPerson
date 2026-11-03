@@ -1,0 +1,150 @@
+{
+  "name": "baseline_tinyperson_tiled",
+  "checkpoint": "/mnt/runs/baseline_tinyperson_wacv/20261102-073649-c626816-seed42/training/weights/last.pt",
+  "summary": {
+    "checkpoint": "/mnt/runs/baseline_tinyperson_wacv/20261102-073649-c626816-seed42/training/weights/last.pt",
+    "name": "baseline_tinyperson_tiled",
+    "protocol": "Tiled crop 640x512 + NMS merge 0.50",
+    "benchmark": {
+      "all": {
+        "AP@0.25": 0.17515927798550548,
+        "MR@0.25": 0.9472005065634056,
+        "AP@0.50": 0.10017739809032518,
+        "MR@0.50": 0.9749397238255278,
+        "AP@0.75": 0.0060452708656795525,
+        "MR@0.75": 0.9972155248695032,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.09379398231383675,
+        "positive_ground_truths": 13687
+      },
+      "tiny": {
+        "AP@0.25": 0.12171174517979988,
+        "MR@0.25": 0.9519160972190934,
+        "AP@0.50": 0.07064458047829171,
+        "MR@0.50": 0.9740306875923006,
+        "AP@0.75": 0.01215150463798868,
+        "MR@0.75": 0.9966959525418638,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.06816927676536008,
+        "positive_ground_truths": 8878
+      },
+      "tiny1": {
+        "AP@0.25": 0.06054704071924981,
+        "MR@0.25": 0.9552793256179454,
+        "AP@0.50": 0.032035683038022074,
+        "MR@0.50": 0.970614849740439,
+        "AP@0.75": 0.0012359633328865268,
+        "MR@0.75": 0.9969043196647139,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.031272895696719476,
+        "positive_ground_truths": 2333
+      },
+      "tiny2": {
+        "AP@0.25": 0.10700871115839461,
+        "MR@0.25": 0.9324054075673947,
+        "AP@0.50": 0.05955161623197033,
+        "MR@0.50": 0.9607231421486281,
+        "AP@0.75": 0.0033638686738554136,
+        "MR@0.75": 0.994080473562115,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.05664139868807345,
+        "positive_ground_truths": 2778
+      },
+      "tiny3": {
+        "AP@0.25": 0.17716780402561258,
+        "MR@0.25": 0.911807214700764,
+        "AP@0.50": 0.10840203234684555,
+        "MR@0.50": 0.9474087838834322,
+        "AP@0.75": 0.015062128966594429,
+        "MR@0.75": 0.9913871928737871,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.10021065511301752,
+        "positive_ground_truths": 3767
+      },
+      "small": {
+        "AP@0.25": 0.2617091214273455,
+        "MR@0.25": 0.8466353677621282,
+        "AP@0.50": 0.15510765881103772,
+        "MR@0.50": 0.9141515761234069,
+        "AP@0.75": 0.010834082369868292,
+        "MR@0.75": 0.9857813547954394,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.14255028753608381,
+        "positive_ground_truths": 2485
+      },
+      "reasonable": {
+        "AP@0.25": 0.3216051159585825,
+        "MR@0.25": 0.8395964811627462,
+        "AP@0.50": 0.17670147334128797,
+        "MR@0.50": 0.9107860011474469,
+        "AP@0.75": 0.009988804842169718,
+        "MR@0.75": 0.9870434117422069,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.16943179804734673,
+        "positive_ground_truths": 2324
+      },
+      "protocol": {
+        "name": "TinyPerson documented protocol; standalone implementation",
+        "annotation_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_tiled/annotations_test.json",
+        "predictions_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_tiled/predictions_tiled.json",
+        "source_images": 786,
+        "dense_images_excluded": 0,
+        "images_evaluated": 786,
+        "max_detections_per_image": 200,
+        "iou_thresholds": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "size_ranges_sqrt_area_px_inclusive": {
+          "all": [
+            2.0,
+            100000.0,
+            true,
+            true
+          ],
+          "tiny": [
+            2.0,
+            20.0,
+            true,
+            true
+          ],
+          "tiny1": [
+            2.0,
+            8.0,
+            true,
+            false
+          ],
+          "tiny2": [
+            8.0,
+            12.0,
+            true,
+            false
+          ],
+          "tiny3": [
+            12.0,
+            20.0,
+            true,
+            true
+          ],
+          "small": [
+            20.0,
+            32.0,
+            false,
+            true
+          ],
+          "reasonable": [
+            32.0,
+            100000.0,
+            false,
+            true
+          ]
+        },
+        "ignored_annotations": {
+          "uncertain": 2832,
+          "ignore": 1989
+        },
+        "matching": {
+          "normal_positive": "IoU",
+          "ignore_uncertain": "IoU match or intersection over detection (IoD)",
+          "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored"
+        },
+        "ap_interpolation": "101-point precision envelope",
+        "warning": "Validate this standalone evaluator against the pinned TinyBenchmark reference before using its scores as publication results."
+      }
+    }
+  }
+}

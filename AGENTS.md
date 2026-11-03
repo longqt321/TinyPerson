@@ -20,3 +20,10 @@ Before changing experiments or results, read:
 
 Run `git status` before editing. Do not commit datasets, checkpoints, run artifacts,
 or generated predictions.
+
+## Research reporting
+
+- For requests to write or revise a paper, report, related work, benchmark analysis, or submission draft, use `.claude/skills/ai-research-report/SKILL.md`.
+- Read `docs/report/00_state.md` first when it exists; continue from its recorded phase.
+- Ground every result in repository evidence. Verify citations against primary sources; never invent values, metadata, or references.
+- Follow all six literature layers in the skill's `references/search-strategy.md`.

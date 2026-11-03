@@ -1,0 +1,4 @@
+model,checkpoint,run_status,completed_epochs,images,objects,detected,misses,localization_errors,false_positives,background_fp,duplicate,localization_fp,recall_conf025_iou050
+QAC_v3_ep50,/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/tiny_A2_p2_qac_v3/20261026-110551-6fceb3b-seed42/stage1/weights/best.pt,FAILED,50,84,3608,787,1249,1572,817,220,155,442,0.21812638580931265
+DFL16_ep50,/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/tiny_A2_p2_dfl16/20261026-110551-6fceb3b-seed42/stage1/weights/best.pt,COMPLETED,50,84,3608,849,1115,1644,982,250,193,539,0.23531042128603105
+DFL16_ep100,/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/tiny_A2_p2_dfl16/20261026-110551-6fceb3b-seed42/checkpoints/best.pt,unknown,0,84,3608,1039,1082,1487,1293,362,291,640,0.2879711751662971

@@ -41,17 +41,26 @@ def update_status(run: Path, status: str, error: str | None = None) -> None:
     write_json(run / "metadata.json", value)
 
 
-def create_run(config: ExperimentConfig, source_git: tuple[str, bool] | None = None) -> Path:
+def create_run(
+    config: ExperimentConfig,
+    source_git: tuple[str, bool] | None = None,
+    run_id: str | None = None,
+) -> Path:
     commit, dirty = source_git if source_git is not None else git_info()
-    now = datetime.now(UTC)
-    run_id = f"{now:%Y%m%d-%H%M%S}-{commit}-seed{config.seed}"
+    if run_id is None:
+        now = datetime.now(UTC)
+        run_id = f"{now:%Y%m%d-%H%M%S}-{commit}-seed{config.seed}"
+    else:
+        now = datetime.now(UTC)
     root = Path(config.output["root"]) / config.name
     run = root / run_id
+    if run.exists() and (run / "metadata.json").is_file():
+        return run
     suffix = 1
-    while run.exists():
+    while run.exists() and run_id is None:
         run = root / f"{run_id}-{suffix}"
         suffix += 1
-    run.mkdir(parents=True)
+    run.mkdir(parents=True, exist_ok=True)
     (run / "config.yaml").write_text(yaml.safe_dump(asdict(config), sort_keys=False))
     packages = {name: version(name) for name in ("torch", "torchvision", "ultralytics", "numpy", "opencv-python-headless")}
     gpu = torch.cuda.get_device_name() if torch.cuda.is_available() else None

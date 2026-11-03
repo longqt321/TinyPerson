@@ -3,8 +3,16 @@ from pathlib import Path
 import yaml
 
 
-def load_comparison(path: str | Path) -> list[dict]:
-    raw = yaml.safe_load(Path(path).read_text())
+def load_comparison(path: str | Path | None = None, raw_text: str | None = None) -> list[dict]:
+    if raw_text is not None:
+        raw = yaml.safe_load(raw_text)
+    else:
+        if path is None:
+            raise ValueError("Either path or raw_text must be provided")
+        p = Path(path)
+        if not p.is_file() and (Path("/root") / path).is_file():
+            p = Path("/root") / path
+        raw = yaml.safe_load(p.read_text())
     if not isinstance(raw, dict):
         raise TypeError("Comparison config must be a YAML mapping")
     if ("seed" in raw) == ("seeds" in raw):
@@ -17,6 +25,10 @@ def load_comparison(path: str | Path) -> list[dict]:
     shared = {key: raw[key] for key in ("data", "train", "hardware", "output")}
     if "diagnostics" in raw:
         shared["diagnostics"] = raw["diagnostics"]
+    if "stage2" in raw:
+        shared["stage2"] = raw["stage2"]
+    if "two_stage" in raw:
+        shared["two_stage"] = raw["two_stage"]
     models = raw.get("models")
     if not isinstance(models, list) or not models:
         raise ValueError("models must be a nonempty list")
@@ -43,7 +55,12 @@ def load_comparison(path: str | Path) -> list[dict]:
             continue
         if "config" not in model:
             raise ValueError(f"Model needs config or run: {name}")
-        if not Path(model["config"]).is_file():
+        m_cfg = Path(model["config"])
+        if not m_cfg.is_file() and (Path("/root") / model["config"]).is_file():
+            model["config"] = str(Path("/root") / model["config"])
+            m_cfg = Path(model["config"])
+        if not m_cfg.is_file():
+            raise ValueError(f"Model config does not exist: {model['config']}")
             raise ValueError(f"Model config does not exist: {model['config']}")
         pretrained = model.get("pretrained")
         if pretrained is not None and not isinstance(pretrained, str):

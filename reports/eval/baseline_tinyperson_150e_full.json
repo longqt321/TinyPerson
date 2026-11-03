@@ -1,0 +1,811 @@
+{
+  "name": "baseline_tinyperson_150e_full",
+  "checkpoint": "/mnt/runs/baseline_tinyperson_wacv/20261102-092728-c626816-seed42/training/weights/last.pt",
+  "output": "/mnt/runs/eval/baseline_tinyperson_150e_full",
+  "summary": {
+    "checkpoint": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/baseline_tinyperson_wacv/20261102-092728-c626816-seed42/training/weights/last.pt",
+    "checkpoint_sha256": "6bc1da0da9a0128d3dfffac2107fa8020e128f9dbcb42e3a781e57f2aaa8d802",
+    "annotations": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/annotations_test.json",
+    "data": "/tmp/tinydet-dataset-yaml/381cd2ed6a0ea77d/data.yaml",
+    "split": "test",
+    "imgsz": 1280,
+    "conf": 0.001,
+    "benchmark": {
+      "all": {
+        "AP@0.25": 0.2065166792539592,
+        "MR@0.25": 0.9264021821192858,
+        "AP@0.50": 0.12430664691040512,
+        "MR@0.50": 0.9715626344544296,
+        "AP@0.75": 0.019643827769052973,
+        "MR@0.75": 0.9952996760916686,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.11682238464447244,
+        "positive_ground_truths": 13687
+      },
+      "tiny": {
+        "AP@0.25": 0.16781394645491476,
+        "MR@0.25": 0.9100022527596305,
+        "AP@0.50": 0.09971698199851484,
+        "MR@0.50": 0.9574103276513729,
+        "AP@0.75": 0.009789631133641494,
+        "MR@0.75": 0.9937298190283097,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.09244018652902371,
+        "positive_ground_truths": 8878
+      },
+      "tiny1": {
+        "AP@0.25": 0.10792272007003771,
+        "MR@0.25": 0.9155593656236606,
+        "AP@0.50": 0.05658735079166245,
+        "MR@0.50": 0.9518026384721625,
+        "AP@0.75": 0.006371503292061489,
+        "MR@0.75": 0.9909510882507025,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.05696052471792055,
+        "positive_ground_truths": 2333
+      },
+      "tiny2": {
+        "AP@0.25": 0.16277965424153137,
+        "MR@0.25": 0.8801695864330853,
+        "AP@0.50": 0.09895758335028569,
+        "MR@0.50": 0.9307655387568994,
+        "AP@0.75": 0.012882331061686618,
+        "MR@0.75": 0.990280777537797,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.09153985621783456,
+        "positive_ground_truths": 2778
+      },
+      "tiny3": {
+        "AP@0.25": 0.20911229645017965,
+        "MR@0.25": 0.8662065303955403,
+        "AP@0.50": 0.12825383379385474,
+        "MR@0.50": 0.928885349379111,
+        "AP@0.75": 0.011971319264420462,
+        "MR@0.75": 0.9873462525440225,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.11644581650281828,
+        "positive_ground_truths": 3767
+      },
+      "small": {
+        "AP@0.25": 0.2569707327235441,
+        "MR@0.25": 0.8270064833445114,
+        "AP@0.50": 0.15804682023380406,
+        "MR@0.50": 0.9122289291303376,
+        "AP@0.75": 0.020741512776425157,
+        "MR@0.75": 0.9844399731723674,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.14525302191125777,
+        "positive_ground_truths": 2485
+      },
+      "reasonable": {
+        "AP@0.25": 0.34986531665202103,
+        "MR@0.25": 0.8002486135016255,
+        "AP@0.50": 0.21803640231396262,
+        "MR@0.50": 0.8979250334672021,
+        "AP@0.75": 0.03885014027279366,
+        "MR@0.75": 0.9755211321476381,
+        "AP_mean_IoU_0.25_0.50_0.75": 0.2022506197462591,
+        "positive_ground_truths": 2324
+      },
+      "protocol": {
+        "name": "TinyPerson documented protocol; standalone implementation",
+        "annotation_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/annotations_test.json",
+        "predictions_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/predictions.json",
+        "source_images": 786,
+        "dense_images_excluded": 0,
+        "images_evaluated": 786,
+        "max_detections_per_image": 200,
+        "iou_thresholds": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "size_ranges_sqrt_area_px_inclusive": {
+          "all": [
+            2.0,
+            100000.0,
+            true,
+            true
+          ],
+          "tiny": [
+            2.0,
+            20.0,
+            true,
+            true
+          ],
+          "tiny1": [
+            2.0,
+            8.0,
+            true,
+            false
+          ],
+          "tiny2": [
+            8.0,
+            12.0,
+            true,
+            false
+          ],
+          "tiny3": [
+            12.0,
+            20.0,
+            true,
+            true
+          ],
+          "small": [
+            20.0,
+            32.0,
+            false,
+            true
+          ],
+          "reasonable": [
+            32.0,
+            100000.0,
+            false,
+            true
+          ]
+        },
+        "ignored_annotations": {
+          "uncertain": 2832,
+          "ignore": 1989
+        },
+        "matching": {
+          "normal_positive": "IoU",
+          "ignore_uncertain": "IoU match or intersection over detection (IoD)",
+          "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored"
+        },
+        "ap_interpolation": "101-point precision envelope",
+        "warning": "Validate this standalone evaluator against the pinned TinyBenchmark reference before using its scores as publication results."
+      }
+    },
+    "oracle": {
+      "baseline": {
+        "metrics": {
+          "all": {
+            "AP@0.25": 0.2065166792539592,
+            "MR@0.25": 0.9264021821192858,
+            "AP@0.50": 0.12430664691040512,
+            "MR@0.50": 0.9715626344544296,
+            "AP@0.75": 0.019643827769052973,
+            "MR@0.75": 0.9952996760916686,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.11682238464447244,
+            "positive_ground_truths": 13687
+          },
+          "tiny": {
+            "AP@0.25": 0.16781394645491476,
+            "MR@0.25": 0.9100022527596305,
+            "AP@0.50": 0.09971698199851484,
+            "MR@0.50": 0.9574103276513729,
+            "AP@0.75": 0.009789631133641494,
+            "MR@0.75": 0.9937298190283097,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.09244018652902371,
+            "positive_ground_truths": 8878
+          },
+          "tiny1": {
+            "AP@0.25": 0.10792272007003771,
+            "MR@0.25": 0.9155593656236606,
+            "AP@0.50": 0.05658735079166245,
+            "MR@0.50": 0.9518026384721625,
+            "AP@0.75": 0.006371503292061489,
+            "MR@0.75": 0.9909510882507025,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.05696052471792055,
+            "positive_ground_truths": 2333
+          },
+          "tiny2": {
+            "AP@0.25": 0.16277965424153137,
+            "MR@0.25": 0.8801695864330853,
+            "AP@0.50": 0.09895758335028569,
+            "MR@0.50": 0.9307655387568994,
+            "AP@0.75": 0.012882331061686618,
+            "MR@0.75": 0.990280777537797,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.09153985621783456,
+            "positive_ground_truths": 2778
+          },
+          "tiny3": {
+            "AP@0.25": 0.20911229645017965,
+            "MR@0.25": 0.8662065303955403,
+            "AP@0.50": 0.12825383379385474,
+            "MR@0.50": 0.928885349379111,
+            "AP@0.75": 0.011971319264420462,
+            "MR@0.75": 0.9873462525440225,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.11644581650281828,
+            "positive_ground_truths": 3767
+          },
+          "small": {
+            "AP@0.25": 0.2569707327235441,
+            "MR@0.25": 0.8270064833445114,
+            "AP@0.50": 0.15804682023380406,
+            "MR@0.50": 0.9122289291303376,
+            "AP@0.75": 0.020741512776425157,
+            "MR@0.75": 0.9844399731723674,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.14525302191125777,
+            "positive_ground_truths": 2485
+          },
+          "reasonable": {
+            "AP@0.25": 0.34986531665202103,
+            "MR@0.25": 0.8002486135016255,
+            "AP@0.50": 0.21803640231396262,
+            "MR@0.50": 0.8979250334672021,
+            "AP@0.75": 0.03885014027279366,
+            "MR@0.75": 0.9755211321476381,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.2022506197462591,
+            "positive_ground_truths": 2324
+          },
+          "protocol": {
+            "name": "TinyPerson documented protocol; standalone implementation",
+            "annotation_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/annotations_test.json",
+            "predictions_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/oracle/baseline.json",
+            "source_images": 786,
+            "dense_images_excluded": 0,
+            "images_evaluated": 786,
+            "max_detections_per_image": 200,
+            "iou_thresholds": [
+              0.25,
+              0.5,
+              0.75
+            ],
+            "size_ranges_sqrt_area_px_inclusive": {
+              "all": [
+                2.0,
+                100000.0,
+                true,
+                true
+              ],
+              "tiny": [
+                2.0,
+                20.0,
+                true,
+                true
+              ],
+              "tiny1": [
+                2.0,
+                8.0,
+                true,
+                false
+              ],
+              "tiny2": [
+                8.0,
+                12.0,
+                true,
+                false
+              ],
+              "tiny3": [
+                12.0,
+                20.0,
+                true,
+                true
+              ],
+              "small": [
+                20.0,
+                32.0,
+                false,
+                true
+              ],
+              "reasonable": [
+                32.0,
+                100000.0,
+                false,
+                true
+              ]
+            },
+            "ignored_annotations": {
+              "uncertain": 2832,
+              "ignore": 1989
+            },
+            "matching": {
+              "normal_positive": "IoU",
+              "ignore_uncertain": "IoU match or intersection over detection (IoD)",
+              "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored"
+            },
+            "ap_interpolation": "101-point precision envelope",
+            "warning": "Validate this standalone evaluator against the pinned TinyBenchmark reference before using its scores as publication results."
+          }
+        },
+        "matched_gt_iou_075": null,
+        "matched_detections_iou_075": null
+      },
+      "box": {
+        "metrics": {
+          "all": {
+            "AP@0.25": 0.5299034508112365,
+            "MR@0.25": 0.8648920711461808,
+            "AP@0.50": 0.33960934551082134,
+            "MR@0.50": 0.944562155492235,
+            "AP@0.75": 0.046747329067191104,
+            "MR@0.75": 0.9907535942459593,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.3054200417964163,
+            "positive_ground_truths": 13687
+          },
+          "tiny": {
+            "AP@0.25": 0.4968382103594485,
+            "MR@0.25": 0.8266000851042528,
+            "AP@0.50": 0.3043695851474141,
+            "MR@0.50": 0.9191634752571901,
+            "AP@0.75": 0.03537737720188376,
+            "MR@0.75": 0.988873870491352,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.2788617242362488,
+            "positive_ground_truths": 8878
+          },
+          "tiny1": {
+            "AP@0.25": 0.35380042755318664,
+            "MR@0.25": 0.8124493975329808,
+            "AP@0.50": 0.1628673048822021,
+            "MR@0.50": 0.9075105967519169,
+            "AP@0.75": 0.009148831243293923,
+            "MR@0.75": 0.987045768443111,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.17527218789289423,
+            "positive_ground_truths": 2333
+          },
+          "tiny2": {
+            "AP@0.25": 0.5332663875268426,
+            "MR@0.25": 0.7289016878649708,
+            "AP@0.50": 0.3317929017134475,
+            "MR@0.50": 0.851611871050316,
+            "AP@0.75": 0.030560496315996125,
+            "MR@0.75": 0.9770018398528116,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.2985399285187621,
+            "positive_ground_truths": 2778
+          },
+          "tiny3": {
+            "AP@0.25": 0.5721546678643045,
+            "MR@0.25": 0.7300238916910008,
+            "AP@0.50": 0.3739420522260869,
+            "MR@0.50": 0.8578001946730378,
+            "AP@0.75": 0.04900331659387503,
+            "MR@0.75": 0.9764622599769931,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.3317000122280888,
+            "positive_ground_truths": 3767
+          },
+          "small": {
+            "AP@0.25": 0.5981768963442081,
+            "MR@0.25": 0.6795886429689246,
+            "AP@0.50": 0.40634833988585867,
+            "MR@0.50": 0.8246814218645205,
+            "AP@0.75": 0.07287272328386427,
+            "MR@0.75": 0.9589090096132349,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.3591326531713103,
+            "positive_ground_truths": 2485
+          },
+          "reasonable": {
+            "AP@0.25": 0.651426573221201,
+            "MR@0.25": 0.6740294511378848,
+            "AP@0.50": 0.44855522177182755,
+            "MR@0.50": 0.8222413463377319,
+            "AP@0.75": 0.08499146807098357,
+            "MR@0.75": 0.9575444635685599,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.39499108768800406,
+            "positive_ground_truths": 2324
+          },
+          "protocol": {
+            "name": "TinyPerson documented protocol; standalone implementation",
+            "annotation_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/annotations_test.json",
+            "predictions_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/oracle/box.json",
+            "source_images": 786,
+            "dense_images_excluded": 0,
+            "images_evaluated": 786,
+            "max_detections_per_image": 200,
+            "iou_thresholds": [
+              0.25,
+              0.5,
+              0.75
+            ],
+            "size_ranges_sqrt_area_px_inclusive": {
+              "all": [
+                2.0,
+                100000.0,
+                true,
+                true
+              ],
+              "tiny": [
+                2.0,
+                20.0,
+                true,
+                true
+              ],
+              "tiny1": [
+                2.0,
+                8.0,
+                true,
+                false
+              ],
+              "tiny2": [
+                8.0,
+                12.0,
+                true,
+                false
+              ],
+              "tiny3": [
+                12.0,
+                20.0,
+                true,
+                true
+              ],
+              "small": [
+                20.0,
+                32.0,
+                false,
+                true
+              ],
+              "reasonable": [
+                32.0,
+                100000.0,
+                false,
+                true
+              ]
+            },
+            "ignored_annotations": {
+              "uncertain": 2832,
+              "ignore": 1989
+            },
+            "matching": {
+              "normal_positive": "IoU",
+              "ignore_uncertain": "IoU match or intersection over detection (IoD)",
+              "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored"
+            },
+            "ap_interpolation": "101-point precision envelope",
+            "warning": "Validate this standalone evaluator against the pinned TinyBenchmark reference before using its scores as publication results."
+          }
+        },
+        "matched_gt_iou_075": 2408,
+        "matched_detections_iou_075": 2649
+      },
+      "score": {
+        "metrics": {
+          "all": {
+            "AP@0.25": 0.5219054425339325,
+            "MR@0.25": 0.867213820088811,
+            "AP@0.50": 0.4614738376919222,
+            "MR@0.50": 0.8677901983228206,
+            "AP@0.75": 0.1899878127711097,
+            "MR@0.75": 0.8777185163537177,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.39112236433232145,
+            "positive_ground_truths": 13687
+          },
+          "tiny": {
+            "AP@0.25": 0.4985896918980447,
+            "MR@0.25": 0.8640084103026208,
+            "AP@0.50": 0.4126127399147097,
+            "MR@0.50": 0.8655102500563189,
+            "AP@0.75": 0.1332997783196174,
+            "MR@0.75": 0.8976996821105855,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.3481674033774573,
+            "positive_ground_truths": 8878
+          },
+          "tiny1": {
+            "AP@0.25": 0.4086066611463648,
+            "MR@0.25": 0.7963994856408058,
+            "AP@0.50": 0.27172902588613523,
+            "MR@0.50": 0.8208791732152212,
+            "AP@0.75": 0.058514169936975266,
+            "MR@0.75": 0.9456112778015906,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.24628328565649174,
+            "positive_ground_truths": 2333
+          },
+          "tiny2": {
+            "AP@0.25": 0.5467094762816653,
+            "MR@0.25": 0.753899688024958,
+            "AP@0.50": 0.45500645644216686,
+            "MR@0.50": 0.7562994960403168,
+            "AP@0.75": 0.1360039395680793,
+            "MR@0.75": 0.8723702103831693,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.37923995743063715,
+            "positive_ground_truths": 2778
+          },
+          "tiny3": {
+            "AP@0.25": 0.557105788600324,
+            "MR@0.25": 0.7918178332300977,
+            "AP@0.50": 0.48614982093379316,
+            "MR@0.50": 0.7947084328820458,
+            "AP@0.75": 0.17879196982020254,
+            "MR@0.75": 0.8533168156210365,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.4073491931181066,
+            "positive_ground_truths": 3767
+          },
+          "small": {
+            "AP@0.25": 0.6005506418587327,
+            "MR@0.25": 0.7071316789626648,
+            "AP@0.50": 0.5522879188573542,
+            "MR@0.50": 0.7121842164095685,
+            "AP@0.75": 0.25689507338119544,
+            "MR@0.75": 0.7781801922646993,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.4699112113657608,
+            "positive_ground_truths": 2485
+          },
+          "reasonable": {
+            "AP@0.25": 0.6341486000001426,
+            "MR@0.25": 0.6705393000573724,
+            "AP@0.50": 0.6040756684160362,
+            "MR@0.50": 0.6713520749665328,
+            "AP@0.75": 0.3408834940900129,
+            "MR@0.75": 0.7211703958691911,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.5263692541687306,
+            "positive_ground_truths": 2324
+          },
+          "protocol": {
+            "name": "TinyPerson documented protocol; standalone implementation",
+            "annotation_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/annotations_test.json",
+            "predictions_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/oracle/score.json",
+            "source_images": 786,
+            "dense_images_excluded": 0,
+            "images_evaluated": 786,
+            "max_detections_per_image": 200,
+            "iou_thresholds": [
+              0.25,
+              0.5,
+              0.75
+            ],
+            "size_ranges_sqrt_area_px_inclusive": {
+              "all": [
+                2.0,
+                100000.0,
+                true,
+                true
+              ],
+              "tiny": [
+                2.0,
+                20.0,
+                true,
+                true
+              ],
+              "tiny1": [
+                2.0,
+                8.0,
+                true,
+                false
+              ],
+              "tiny2": [
+                8.0,
+                12.0,
+                true,
+                false
+              ],
+              "tiny3": [
+                12.0,
+                20.0,
+                true,
+                true
+              ],
+              "small": [
+                20.0,
+                32.0,
+                false,
+                true
+              ],
+              "reasonable": [
+                32.0,
+                100000.0,
+                false,
+                true
+              ]
+            },
+            "ignored_annotations": {
+              "uncertain": 2832,
+              "ignore": 1989
+            },
+            "matching": {
+              "normal_positive": "IoU",
+              "ignore_uncertain": "IoU match or intersection over detection (IoD)",
+              "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored"
+            },
+            "ap_interpolation": "101-point precision envelope",
+            "warning": "Validate this standalone evaluator against the pinned TinyBenchmark reference before using its scores as publication results."
+          }
+        },
+        "matched_gt_iou_075": 2408,
+        "matched_detections_iou_075": 2649
+      },
+      "both": {
+        "metrics": {
+          "all": {
+            "AP@0.25": 0.2659847083504859,
+            "MR@0.25": 0.9133971408392392,
+            "AP@0.50": 0.22738301614065765,
+            "MR@0.50": 0.914484953280891,
+            "AP@0.75": 0.16552848216470062,
+            "MR@0.75": 0.9149720334786456,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.2196320688852814,
+            "positive_ground_truths": 13687
+          },
+          "tiny": {
+            "AP@0.25": 0.23303522649341019,
+            "MR@0.25": 0.9129934169357463,
+            "AP@0.50": 0.18248333649682977,
+            "MR@0.50": 0.9157968511426497,
+            "AP@0.75": 0.12094866138369569,
+            "MR@0.75": 0.9178618808039849,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.1788224081246452,
+            "positive_ground_truths": 8878
+          },
+          "tiny1": {
+            "AP@0.25": 0.15111019016971478,
+            "MR@0.25": 0.930752012192218,
+            "AP@0.50": 0.08724866825038266,
+            "MR@0.50": 0.941658332142687,
+            "AP@0.75": 0.05783051989409467,
+            "MR@0.75": 0.9489927132447493,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.09872979277139737,
+            "positive_ground_truths": 2333
+          },
+          "tiny2": {
+            "AP@0.25": 0.24658712979820632,
+            "MR@0.25": 0.8791696664266859,
+            "AP@0.50": 0.18862021697227013,
+            "MR@0.50": 0.8854491640668747,
+            "AP@0.75": 0.12320374292178307,
+            "MR@0.75": 0.8894088472922168,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.18613702989741984,
+            "positive_ground_truths": 2778
+          },
+          "tiny3": {
+            "AP@0.25": 0.2857331314241362,
+            "MR@0.25": 0.8678583016252248,
+            "AP@0.50": 0.23952865518074828,
+            "MR@0.50": 0.8726661357401999,
+            "AP@0.75": 0.1657898734947695,
+            "MR@0.75": 0.8772969943662802,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.23035055336655133,
+            "positive_ground_truths": 3767
+          },
+          "small": {
+            "AP@0.25": 0.32612709520285155,
+            "MR@0.25": 0.8245472837022132,
+            "AP@0.50": 0.2936086560604794,
+            "MR@0.50": 0.8263805052537446,
+            "AP@0.75": 0.2210560038122859,
+            "MR@0.75": 0.8296445338698859,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.280263918358539,
+            "positive_ground_truths": 2485
+          },
+          "reasonable": {
+            "AP@0.25": 0.3577138017438522,
+            "MR@0.25": 0.7893956779498947,
+            "AP@0.50": 0.3381022900031204,
+            "MR@0.50": 0.7903518837253777,
+            "AP@0.75": 0.283444726565479,
+            "MR@0.75": 0.7925033467202142,
+            "AP_mean_IoU_0.25_0.50_0.75": 0.3264202727708172,
+            "positive_ground_truths": 2324
+          },
+          "protocol": {
+            "name": "TinyPerson documented protocol; standalone implementation",
+            "annotation_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/annotations_test.json",
+            "predictions_file": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/eval/baseline_tinyperson_150e_full/oracle/both.json",
+            "source_images": 786,
+            "dense_images_excluded": 0,
+            "images_evaluated": 786,
+            "max_detections_per_image": 200,
+            "iou_thresholds": [
+              0.25,
+              0.5,
+              0.75
+            ],
+            "size_ranges_sqrt_area_px_inclusive": {
+              "all": [
+                2.0,
+                100000.0,
+                true,
+                true
+              ],
+              "tiny": [
+                2.0,
+                20.0,
+                true,
+                true
+              ],
+              "tiny1": [
+                2.0,
+                8.0,
+                true,
+                false
+              ],
+              "tiny2": [
+                8.0,
+                12.0,
+                true,
+                false
+              ],
+              "tiny3": [
+                12.0,
+                20.0,
+                true,
+                true
+              ],
+              "small": [
+                20.0,
+                32.0,
+                false,
+                true
+              ],
+              "reasonable": [
+                32.0,
+                100000.0,
+                false,
+                true
+              ]
+            },
+            "ignored_annotations": {
+              "uncertain": 2832,
+              "ignore": 1989
+            },
+            "matching": {
+              "normal_positive": "IoU",
+              "ignore_uncertain": "IoU match or intersection over detection (IoD)",
+              "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored"
+            },
+            "ap_interpolation": "101-point precision envelope",
+            "warning": "Validate this standalone evaluator against the pinned TinyBenchmark reference before using its scores as publication results."
+          }
+        },
+        "matched_gt_iou_075": 2408,
+        "matched_detections_iou_075": 2649
+      }
+    },
+    "error_analysis": {
+      "size_bins": null,
+      "density_bins": null,
+      "counts": {
+        "true_positives": 3338,
+        "false_positives": 46063,
+        "duplicates": 5096,
+        "localization_errors": 17815,
+        "background_false_positives": 23152,
+        "misses": 10349,
+        "neutral_predictions": 1003,
+        "predictions": 50404
+      },
+      "rates": {
+        "recall": 0.24388105501570834,
+        "precision": 0.06756948239914172,
+        "miss_rate": 0.7561189449842917,
+        "duplicate_share_of_false_positives": 0.1106310921998133,
+        "localization_share_of_false_positives": 0.3867529253413803,
+        "background_share_of_false_positives": 0.5026159824588065
+      },
+      "diagnostic_ap": {
+        "all": {
+          "AP@0.25": 0.2065166792539592,
+          "AP@0.50": 0.12430664691040512,
+          "AP@0.75": 0.019643827769052973,
+          "positive_ground_truths": 13687,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.11682238464447242
+        },
+        "tiny": {
+          "AP@0.25": 0.16781394645491476,
+          "AP@0.50": 0.09971698199851484,
+          "AP@0.75": 0.009789631133641494,
+          "positive_ground_truths": 8878,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.0924401865290237
+        },
+        "tiny1": {
+          "AP@0.25": 0.10792272007003771,
+          "AP@0.50": 0.05658735079166245,
+          "AP@0.75": 0.006371503292061489,
+          "positive_ground_truths": 2333,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.05696052471792055
+        },
+        "tiny2": {
+          "AP@0.25": 0.16277965424153137,
+          "AP@0.50": 0.09895758335028569,
+          "AP@0.75": 0.012882331061686618,
+          "positive_ground_truths": 2778,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.09153985621783456
+        },
+        "tiny3": {
+          "AP@0.25": 0.20911229645017965,
+          "AP@0.50": 0.12825383379385474,
+          "AP@0.75": 0.011971319264420462,
+          "positive_ground_truths": 3767,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.11644581650281828
+        },
+        "small": {
+          "AP@0.25": 0.2569707327235441,
+          "AP@0.50": 0.15804682023380406,
+          "AP@0.75": 0.020741512776425157,
+          "positive_ground_truths": 2485,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.14525302191125777
+        },
+        "reasonable": {
+          "AP@0.25": 0.34986531665202103,
+          "AP@0.50": 0.21803640231396262,
+          "AP@0.75": 0.03885014027279366,
+          "positive_ground_truths": 2324,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.2022506197462591
+        }
+      },
+      "operating_points": null
+    }
+  }
+}

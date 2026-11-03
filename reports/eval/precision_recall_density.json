@@ -1,0 +1,196 @@
+{
+  "baseline": {
+    "bins": {
+      "all": {
+        "max_f1": 45.36,
+        "precision_at_max_f1": 51.55,
+        "recall_at_max_f1": 40.49,
+        "max_recall": 71.62,
+        "best_conf": 0.2366,
+        "total_positives": 13687,
+        "total_tp": 9802,
+        "total_fp": 407889
+      },
+      "tiny": {
+        "max_f1": 42.68,
+        "precision_at_max_f1": 49.63,
+        "recall_at_max_f1": 37.44,
+        "max_recall": 67.97,
+        "best_conf": 0.2118,
+        "total_positives": 8878,
+        "total_tp": 6034,
+        "total_fp": 336341
+      },
+      "tiny1": {
+        "max_f1": 34.19,
+        "precision_at_max_f1": 44.02,
+        "recall_at_max_f1": 27.95,
+        "max_recall": 55.68,
+        "best_conf": 0.1933,
+        "total_positives": 2333,
+        "total_tp": 1299,
+        "total_fp": 202194
+      },
+      "tiny2": {
+        "max_f1": 42.39,
+        "precision_at_max_f1": 45.8,
+        "recall_at_max_f1": 39.45,
+        "max_recall": 69.04,
+        "best_conf": 0.2118,
+        "total_positives": 2778,
+        "total_tp": 1918,
+        "total_fp": 53643
+      },
+      "tiny3": {
+        "max_f1": 47.96,
+        "precision_at_max_f1": 56.19,
+        "recall_at_max_f1": 41.84,
+        "max_recall": 74.81,
+        "best_conf": 0.2247,
+        "total_positives": 3767,
+        "total_tp": 2818,
+        "total_fp": 80504
+      },
+      "small": {
+        "max_f1": 52.62,
+        "precision_at_max_f1": 59.38,
+        "recall_at_max_f1": 47.24,
+        "max_recall": 80.04,
+        "best_conf": 0.3005,
+        "total_positives": 2485,
+        "total_tp": 1989,
+        "total_fp": 41043
+      },
+      "reasonable": {
+        "max_f1": 49.22,
+        "precision_at_max_f1": 54.68,
+        "recall_at_max_f1": 44.75,
+        "max_recall": 76.68,
+        "best_conf": 0.323,
+        "total_positives": 2324,
+        "total_tp": 1782,
+        "total_fp": 30507
+      }
+    },
+    "density": {
+      "sparse (<15)": {
+        "num_images": 572,
+        "ground_truths": 2696,
+        "detected_true_positives": 2020,
+        "recall": 74.93,
+        "miss_rate": 25.07
+      },
+      "medium (15-50)": {
+        "num_images": 133,
+        "ground_truths": 3943,
+        "detected_true_positives": 3064,
+        "recall": 77.71,
+        "miss_rate": 22.29
+      },
+      "crowded (>50)": {
+        "num_images": 81,
+        "ground_truths": 7048,
+        "detected_true_positives": 4718,
+        "recall": 66.94,
+        "miss_rate": 33.06
+      }
+    }
+  },
+  "dcaf_v2_1": {
+    "bins": {
+      "all": {
+        "max_f1": 44.08,
+        "precision_at_max_f1": 50.8,
+        "recall_at_max_f1": 38.93,
+        "max_recall": 70.94,
+        "best_conf": 0.2283,
+        "total_positives": 13687,
+        "total_tp": 9709,
+        "total_fp": 318736
+      },
+      "tiny": {
+        "max_f1": 40.11,
+        "precision_at_max_f1": 47.33,
+        "recall_at_max_f1": 34.81,
+        "max_recall": 68.16,
+        "best_conf": 0.2259,
+        "total_positives": 8878,
+        "total_tp": 6051,
+        "total_fp": 233597
+      },
+      "tiny1": {
+        "max_f1": 29.12,
+        "precision_at_max_f1": 35.06,
+        "recall_at_max_f1": 24.9,
+        "max_recall": 58.04,
+        "best_conf": 0.2276,
+        "total_positives": 2333,
+        "total_tp": 1354,
+        "total_fp": 76771
+      },
+      "tiny2": {
+        "max_f1": 40.16,
+        "precision_at_max_f1": 47.93,
+        "recall_at_max_f1": 34.56,
+        "max_recall": 69.33,
+        "best_conf": 0.2365,
+        "total_positives": 2778,
+        "total_tp": 1926,
+        "total_fp": 77001
+      },
+      "tiny3": {
+        "max_f1": 47.35,
+        "precision_at_max_f1": 52.28,
+        "recall_at_max_f1": 43.27,
+        "max_recall": 73.59,
+        "best_conf": 0.1956,
+        "total_positives": 3767,
+        "total_tp": 2772,
+        "total_fp": 79825
+      },
+      "small": {
+        "max_f1": 53.29,
+        "precision_at_max_f1": 63.02,
+        "recall_at_max_f1": 46.16,
+        "max_recall": 77.1,
+        "best_conf": 0.2399,
+        "total_positives": 2485,
+        "total_tp": 1916,
+        "total_fp": 32643
+      },
+      "reasonable": {
+        "max_f1": 49.19,
+        "precision_at_max_f1": 56.16,
+        "recall_at_max_f1": 43.76,
+        "max_recall": 75.04,
+        "best_conf": 0.2911,
+        "total_positives": 2324,
+        "total_tp": 1744,
+        "total_fp": 52496
+      }
+    },
+    "density": {
+      "sparse (<15)": {
+        "num_images": 572,
+        "ground_truths": 2696,
+        "detected_true_positives": 2072,
+        "recall": 76.85,
+        "miss_rate": 23.15
+      },
+      "medium (15-50)": {
+        "num_images": 133,
+        "ground_truths": 3943,
+        "detected_true_positives": 3031,
+        "recall": 76.87,
+        "miss_rate": 23.13
+      },
+      "crowded (>50)": {
+        "num_images": 81,
+        "ground_truths": 7048,
+        "detected_true_positives": 4606,
+        "recall": 65.35,
+        "miss_rate": 34.65
+      }
+    }
+  }
+}

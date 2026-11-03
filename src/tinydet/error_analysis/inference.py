@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 from tinydet.utils.dataset import dataset_images
@@ -38,25 +39,31 @@ def predict_split(
     from ultralytics import YOLO
 
     model = YOLO(str(checkpoint))
-    rows = []
-    results = model.predict(
-        source=[str(path) for path in images],
-        stream=True,
-        imgsz=imgsz,
-        batch=batch_size,
-        conf=conf,
-        max_det=200,
-        device=device,
-        verbose=False,
-    )
-    for result in results:
-        boxes = result.boxes
-        rows.append({
-            "path": str(Path(result.path).resolve()),
-            "boxes": boxes.xyxy.cpu().tolist() if boxes is not None else [],
-            "scores": boxes.conf.cpu().tolist() if boxes is not None else [],
-            "classes": [int(value) for value in boxes.cls.cpu().tolist()] if boxes is not None else [],
-        })
+    # Pass a list file, not a Python list: Ultralytics feeds a list source to the
+    # model as ONE batch, so `batch_size` is silently ignored and a 800-image
+    # split would run in a single forward pass (CUDA OOM on a 22 GB card).
+    with tempfile.TemporaryDirectory(prefix="tinydet-predict-") as temporary:
+        source_list = Path(temporary) / "images.txt"
+        source_list.write_text("\n".join(str(path) for path in images) + "\n")
+        results = model.predict(
+            source=str(source_list),
+            stream=True,
+            imgsz=imgsz,
+            batch=batch_size,
+            conf=conf,
+            max_det=200,
+            device=device,
+            verbose=False,
+        )
+        rows = []
+        for result in results:
+            boxes = result.boxes
+            rows.append({
+                "path": str(Path(result.path).resolve()),
+                "boxes": boxes.xyxy.cpu().tolist() if boxes is not None else [],
+                "scores": boxes.conf.cpu().tolist() if boxes is not None else [],
+                "classes": [int(value) for value in boxes.cls.cpu().tolist()] if boxes is not None else [],
+            })
     if len(rows) != len(images):
         raise RuntimeError(f"Predicted {len(rows)} images, expected {len(images)}")
     output = Path(output)

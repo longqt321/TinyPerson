@@ -18,6 +18,7 @@ from ultralytics import YOLO
 from ultralytics.models.yolo.detect import DetectionValidator
 
 from tinydet.evaluation.iou_metrics import ap_by_iou
+from tinydet.models.ultralytics import register_ultralytics_modules
 from tinydet.utils.dataset import dataset_images, normalize_dataset_yaml
 from tinydet.utils.experiment import write_json
 
@@ -114,6 +115,7 @@ class PredictionCollector(DetectionValidator):
 def collect_predictions(
     run: Path, split: str = "val", checkpoint: str | Path | None = None
 ) -> Path:
+    register_ultralytics_modules()
     config = preflight(run, split, checkpoint)
     name = f"{EVALUATION_ROOT}-{split}"
     YOLO(config["checkpoint"]).val(

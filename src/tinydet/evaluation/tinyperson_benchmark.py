@@ -14,12 +14,16 @@ import numpy as np
 
 IOU_THRESHOLDS = (0.25, 0.50, 0.75)
 MAX_DETECTIONS = 200
-# TinyBenchmark Params uses squared pixel-area bounds, inclusive at both ends.
-# These are expressed as sqrt(area) for readability.
-SIZE_RANGES: dict[str, tuple[float, float]] = {
-    "all": (1.0, 100000.0), "tiny": (1.0, 20.0), "tiny1": (1.0, 8.0),
-    "tiny2": (8.0, 12.0), "tiny3": (12.0, 20.0),
-    "small": (20.0, 32.0), "reasonable": (32.0, 100000.0),
+# TinyBenchmark official size ranges (AS = sqrt(w * h)):
+# tiny1: [2, 8), tiny2: [8, 12), tiny3: [12, 20], tiny: [2, 20], small: (20, 32], all: [2, 100000]
+SIZE_RANGES: dict[str, tuple[float, float, bool, bool]] = {
+    "all": (2.0, 100000.0, True, True),
+    "tiny": (2.0, 20.0, True, True),
+    "tiny1": (2.0, 8.0, True, False),
+    "tiny2": (8.0, 12.0, True, False),
+    "tiny3": (12.0, 20.0, True, True),
+    "small": (20.0, 32.0, False, True),
+    "reasonable": (32.0, 100000.0, False, True),
 }
 _EVAL_CONTEXT: tuple[list[int], dict, list[tuple[float, int, list[float]]]] | None = None
 
@@ -28,12 +32,12 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
     if _EVAL_CONTEXT is None:
         raise RuntimeError("Evaluator worker context was not initialized")
     eval_ids, gt_by_image, scored = _EVAL_CONTEXT
-    size_range = SIZE_RANGES[bin_name]
+    size_spec = SIZE_RANGES[bin_name]
     bin_gt, positive_count = {}, 0
     for image_id in eval_ids:
         positives = gt_by_image[image_id]["positive"]
-        inside = [b for b in positives if _in_range(b, size_range)]
-        outside = [b for b in positives if not _in_range(b, size_range)]
+        inside = [b for b in positives if _in_range(b, size_spec)]
+        outside = [b for b in positives if not _in_range(b, size_spec)]
         bin_gt[image_id] = {
             "positive": inside, "outside": outside,
             "ignored": gt_by_image[image_id]["ignored"],
@@ -41,6 +45,7 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
         positive_count += len(inside)
 
     metrics = {}
+    num_eval_images = len(eval_ids)
     for threshold in IOU_THRESHOLDS:
         matched = {image_id: set() for image_id in eval_ids}
         matched_outside = {image_id: set() for image_id in eval_ids}
@@ -78,16 +83,17 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
                 matched_ignored_iou[image_id].add(ignored_iou[0])
                 continue
             neutral_iod = any(_iod(box, other) >= threshold for other in ignored)
-            if neutral_iod or not _in_range(box, size_range):
+            if neutral_iod or not _in_range(box, size_spec):
                 continue
             tp.append(0)
             fp.append(1)
         metrics[f"AP@{threshold:.2f}"] = _ap(tp, fp, positive_count)
+        metrics[f"MR@{threshold:.2f}"] = _mr(tp, fp, positive_count, num_eval_images)
 
-    valid = [value for value in metrics.values() if value is not None]
+    valid_ap = [metrics[f"AP@{t:.2f}"] for t in IOU_THRESHOLDS if metrics[f"AP@{t:.2f}"] is not None]
     return bin_name, {
         **metrics,
-        "AP_mean_IoU_0.25_0.50_0.75": float(np.mean(valid)) if valid else None,
+        "AP_mean_IoU_0.25_0.50_0.75": float(np.mean(valid_ap)) if valid_ap else None,
         "positive_ground_truths": positive_count,
     }
 
@@ -103,10 +109,13 @@ def _sqrt_area(box: list[float]) -> float:
     return math.sqrt(max(box[2] - box[0], 0.0) * max(box[3] - box[1], 0.0))
 
 
-def _in_range(box: list[float], size_range: tuple[float, float]) -> bool:
-    # The reference Params uses area < min or area > max, so boundaries are inclusive.
+def _in_range(box: list[float], size_spec: tuple[float, float, bool, bool]) -> bool:
+    """Check if sqrt(w * h) falls into the half-open or closed interval."""
+    low, high, left_closed, right_closed = size_spec
     size = _sqrt_area(box)
-    return size_range[0] <= size <= size_range[1]
+    left_ok = (size >= low) if left_closed else (size > low)
+    right_ok = (size <= high) if right_closed else (size < high)
+    return left_ok and right_ok
 
 
 def _iou(a: list[float], b: list[float]) -> float:
@@ -143,6 +152,29 @@ def _ap(tp: list[int], fp: list[int], positive_count: int) -> float | None:
         precision[recall >= point].max() if np.any(recall >= point) else 0.0
         for point in points
     ]))
+
+
+def _mr(tp: list[int], fp: list[int], positive_count: int, num_images: int) -> float | None:
+    """Log-average miss rate across 9 points evenly spaced in log10(FPPI) in [-2, 0]."""
+    if positive_count == 0 or num_images == 0:
+        return None
+    if not tp:
+        return 1.0
+    tp_cum = np.cumsum(np.asarray(tp, dtype=float))
+    fp_cum = np.cumsum(np.asarray(fp, dtype=float))
+    rec = tp_cum / positive_count
+    fppi = fp_cum / num_images
+    miss_rate = 1.0 - rec
+
+    fppi_targets = np.logspace(-2, 0, 9)
+    mr_at_fppi = []
+    for target in fppi_targets:
+        valid = miss_rate[fppi <= target]
+        if len(valid) > 0:
+            mr_at_fppi.append(valid[-1])
+        else:
+            mr_at_fppi.append(1.0)
+    return float(np.mean(mr_at_fppi))
 
 
 def _load_gt(path: Path) -> dict[str, Any]:

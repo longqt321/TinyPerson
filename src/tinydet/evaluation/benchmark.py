@@ -5,10 +5,12 @@ import torch
 import yaml
 from ultralytics import YOLO
 
+from tinydet.models.ultralytics import register_ultralytics_modules
 from tinydet.utils.experiment import write_json
 
 
 def benchmark(run: Path, iterations: int = 100, warmup: int = 10) -> dict:
+    register_ultralytics_modules()
     if iterations <= 0 or warmup < 0:
         raise ValueError("iterations must be positive and warmup nonnegative")
     if not torch.cuda.is_available():
