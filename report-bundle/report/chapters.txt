@@ -1,5 +1,5 @@
-01-mo-dau.md
-02-co-so-ly-thuyet.md
-03-module-gauss.md
-04-thuc-nghiem.md
-05-ket-luan.md
+01-introduction.md
+02-theoretical-background.md
+03-gauss-module.md
+04-experiments.md
+05-conclusion.md

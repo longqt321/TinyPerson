@@ -41,7 +41,7 @@ metric. Các kiểm tra đó bảo vệ kết luận khoa học, không phải y
 - `src/tinydet/research/results.py` gom artifact, chọn một primary run cho mỗi
   experiment/seed, tính mean/std và paired delta.
 - `tools/list_runs.py --config ... --markdown ...` sinh bảng kết quả từ artifact.
-- `docs/MSR_P2.md`, `docs/TINYPERSON_BENCHMARK.md` và `docs/agents/*` giữ quy tắc
+- `docs/TINYPERSON_BENCHMARK.md` và `docs/agents/*` giữ quy tắc
   dữ liệu, metric và lifecycle.
 
 ## Ngoài phạm vi

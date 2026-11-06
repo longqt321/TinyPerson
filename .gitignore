@@ -26,11 +26,12 @@ __pycache__/
 *.token
 
 # Datasets, model weights, and experiment artifacts
-data/
-datasets/
+/data/
+/datasets/
 outputs/*
 !outputs/.gitkeep
 runs/
+backups/
 wandb/
 mlruns/
 *.pt
@@ -46,5 +47,24 @@ mlruns/
 
 # Local reconstruction document; source files remain the canonical copy
 REPO_BLUEPRINT.md
-home/
-~/
+
+# Generated prediction dumps (large, reproducible from checkpoints)
+local_eval/
+
+# One-off probes and local scratch work
+scratch/
+
+# LaTeX build artifacts (paper source is tracked)
+paper/main.pdf
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.bbl
+paper/*.blg
+paper/*.brf
+paper/*.synctex.gz
+paper/tikz/*.aux
+paper/tikz/*.log
+paper/tikz/*.pdf
+paper/tikz/*.png
+

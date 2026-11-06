@@ -11,7 +11,7 @@
 
 ## 1. Problem Statement & Historical Evidence
 
-Analysis of past experimental records on TinyPerson (`reports/BAO_CAO_KET_QUA.md`, `reports/QAC_V3_VS_BASELINE_REPORT.md`):
+Analysis of past experimental records on TinyPerson (`reports/experiment_results_report.md`):
 1. **P2 Necessity**: Architectural ablation established that adding P2 (stride 4) produced the single largest gain in the project (+1.10 AP, +1.72 Recall). However, P2 shallow features contain high spatial resolution but poor semantic discrimination, leading to high Background False Positives (over 78,000–84,000 on official test).
 2. **Tiny1/Tiny2 Bottleneck**: Objects spanning 1–8 px (tiny1) have extremely low recall (<16–29%). They are easily drowned out by background noise and high-frequency clutter.
 3. **MSR and BTRM Pitfalls**:

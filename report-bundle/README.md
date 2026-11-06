@@ -46,7 +46,7 @@ report-bundle/
 ├── report/
 │   ├── metadata.yaml         tiêu đề, tác giả, ngày, ngôn ngữ
 │   ├── chapters.txt          thứ tự chương (agent cập nhật khi hoàn thiện)
-│   ├── 01-mo-dau.md, 02-co-so-ly-thuyet.md   (chương mẫu)
+│   ├── 01-introduction.md, 02-theoretical-background.md   (chương mẫu)
 │   ├── assets/               hình PNG do pipeline sinh
 │   └── tables/               bảng Markdown do pipeline sinh
 ├── tests/sample_draft.md     bản thảo mẫu để thử check_manuscript

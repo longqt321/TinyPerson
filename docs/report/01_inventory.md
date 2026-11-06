@@ -36,7 +36,7 @@ Sources: baseline JSON keys `summary.benchmark.{all,tiny,tiny1,tiny2,tiny3,small
 
 - Both JSON files declare 786 images evaluated, 0 dense images excluded, max 200 detections/image, tiled crop 640×512 with NMS merge 0.50, and standalone implementation of documented TinyPerson protocol.
 - Checkpoint field says `training/weights/last.pt`; project data rules require best checkpoint reporting. This conflicts with `docs/agents/DATA_EVALUATION.md` rule to report `best.pt`. Confirm evaluation artifact/checkpoint before using as final result.
-- `reports/DCAF_FINAL_REPORT.md` states 150e tiled values matching AP@0.50 broadly, but some values/deltas differ from raw JSON (including AP@0.25 and MR@0.25). Raw JSON are primary evidence; discrepancy needs full audit before final manuscript.
+- `reports/gauss_final_report.md` states 150e tiled values matching AP@0.50 broadly, but some values/deltas differ from raw JSON (including AP@0.25 and MR@0.25). Raw JSON are primary evidence; discrepancy needs full audit before final manuscript.
 - Report claims “TOV Protocol” and zero dense images excluded, while WACV protocol description reportedly excludes dense images. Do not call it official benchmark protocol until implementation/protocol difference resolved.
 - Model size and latency claims in report are not yet independently verified against raw profiling artifacts.
 - Baseline and DCAF appear matched by run timestamp and seed in checkpoint paths; confirm configs and metadata before declaring controlled comparison.

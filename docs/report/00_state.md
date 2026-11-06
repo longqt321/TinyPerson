@@ -20,3 +20,10 @@
 - Giao thức artifact khai báo 786 ảnh, dense excluded = 0; mô tả là standalone implementation, không khẳng định tuân thủ hoàn toàn official benchmark.
 - Kết quả đơn seed; không kiểm định ý nghĩa thống kê.
 - Draft là báo cáo nội bộ có giới hạn bằng chứng, chưa phải bản nộp học thuật do related work chưa xác minh và venue chưa biết.
+
+## Ghi chú dọn dẹp 2026-11-06
+- Tài liệu QAC/QAR riêng lẻ đã xóa; hồ sơ lịch sử A0–A3/MSR/BTRM/SADR/QAC còn lại duy nhất ở `reports/experiment_results_report.md`.
+- Báo cáo trùng lặp đã xóa: `DCAF_FINAL_REPORT.md` và `TONG_HOP_KET_QUA_DCAF_VA_BASELINE.md` (byte-identical với bản GauSS).
+- Tên file tài liệu đã chuyển sang tiếng Anh snake_case; link trong `docs/` và `reports/` đã cập nhật theo.
+- Đã xóa thêm: `.superpowers/sdd/jaunty-painting-iverson/progress.md` (ledger của phiên trước), `.history/` (backup của VS Code extension, untracked), và `reports/geometry/tiny_A2_p2_qac_v2*/` (artifact hình học của QAC v2).
+

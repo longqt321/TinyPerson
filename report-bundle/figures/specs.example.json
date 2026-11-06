@@ -3,7 +3,7 @@
     "id": "fig-2-1",
     "type": "chart",
     "chart": "bar",
-    "data": "data/ket-qua-thuc-nghiem.csv",
+    "data": "data/experiment-results.csv",
     "x": "mo_hinh",
     "y": [
       "f1_macro"
@@ -38,7 +38,7 @@
     "id": "fig-2-3",
     "type": "chart",
     "chart": "grouped_bar",
-    "data": "data/ket-qua-thuc-nghiem.csv",
+    "data": "data/experiment-results.csv",
     "x": "mo_hinh",
     "y": [
       "f1_macro",
@@ -57,7 +57,7 @@
   {
     "id": "tab-2-1",
     "type": "table",
-    "data": "data/ket-qua-thuc-nghiem.csv",
+    "data": "data/experiment-results.csv",
     "columns": [
       "mo_hinh",
       "f1_macro",

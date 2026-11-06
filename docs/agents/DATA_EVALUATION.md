@@ -34,6 +34,6 @@ The derivative validation split is not a test set. Do not call it test.
   run successfully on a specific artifact.
 - The TinyPerson evaluator in this repo is not a vendored reference evaluator.
   Miss rate still requires the reference evaluator.
-- A single seed or W&B curve is not evidence that MSR improves detection.
-  See `docs/MSR_P2.md` and `docs/modal_results_2026-10-20.md` before claiming a
-  result.
+- A single seed or W&B curve is not evidence that GauSS improves detection.
+  See `docs/TINYPERSON_BENCHMARK.md` and the raw JSON under `reports/eval/`
+  before claiming a result.
