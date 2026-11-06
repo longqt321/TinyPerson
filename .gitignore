@@ -50,6 +50,8 @@ REPO_BLUEPRINT.md
 
 # Generated prediction dumps (large, reproducible from checkpoints)
 local_eval/
+reports/eval/**/predictions*.json
+reports/eval/**/annotations*.json
 
 # One-off probes and local scratch work
 scratch/
