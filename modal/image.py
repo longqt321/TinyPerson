@@ -8,7 +8,7 @@ base_image = (
     .uv_pip_install("ultralytics==8.4.164", "numpy>=1.26,<3", "pandas>=2.2,<3", "PyYAML>=6,<7", "Pillow>=10,<13", "opencv-python-headless>=4.10,<5", "matplotlib>=3.9,<4", "wandb>=0.21,<1", "scikit-learn>=1.5,<2")
 )
 
-local_files = ("tinydet", "image", "paths")
+local_files = ("tinydet", "image", "paths", "app")
 config_dir = str(Path(__file__).resolve().parents[1] / "configs")
 scripts_dir = str(Path(__file__).resolve().parents[1] / "scripts")
 

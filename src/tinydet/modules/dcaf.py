@@ -17,6 +17,7 @@ Contract summary (at input 1280x1280, C2=64, P3=64, P4=128, D=32):
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from typing import Any
 
@@ -32,6 +33,34 @@ CONTROL_PARAM_SUFFIXES: tuple[str, ...] = (
     "alpha_raw",
     "gamma_h_raw",
 )
+
+ABLATION_FLAGS: frozenset[str] = frozenset({
+    "no_high_band",
+    "no_mid_band",
+    "no_low_band",
+    "no_router",
+    "no_saliency",
+})
+
+
+def active_ablation_flags() -> frozenset[str]:
+    """Read the TINYDET_ABLATION env var (comma-separated flags).
+
+    Unknown flags raise ValueError to catch typos early. Architecture,
+    parameter count, and checkpoint layout stay identical regardless of
+    flags; flags only disable contributions in forward().
+    """
+    raw = os.environ.get("TINYDET_ABLATION", "").strip()
+    if not raw:
+        return frozenset()
+    flags = frozenset(part.strip() for part in raw.split(",") if part.strip())
+    unknown = flags - ABLATION_FLAGS
+    if unknown:
+        raise ValueError(
+            f"Unknown TINYDET_ABLATION flags: {sorted(unknown)}; "
+            f"valid flags: {sorted(ABLATION_FLAGS)}"
+        )
+    return flags
 
 
 class LearnableGaussianScaleSpace(nn.Module):
@@ -275,6 +304,9 @@ class DCAF(nn.Module):
 
         self.act = nn.SiLU(inplace=False)
 
+        # Ablation flags (env var TINYDET_ABLATION); frozen at construction.
+        self.ablation_flags: frozenset[str] = active_ablation_flags()
+
         # Detached diagnostic dictionary for training loggers
         self.last_diag: dict[str, float] = {}
 
@@ -366,22 +398,40 @@ class DCAF(nn.Module):
         band_logits = logits[:, :3]
         mix_logit = logits[:, 3:4]
 
-        a_bands = torch.softmax(band_logits, dim=1)
-        a_h, a_m, a_l = a_bands[:, 0:1], a_bands[:, 1:2], a_bands[:, 2:3]
-        m_gate = torch.sigmoid(mix_logit)
+        # Ablation flags are applied in Section 5.1; band_logits/mix_logit are
+        # still computed so parameter shapes and diagnostics stay unchanged.
 
         # ---- 5.1 Adaptive Band Fusion & High-Band Residual Anchoring ----
-        f_band = a_h * r_h + a_m * r_m + a_l * r_l
+        flags = self.ablation_flags
+        r_h_eff = torch.zeros_like(r_h) if "no_high_band" in flags else r_h
+        r_m_eff = torch.zeros_like(r_m) if "no_mid_band" in flags else r_m
+        r_l_eff = torch.zeros_like(r_l) if "no_low_band" in flags else r_l
+
+        if "no_router" in flags:
+            a_h = torch.full((1, 1, 1, 1), 1.0 / 3.0, dtype=r_h.dtype, device=r_h.device).expand_as(r_h)
+            a_m = a_h
+            a_l = a_h
+            m_gate = torch.full_like(r_h[:, :1], 0.5)
+        else:
+            a_bands = torch.softmax(band_logits, dim=1)
+            a_h, a_m, a_l = a_bands[:, 0:1], a_bands[:, 1:2], a_bands[:, 2:3]
+            m_gate = torch.sigmoid(mix_logit)
+
+        f_band = a_h * r_h_eff + a_m * r_m_eff + a_l * r_l_eff
         gamma_h = self.compute_gamma_h().to(dtype=r_h.dtype)
 
         # ---- 5.2 & 5.3 Detail-Focused & Structural-Context Refinement ----
         # Direct High-Band Anchor: guarantees sub-8px boundary preservation
-        x_d = f_band + c_ctx + gamma_h * r_h
+        x_d = f_band + c_ctx + gamma_h * r_h_eff
         f_d = self.detail_branch(x_d)
 
         # Background Saliency Gating: attenuates background textures in shallow low-frequency features
-        saliency_mask = torch.sigmoid(self.saliency_gate(c_ctx))
-        r_l_attenuated = r_l * (1.0 - 0.5 * saliency_mask)
+        # M_sal = 0 under `no_saliency`: (1 - 0.5*M_sal) = 1, disabling attenuation.
+        if "no_saliency" in flags:
+            r_l_attenuated = r_l_eff
+        else:
+            saliency_mask = torch.sigmoid(self.saliency_gate(c_ctx))
+            r_l_attenuated = r_l_eff * (1.0 - 0.5 * saliency_mask)
         x_s = r_l_attenuated + c_ctx
         f_s = self.struct_branch(x_s)
 
@@ -586,12 +636,14 @@ def compute_dcaf_analytical_macs(
 
 
 __all__ = [
+    "ABLATION_FLAGS",
     "CONTROL_PARAM_SUFFIXES",
     "DCAF",
     "BandBranch",
     "DilatedContextBranch",
     "LearnableGaussianScaleSpace",
     "RefinementBranch",
+    "active_ablation_flags",
     "collect_dcaf_control_params",
     "compute_dcaf_analytical_macs",
     "configure_dcaf_control_param_group",

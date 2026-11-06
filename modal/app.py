@@ -132,8 +132,12 @@ def _train(
     wandb_group: str | None = None,
     dataset_audit: dict | None = None,
     run_id: str | None = None,
+    ablation: str = "",
 ):
     os.chdir("/root")
+    # Must be set before the model is built: DCAF reads the flags in __init__.
+    # Passed as an argument (not inherited) because .remote() runs in a new container.
+    os.environ["TINYDET_ABLATION"] = ablation
     runs.reload()
     raw_config = yaml.safe_load(config_text) if config_text else yaml.safe_load(Path(config).read_text())
     volume_yaml = _dataset_yaml_path(raw_config["data"]["config"])
@@ -183,6 +187,19 @@ def _train(
             on_epoch_end_callback=on_epoch_commit,
         )
     runs.commit()
+
+    # Record the ablation flags actually used, so a finished run can be audited
+    # after the fact instead of relying on the launch command.
+    if ablation:
+        from tinydet.utils.experiment import metadata, write_json
+
+        details = metadata(Path(run))
+        details["ablation"] = ablation
+        details["ablation_flags"] = sorted(
+            part.strip() for part in ablation.split(",") if part.strip()
+        )
+        write_json(Path(run) / "metadata.json", details)
+        runs.commit()
     return str(run)
 
 
