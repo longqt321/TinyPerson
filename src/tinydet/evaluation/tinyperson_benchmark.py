@@ -9,8 +9,8 @@ TinyPerson annotates two person categories (``sea_person`` = category 1,
 ``per_class`` (default)
     Correct COCO/TOV behaviour. Every prediction is kept and matched only
     against ground truth of its own category. ``result[bin]`` holds the
-    class-agnostic aggregate over all categories, and ``result["per_class"]``
-    holds the per-category breakdown.
+    class-agnostic aggregate over all categories, and
+    ``result[bin]["per_category"]`` holds the per-category breakdown.
 ``merge``
     All categories are collapsed into a single class before matching.
 ``primary``
