@@ -50,50 +50,59 @@ def save_dual(fig, stem):
     print(f"✓ Exported {stem} to SVG & PDF")
 
 
-# 1. AP50 across size bins (Figure 2 in text)
+# 1. AP50 across size bins, split by category (Figure 2 in text)
 def plot_ap50_by_size_bin():
+    """Per-class AP50 by scale bin.
+
+    The two TinyPerson categories behave in opposite directions, so a single
+    pooled bar chart hides both the maritime gain and the terrestrial
+    regression. Panel (a) is the maritime category GauSS targets; panel (b) is
+    the terrestrial category where the scale-space prior does not apply.
+    Values come from reports/eval/{dcaf,baseline}_tiled_per_class.json.
+    """
     categories = [
-        "tiny1\n(2–8 px)",
-        "tiny2\n(8–12 px)",
-        "tiny3\n(12–20 px)",
-        "tiny\n(2–20 px)",
-        "small\n(20–32 px)",
+        "tiny1\n(2-8 px)",
+        "tiny2\n(8-12 px)",
+        "tiny3\n(12-20 px)",
+        "tiny\n(2-20 px)",
+        "small\n(20-32 px)",
         "reasonable\n(>32 px)",
-        "all\n(≥2 px)"
+        "all\n(>=2 px)",
     ]
-    base_vals = [4.72, 6.90, 13.51, 9.07, 17.43, 20.49, 11.95]
-    gauss_vals = [5.18, 9.50, 13.37, 9.76, 19.23, 21.20, 12.94]
+    # sea_person (category 1): 781 / 845 / 1220 / 2846 / 906 / 1187 / 4939 GT boxes
+    sea_base = [10.76, 17.68, 33.30, 22.24, 37.92, 36.70, 27.52]
+    sea_gauss = [11.33, 23.05, 33.65, 23.79, 43.38, 38.49, 29.63]
+    # earth_person (category 2): 1552 / 1933 / 2547 / 6032 / 1579 / 1137 / 8748 GT boxes
+    earth_base = [19.84, 31.73, 37.34, 31.06, 42.55, 40.90, 34.03]
+    earth_gauss = [15.23, 28.69, 36.59, 28.50, 40.88, 37.69, 31.65]
 
     x = np.arange(len(categories))
     width = 0.35
 
-    fig, ax = plt.subplots(figsize=(7.0, 3.2))
-    ax.bar(x - width/2, base_vals, width, label="Baseline (YOLO26n-P2)", color=C_BASE, edgecolor="black", linewidth=0.6)
-    ax.bar(x + width/2, gauss_vals, width, label="GauSS (Ours)", color=C_GAUSS, edgecolor="black", linewidth=0.6)
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.9), sharey=True)
+    for ax, base_vals, gauss_vals, title in (
+        (axes[0], sea_base, sea_gauss, "(a) sea_person (maritime)"),
+        (axes[1], earth_base, earth_gauss, "(b) earth_person (terrestrial)"),
+    ):
+        ax.bar(x - width / 2, base_vals, width, label="Baseline (YOLO26n-P2)",
+               color=C_BASE, edgecolor="black", linewidth=0.5)
+        ax.bar(x + width / 2, gauss_vals, width, label="GauSS (Ours)",
+               color=C_GAUSS, edgecolor="black", linewidth=0.5)
+        ax.set_xticks(x)
+        ax.set_xticklabels(categories, fontsize=6.0, rotation=45, ha="right")
+        ax.set_title(title, fontsize=8.0, weight="bold")
+        ax.set_ylim(0, 52)
+        ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
+        for i in range(len(categories)):
+            ax.text(x[i] - width / 2, base_vals[i] + 0.6, f"{base_vals[i]:.1f}",
+                    ha="center", va="bottom", fontsize=5.4, color=C_BASE)
+            ax.text(x[i] + width / 2, gauss_vals[i] + 0.6, f"{gauss_vals[i]:.1f}",
+                    ha="center", va="bottom", fontsize=5.4, color=C_GAUSS, weight="bold")
 
-    ax.set_ylabel(r"$AP_{50}$ (%)")
-    ax.set_xlabel(r"Target Scale Interval $s = \sqrt{w \cdot h}$ (px)")
-    ax.set_xticks(x)
-    ax.set_xticklabels(categories)
-    ax.set_ylim(0, 25.5)
-    ax.legend(frameon=True, edgecolor="none", facecolor="#f8f9fa", loc="upper left")
-
-    # Clean annotations on top with vertical offsets to prevent any collision
-    for i in range(len(categories)):
-        b_val = base_vals[i]
-        g_val = gauss_vals[i]
-        
-        # When values are extremely close (e.g. tiny3: 13.5% vs 13.4%), stagger heights
-        if abs(g_val - b_val) < 0.3:
-            b_offset = 0.4
-            g_offset = 1.6
-        else:
-            b_offset = 0.4
-            g_offset = 0.4
-
-        ax.text(x[i] - width/2, b_val + b_offset, f"{b_val:.1f}%", ha="center", va="bottom", fontsize=7.2, color=C_BASE)
-        ax.text(x[i] + width/2, g_val + g_offset, f"{g_val:.1f}%", ha="center", va="bottom", fontsize=7.2, color=C_GAUSS, weight="bold")
-
+    axes[0].set_ylabel(r"$AP_{50}$ (%)")
+    axes[0].legend(frameon=True, edgecolor="none", facecolor="#f8f9fa",
+                   loc="upper left", fontsize=6.5)
+    fig.tight_layout()
     save_dual(fig, "01_tinyperson_ap50_by_size")
 
 

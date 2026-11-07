@@ -33,6 +33,9 @@ out_dir_paper = Path("paper/figures")
 out_dir_reports = Path("reports/figures")
 
 def draw_exact_gauss_diagram():
+    # The figure is included at \linewidth inside a full-width figure*, so the
+    # effective print scale is roughly 0.55x. Base font sizes are raised here so
+    # the rendered text lands at ~7-8pt on the page instead of ~4pt.
     fig, ax = plt.subplots(figsize=(12.0, 5.8))
     ax.set_xlim(0, 100)
     ax.set_ylim(0, 50)
@@ -50,7 +53,7 @@ def draw_exact_gauss_diagram():
     c_out = "#D1F2EB"     # Teal Mist (Reconstruction & Output)
     c_edge = "#2C3E50"    # Deep Charcoal Slate for borders
 
-    def draw_box(x, y, w, h, text, bg, border=c_edge, lw=1.0, fs=7.8, bold=False):
+    def draw_box(x, y, w, h, text, bg, border=c_edge, lw=1.0, fs=8.0, bold=False):
         box = patches.FancyBboxPatch(
             (x, y), w, h,
             boxstyle="round,pad=0.15,rounding_size=0.6",
@@ -79,7 +82,7 @@ def draw_exact_gauss_diagram():
     )
     ax.add_patch(outer_box)
     ax.text(2.0, 47.8, r"$\mathbf{GauSS}$: Gaussian Scale-Space Alignment and Refinement Architecture",
-            ha="left", va="center", fontsize=10.5, weight="bold", color="#2C3E50")
+            ha="left", va="center", fontsize=11.0, weight="bold", color="#2C3E50")
 
     # -------------------------------------------------------------
     # 1. Inputs (Left)
@@ -103,7 +106,7 @@ def draw_exact_gauss_diagram():
     # -------------------------------------------------------------
     # S3 upsample to stride 4
     draw_arrow(22.0, 26.0, 24.5, 26.0)
-    draw_box(24.5, 24.5, 6.5, 3.2, r"$\text{Interp}(\cdot)$" + "\n(Stride 4)", c_proj, fs=7.0)
+    draw_box(24.5, 24.5, 6.5, 3.2, r"$\text{Interp}(\cdot)$" + "\n(Stride 4)", c_proj, fs=7.4)
 
     # Sum S2 + Interp(S3)
     ax.plot([22.0, 29.5], [39.0, 39.0], color=c_edge, lw=1.1)
@@ -118,7 +121,7 @@ def draw_exact_gauss_diagram():
     ax.plot([32.5, 32.5], [36.0, 44.5], color="#7F8C8D", lw=1.2, linestyle=":")
     ax.plot([32.5, 91.5], [44.5, 44.5], color="#7F8C8D", lw=1.2, linestyle=":")
     draw_arrow(91.5, 44.5, 91.5, 32.0, color="#7F8C8D", lw=1.2)
-    ax.text(62.0, 45.2, r"Identity Shortcut Connection ($\mathbf{X}_0$)", fontsize=7.5, color="#5D6D7E", ha="center")
+    ax.text(62.0, 45.2, r"Identity Shortcut Connection ($\mathbf{X}_0$)", fontsize=11.0, color="#5D6D7E", ha="center")
 
     # -------------------------------------------------------------
     # 3. Learnable Separable Gaussian Scale-Space Filtering
@@ -140,20 +143,20 @@ def draw_exact_gauss_diagram():
     # 4. Sub-pixel Encoders (PixelUnshuffle + DWConv)
     # -------------------------------------------------------------
     draw_arrow(63.5, 38.1, 66.0, 38.1)
-    draw_box(66.0, 36.5, 8.5, 3.2, r"$\text{PixelUnshuf}(2) \to \mathbf{R}_{\text{high}}$", c_subp, fs=7.0)
+    draw_box(66.0, 36.5, 8.5, 3.2, r"$\text{PixelUnshuf}(2) \to \mathbf{R}_{\text{high}}$", c_subp, fs=7.4)
 
     draw_arrow(63.5, 34.1, 66.0, 34.1)
-    draw_box(66.0, 32.5, 8.5, 3.2, r"$\text{PixelUnshuf}(2) \to \mathbf{R}_{\text{mid}}$", c_subp, fs=7.0)
+    draw_box(66.0, 32.5, 8.5, 3.2, r"$\text{PixelUnshuf}(2) \to \mathbf{R}_{\text{mid}}$", c_subp, fs=7.4)
 
     draw_arrow(63.5, 30.1, 66.0, 30.1)
-    draw_box(66.0, 28.5, 8.5, 3.2, r"$\text{PixelUnshuf}(2) \to \mathbf{R}_{\text{low}}$", c_subp, fs=7.0)
+    draw_box(66.0, 28.5, 8.5, 3.2, r"$\text{PixelUnshuf}(2) \to \mathbf{R}_{\text{low}}$", c_subp, fs=7.4)
 
     # -------------------------------------------------------------
     # 5. Multi-Scale Dilated Context Aggregation (Bottom branch)
     # -------------------------------------------------------------
     # S4 upsample
     draw_arrow(22.0, 8.0, 24.5, 8.0)
-    draw_box(24.5, 6.5, 6.5, 3.2, r"$\text{Interp}(\cdot)$" + "\n(Stride 8)", c_proj, fs=7.0)
+    draw_box(24.5, 6.5, 6.5, 3.2, r"$\text{Interp}(\cdot)$" + "\n(Stride 8)", c_proj, fs=7.4)
 
     # C0 = SiLU(BN(S3 + Interp(S4)))
     ax.plot([18.25, 18.25], [24.0, 14.5], color=c_edge, lw=1.1)
@@ -196,7 +199,7 @@ def draw_exact_gauss_diagram():
     ax.plot([91.5, 91.5], [7.5, 21.0], color=c_edge, lw=1.1)
     draw_arrow(91.5, 21.0, 91.5, 22.0)
 
-    draw_box(86.5, 22.0, 10.0, 4.2, r"$\text{PixelShuffle}(2)$" + "\n" + r"$\text{Conv}_{1\times 1}^{\to 4d} \to \widetilde{\mathbf{F}}$" + "\n(Stride 4 Expansion)", c_out, fs=7.0)
+    draw_box(86.5, 22.0, 10.0, 4.2, r"$\text{PixelShuffle}(2)$" + "\n" + r"$\text{Conv}_{1\times 1}^{\to 4d} \to \widetilde{\mathbf{F}}$" + "\n(Stride 4 Expansion)", c_out, fs=7.4)
 
     # Addition with X0
     draw_arrow(91.5, 26.2, 91.5, 28.0)
@@ -204,7 +207,7 @@ def draw_exact_gauss_diagram():
 
     # Output node
     draw_arrow(91.5, 32.0, 91.5, 34.5)
-    draw_box(85.5, 34.5, 12.0, 4.8, r"$\mathbf{P}_2^{\text{aligned}} = \text{SiLU}(\mathbf{X}_0 + \alpha \widetilde{\mathbf{F}})$" + "\n" + r"$64 \times \frac{H}{4} \times \frac{W}{4}$" + "\n(To P2 Detection Head)", "#A3E4D7", border="#117A65", lw=1.4, bold=True)
+    draw_box(85.5, 34.5, 12.0, 4.8, r"$\mathbf{P}_2^{\text{aligned}} = \text{SiLU}(\mathbf{X}_0 + \alpha \widetilde{\mathbf{F}})$" + "\n" + r"$32 \times \frac{H}{4} \times \frac{W}{4}$" + "\n(To P2 Detection Head)", "#A3E4D7", border="#117A65", lw=1.4, bold=True)
 
     plt.tight_layout()
     fig.savefig(out_dir_paper / "10_gauss_router_architecture.pdf", format="pdf", bbox_inches="tight")

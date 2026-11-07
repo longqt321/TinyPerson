@@ -296,7 +296,7 @@ def draw_overall_pipeline():
         "Input Image\n$1280 \\times 1280$\n(Tiny Person\n$2 \\to 20$ px)",
         ha="center",
         va="center",
-        fontsize=9,
+        fontsize=5.9,
         weight="bold",
     )
 
@@ -318,13 +318,13 @@ def draw_overall_pipeline():
         linewidth=1.5,
     )
     ax.add_patch(b_bb)
-    ax.text(4.9, 4.65, "CSP Backbone", ha="center", va="center", fontsize=10, weight="bold", color="#4F772D")
+    ax.text(4.9, 4.65, "CSP Backbone", ha="center", va="center", fontsize=4.3, weight="bold", color="#4F772D")
 
     bb_stages = [
         (4.9, 3.9, "C2 Stage (Stride 4, 64ch)"),
         (4.9, 3.0, "C3 Stage (Stride 8, 128ch)"),
-        (4.9, 2.1, "C4 Stage (Stride 16, 256ch)"),
-        (4.9, 1.3, "C5 Stage (Stride 32, 512ch)"),
+        (4.9, 2.1, "C4 Stage (Stride 16, 128ch)"),
+        (4.9, 1.3, "C5 Stage (Stride 32, 256ch)"),
     ]
     for x, y, name in bb_stages:
         box = patches.FancyBboxPatch(
@@ -337,7 +337,7 @@ def draw_overall_pipeline():
             linewidth=1.0,
         )
         ax.add_patch(box)
-        ax.text(x, y, name, ha="center", va="center", fontsize=7.5, weight="semibold")
+        ax.text(x, y, name, ha="center", va="center", fontsize=5.0, weight="semibold")
 
     # 3. PANet Multi-Scale Neck
     b_neck = patches.FancyBboxPatch(
@@ -350,13 +350,13 @@ def draw_overall_pipeline():
         linewidth=1.5,
     )
     ax.add_patch(b_neck)
-    ax.text(8.9, 4.65, "PANet Feature Pyramid", ha="center", va="center", fontsize=10, weight="bold", color="#B07D62")
+    ax.text(8.9, 4.65, "PANet Feature Pyramid", ha="center", va="center", fontsize=4.3, weight="bold", color="#B07D62")
 
     neck_stages = [
-        (8.9, 3.9, "P2 Upsample (64ch)"),
-        (8.9, 3.0, "P3 Stage (128ch)"),
-        (8.9, 2.1, "P4 Stage (256ch)"),
-        (8.9, 1.3, "P5 Stage (512ch)"),
+        (8.9, 3.9, "P2 Stage (32ch)"),
+        (8.9, 3.0, "P3 Stage (64ch)"),
+        (8.9, 2.1, "P4 Stage (128ch)"),
+        (8.9, 1.3, "P5 Stage (256ch)"),
     ]
     for x, y, name in neck_stages:
         box = patches.FancyBboxPatch(
@@ -369,7 +369,7 @@ def draw_overall_pipeline():
             linewidth=1.0,
         )
         ax.add_patch(box)
-        ax.text(x, y, name, ha="center", va="center", fontsize=7.5, weight="semibold")
+        ax.text(x, y, name, ha="center", va="center", fontsize=5.0, weight="semibold")
 
     # Mũi tên từ Backbone sang Neck
     ax.annotate(
@@ -408,7 +408,7 @@ def draw_overall_pipeline():
         "GauSS Module\n(Ours)",
         ha="center",
         va="center",
-        fontsize=10.5,
+        fontsize=6.8,
         weight="bold",
         color="white",
     )
@@ -418,7 +418,7 @@ def draw_overall_pipeline():
         "Scale-Space Align\n+ Router Attention",
         ha="center",
         va="center",
-        fontsize=7.5,
+        fontsize=5.0,
         weight="semibold",
         color="white",
     )
@@ -454,7 +454,7 @@ def draw_overall_pipeline():
         linewidth=1.5,
     )
     ax.add_patch(b_head)
-    ax.text(14.85, 4.65, "Detect Head", ha="center", va="center", fontsize=9.5, weight="bold", color="#283618")
+    ax.text(14.85, 4.65, "Detect Head", ha="center", va="center", fontsize=6.1, weight="bold", color="#283618")
 
     heads = [
         (14.85, 3.9, "Head P2\n(Tiny Object)"),
@@ -479,7 +479,7 @@ def draw_overall_pipeline():
             name,
             ha="center",
             va="center",
-            fontsize=7,
+            fontsize=4.7,
             weight="bold" if "P2" in name else "normal",
             color="white" if "P2" in name else "black",
         )
@@ -500,12 +500,6 @@ def draw_overall_pipeline():
             arrowprops={"arrowstyle": "-|>", "color": "black", "lw": 1.2},
         )
 
-    fig.suptitle(
-        "Figure 2: The Overall Architecture of YOLO26n-P2 Augmented with the Proposed GauSS Module",
-        fontsize=12,
-        weight="bold",
-        y=0.98,
-    )
     fig.savefig(out_dir / "11_overall_gauss_pipeline.pdf", format="pdf", bbox_inches="tight")
     fig.savefig(out_dir / "11_overall_gauss_pipeline.svg", format="svg", bbox_inches="tight")
     plt.close(fig)

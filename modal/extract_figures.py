@@ -277,7 +277,10 @@ def extract_all_qualitative_artifacts(
             h_b.remove()
             break
 
-    fig3, axes3 = plt.subplots(1, 3, figsize=(10, 3.6))
+    # Sized so the PDF prints legibly at full text width: the paper prints these
+    # at 497 pt (WACV letter, 0.75 in margins), so a 6.6 in wide source scales
+    # ~0.8x and the 9 pt labels land near 7 pt on paper instead of ~3 pt.
+    fig3, axes3 = plt.subplots(1, 3, figsize=(6.6, 2.6))
     axes3[0].imshow(crop_img)
     axes3[0].set_title("(a) Input Test Patch", fontweight="bold")
     axes3[0].axis("off")
@@ -344,7 +347,9 @@ def extract_all_qualitative_artifacts(
                 s1_val = float(torch.cat((sigmas[0], sigmas[1])).mean().item())
                 s2_val = float(torch.cat((sigmas[2], sigmas[3])).mean().item())
 
-            fig4, axes4 = plt.subplots(1, 4, figsize=(12, 3.2))
+            # Same reasoning as Figure 3 above: keep the source near the printed
+            # width so the 9 pt titles survive the scale-down.
+            fig4, axes4 = plt.subplots(1, 4, figsize=(7.0, 2.2))
             axes4[0].imshow(crop_img)
             axes4[0].set_title("(a) Input Crop", fontweight="bold")
             axes4[0].axis("off")

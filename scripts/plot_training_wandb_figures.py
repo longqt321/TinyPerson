@@ -35,6 +35,12 @@ C_GAUSS = "#C0392B"
 C_GREEN = "#27AE60"
 
 def save_dual(fig, stem):
+    # tight_layout keeps twin-axis labels and legends from colliding; bbox_inches
+    # alone does not reflow the axes grid.
+    try:
+        fig.tight_layout()
+    except UserWarning:
+        pass
     svg_path = out_dir / f"{stem}.svg"
     pdf_path = paper_dir / f"{stem}.pdf"
     fig.savefig(svg_path, format="svg", bbox_inches="tight")
@@ -138,6 +144,10 @@ def plot_total_loss_and_lr():
 
 
 def plot_pareto_frontier():
+    # FPS values are per-tile throughput (single 640x512 crop), which is the only
+    # throughput comparable across all detectors here. Tiled evaluation of a full
+    # TinyPerson frame runs 23.4 crops, so end-to-end throughput is much lower;
+    # that is stated explicitly in the axis label and in the GauSS annotation.
     models_data = [
         {"Model": "FCOS (Yu et al.)", "Params": 32.0, "AP_tiny": 16.90, "FPS": 20.8, "Type": "Heavy"},
         {"Model": "RetinaNet (Yu et al.)", "Params": 34.0, "AP_tiny": 30.82, "FPS": 18.2, "Type": "Heavy"},
@@ -177,14 +187,14 @@ def plot_pareto_frontier():
     ax.annotate("YOLO26n-P2 (Base)\n(88.6 FPS, 9.1%)", xy=(88.6, 9.07), xytext=(65, 4.0),
                 fontsize=7.2, color=C_BASE, weight="bold",
                 arrowprops={"arrowstyle": "->", "color": C_BASE, "lw": 0.8})
-    # GauSS (Ours): 65.8 FPS, 9.76%
-    ax.annotate("GauSS (Ours)\n(65.8 FPS, 9.8%)", xy=(65.8, 9.76), xytext=(45, 14.0),
+    # GauSS (Ours): 65.8 FPS per tile, 9.76% AP_tiny (tiled inference)
+    ax.annotate("GauSS (Ours)\n(65.8 FPS/tile, 9.8%)\n7.3 FPS end-to-end", xy=(65.8, 9.76), xytext=(38, 14.5),
                 fontsize=7.2, color=C_GAUSS, weight="bold",
                 arrowprops={"arrowstyle": "->", "color": C_GAUSS, "lw": 0.8})
 
     ax.axvline(60, color="#7F8C8D", linestyle=":", linewidth=1.2, label="Real-time (60 FPS)")
     # Removed \rightarrow arrows from labels per feedback
-    ax.set_xlabel("Inference Throughput (FPS)")
+    ax.set_xlabel("Per-tile Inference Throughput (FPS)")
     ax.set_ylabel(r"$AP_{50}^{\mathrm{tiny}}$ (%)")
     ax.set_xlim(10, 110)
     ax.set_ylim(0, 50)

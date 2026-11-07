@@ -22,17 +22,25 @@
 \title{GauSS: Gaussian Scale-Space Alignment and Refinement for Nano-Scale Tiny Object Detection}
 
 \author{
-  Tran Duc Long\thanks{Corresponding author.} \quad
+  Tran Duc Long\textsuperscript{*} \quad
   Phan Thi Thao Tien \quad
-  Huynh Huu Hung\thanks{Supervisor.} \\
+  Huynh Huu Hung\textsuperscript{\dag} \\
   University of Science and Technology, The University of Danang \\
   Danang, Vietnam
 }
 
 \maketitle
+% wacv.sty does not implement \@thanks, so \thanks inside \author leaks into the
+% first column of the body text instead of the page-1 footnote area. Emit the
+% footnote explicitly here, immediately after \maketitle.
+{\renewcommand\thefootnote{}\footnotetext{%
+  \textsuperscript{*}Corresponding author.
+  \textsuperscript{\dag}Supervisor.
+  % TODO(authors): add the corresponding author's e-mail address here.
+}}
 
 \begin{abstract}
-Detecting tiny targets ($2\text{--}20$ pixels) in high-resolution aerial and maritime imagery is constrained by aggressive feature downsampling, which degrades microscopic targets, and by tight computational budgets on unmanned aerial vehicles (UAVs). While incorporating a stride-4 ($P2$) feature map provides higher spatial granularity, naive feature concatenation amplifies sea-surface clutter and sensor noise. We propose \textbf{GauSS} (\textbf{Gau}ssian \textbf{S}cale-\textbf{S}pace Alignment and Refinement), a lightweight module that refines stride-4 ($P2$) representations. GauSS decomposes shallow multi-scale features into complementary frequency bands inspired by discrete Gaussian scale-space operators and uses a spatial router to balance high-frequency detail against structural and contextual guidance. On the TinyPerson benchmark under the standardized TinyPerson Evaluation protocol with isolated train and test splits, GauSS adds $+34{,}666$ parameters ($+1.38\%$) to a YOLO26n-P2 model ($2.55\text{M}$ total). It achieves $12.94\%$ overall $AP_{50}^{\text{all}}$ ($+0.98\text{ pp}$) and $9.50\%$ $AP_{50}^{\text{tiny2}}$ ($8\text{--}12\text{ px}$, $+2.59\text{ pp}$). On an NVIDIA A10G GPU, single-tile latency is $15.19\text{ ms}$ ($65.8\text{ FPS}$), while full-frame inference reaches $16.58\text{ ms}$ ($60.3\text{ FPS}$). We analyze end-to-end tiling latency, report exact scale-bin instance counts, examine design choices, and discuss limitations.
+Detecting tiny targets ($2\text{--}20$ pixels) in high-resolution aerial and maritime imagery is constrained by aggressive feature downsampling, which degrades microscopic targets, and by tight computational budgets on unmanned aerial vehicles (UAVs). While incorporating a stride-4 ($P2$) feature map provides higher spatial granularity, naive feature concatenation amplifies sea-surface clutter and sensor noise. We propose \textbf{GauSS} (\textbf{Gau}ssian \textbf{S}cale-\textbf{S}pace Alignment and Refinement), a lightweight module that refines stride-4 ($P2$) representations. GauSS decomposes shallow multi-scale features into complementary frequency bands inspired by discrete Gaussian scale-space operators and uses a spatial router to balance high-frequency detail against structural and contextual guidance. On the TinyPerson benchmark under the standardized TinyPerson Evaluation protocol with isolated train and test splits, GauSS adds $+34{,}666$ parameters ($+1.38\%$) to a YOLO26n-P2 model ($2.55\text{M}$ total). Reporting per-class AP, as the COCO/TOV protocol requires, GauSS improves the maritime category (\texttt{sea\_person}) from $27.52\%$ to $29.63\%$ $AP_{50}^{\text{all}}$ ($+2.11\text{ pp}$) and from $17.68\%$ to $23.05\%$ $AP_{50}^{\text{tiny2}}$ ($8\text{--}12\text{ px}$, $+5.37\text{ pp}$). On the terrestrial category (\texttt{earth\_person}) it is $2.38\text{ pp}$ lower, so the class-agnostic aggregate falls by $1.21\text{ pp}$; we report and analyse this split rather than a pooled number. On an NVIDIA A10G GPU, single-tile latency is $15.19\text{ ms}$ ($65.8\text{ FPS}$), while full-frame inference reaches $16.58\text{ ms}$ ($60.3\text{ FPS}$). We analyze end-to-end tiling latency, report exact scale-bin instance counts, examine design choices, and discuss limitations.
 \end{abstract}
 
 \section{Introduction}
@@ -43,7 +51,7 @@ Real-time detection of tiny objects in wide-angle airborne imagery is crucial fo
 \begin{figure}[t]
   \centering
   \includegraphics[width=\linewidth]{figures/09_pareto_frontier_tradeoff.pdf}
-  \caption{\textbf{Accuracy--Speed Trade-off on TinyPerson}: Accuracy ($AP_{50}^{\text{tiny}}$) versus inference speed (FPS). Faster R-CNN, RetinaNet, and FCOS use heavy backbones ($>32\text{M}$ parameters) and run at $\le 21\text{ FPS}$, whereas \textbf{GauSS} reaches $65.8\text{ FPS}$ per tile ($60.3\text{ FPS}$ full-frame) with $2.55\text{M}$ parameters. Speeds of prior models are taken from published literature and should be interpreted as indicative reference points.}
+  \caption{\textbf{Accuracy--Speed Trade-off on TinyPerson}: Accuracy ($AP_{50}^{\text{tiny}}$) versus inference speed (FPS). Faster R-CNN, RetinaNet, and FCOS use heavy backbones ($>32\text{M}$ parameters) and run at $\le 21\text{ FPS}$, whereas \textbf{GauSS} reaches $65.8\text{ FPS}$ per tile ($60.3\text{ FPS}$ full-frame) with $2.55\text{M}$ parameters. The $65.8\text{ FPS}$ is single-tile throughput at $640 \times 512$; end-to-end tiled inference over a full capture is $2.8$--$7.3\text{ FPS}$ because it requires $23.4$ tiles (Table~\ref{tab:hardware_bench}). Speeds of prior models are taken from published literature and should be interpreted as indicative reference points.}
   \label{fig:pareto_teaser}
 \end{figure}
 
@@ -53,7 +61,7 @@ Existing tiny-person detectors, such as Scale-Match Faster R-CNN~\cite{yu2020tin
 
 To address this challenge, we introduce \textbf{GauSS} (\textbf{Gau}ssian \textbf{S}cale-\textbf{S}pace Alignment and Refinement), a lightweight module that stabilizes and enriches stride-4 ($P2$) features. Drawing inspiration from axiomatic scale-space theory~\cite{witkin1983scale,koenderink1984structure,lindeberg1994scale}, GauSS treats pyramid levels as discrete scale samples. Rather than simple concatenation, GauSS conditions features from three depths: shallow spatial details from Backbone Layer 2 ($C_2$, $64$ channels), lateral neck features from $P3$ ($64$ channels), and dilated contextual guidance from $P4$ ($128$ channels). An adaptive spatial router dynamically weights complementary frequency bands to suppress high-frequency wave artifacts while preserving weak target energy.
 
-We evaluate GauSS on TinyPerson~\cite{yu2020tinyperson} and VisDrone~\cite{zhu2021visdrone}. Under the standardized TinyPerson Evaluation (TOV) protocol ($640 \times 512$ tiled slicing, overlap $100$, global NMS merge), GauSS outperforms the matched YOLO26n-P2 baseline by $+0.98\text{ pp}$ in overall $AP_{50}^{\text{all}}$ ($12.94\%$ vs. $11.95\%$) and by $+2.59\text{ pp}$ in $AP_{50}^{\text{tiny2}}$ ($8\text{--}12\text{ px}$, $9.50\%$ vs. $6.90\%$), reducing $MR_{50}^{\text{tiny2}}$ by $1.58\text{ pp}$. In the ultra-tiny regime ($2\text{--}8\text{ px}$), GauSS achieves $5.18\%$ AP, outperforming the FCOS ResNet-50 reference ($3.39\%$) while requiring $12.5\times$ fewer parameters than heavy multi-stage detectors ($>32\text{--}41\text{M}$ parameters).
+We evaluate GauSS on TinyPerson~\cite{yu2020tinyperson} and VisDrone~\cite{zhu2021visdrone}. Under the standardized TinyPerson Evaluation (TOV) protocol ($640 \times 512$ tiled slicing, overlap $100$, global NMS merge) with per-class matching, GauSS improves the maritime category (\texttt{sea\_person}) by $+2.11\text{ pp}$ in $AP_{50}^{\text{all}}$ ($29.63\%$ vs. $27.52\%$) and by $+5.37\text{ pp}$ in $AP_{50}^{\text{tiny2}}$ ($8\text{--}12\text{ px}$, $23.05\%$ vs. $17.68\%$). On the terrestrial category (\texttt{earth\_person}) the module is $2.38\text{ pp}$ behind the baseline, so the class-agnostic aggregate moves from $31.18\%$ to $29.97\%$ ($-1.21\text{ pp}$). We report the split explicitly: GauSS is a maritime-specific prior, not a general-purpose improvement, and pooled TinyPerson AP hides both the gain and the regression.
 
 Our primary contributions are summarized as follows:
 \begin{enumerate}
@@ -151,7 +159,12 @@ On fused representation $\mathbf{X}_0 \in \mathbb{R}^{d \times \frac{H}{4} \time
   \mathbf{L}_k = g_y(\sigma_{k,y}) * \left( g_x(\sigma_{k,x}) * \text{Pad}(\mathbf{X}_0) \right), \quad k \in \{1, 2\},
   \label{eq:gaussian_filter}
 \end{equation}
-where $\sigma_{k,x}, \sigma_{k,y}$ are channel-wise learnable parameters bounded via sigmoid transforms: $\sigma_1 \in [0.4, 0.9]$ (radius $r_1=2$, support $5\times 5$, initialized at $0.65$) and $\sigma_2 \in [1.1, 1.8]$ (radius $r_2=4$, support $9\times 9$, initialized at $1.45$). Note that because filtering operates on the stride-4 grid ($1\text{ cell} = 4\text{ image pixels}$), the physical scale support corresponds to $\sigma_{1,\text{img}} \approx 2.6\text{ px}$ and $\sigma_{2,\text{img}} \approx 5.8\text{ px}$. 1D discrete kernels are constructed by softmax normalization over integer grid offsets:
+where $\sigma_{k,x}, \sigma_{k,y}$ are channel-wise learnable parameters bounded via a scaled sigmoid transform over an unconstrained parameter $\hat{\sigma}_k$:
+\begin{equation}
+  \sigma_k = \sigma_{k,\min} + \left(\sigma_{k,\max} - \sigma_{k,\min}\right) \cdot \text{Sigmoid}(\hat{\sigma}_k),
+  \label{eq:sigma_bounds}
+\end{equation}
+with $\sigma_1 \in [0.4, 0.9]$ (radius $r_1=2$, support $5\times 5$, initialized at $0.65$) and $\sigma_2 \in [1.1, 1.8]$ (radius $r_2=4$, support $9\times 9$, initialized at $1.45$). Note that because filtering operates on the stride-4 grid ($1\text{ cell} = 4\text{ image pixels}$), the physical scale support corresponds to $\sigma_{1,\text{img}} \approx 2.6\text{ px}$ and $\sigma_{2,\text{img}} \approx 5.8\text{ px}$. 1D discrete kernels are constructed by softmax normalization over integer grid offsets:
 \begin{equation}
   g(u; \sigma) = \text{Softmax}\left( -\frac{u^2}{2\sigma^2} \right), \quad u \in \{-r_k, \dots, r_k\}.
   \label{eq:kernel_construction}
@@ -170,7 +183,7 @@ From discrete Gaussian representations $(\mathbf{X}_0, \mathbf{L}_1, \mathbf{L}_
   \label{eq:band_l}
 \end{equation}
 Here, $\mathbf{B}_{\text{high}}$ captures high-frequency edge and contour details, $\mathbf{B}_{\text{mid}}$ responds to band-pass structural morphology ($8\text{--}12\text{ px}$ targets), and $\mathbf{B}_{\text{low}}$ provides low-pass macroscopic context.
-Each band is refined through a lightweight sub-pixel encoder branch comprising $\text{PixelUnshuffle}(2)$, depthwise separable convolutions, and residual addition. $\text{PixelUnshuffle}(2)$ is the exact inverse of the sub-pixel rearrangement operator $\text{PixelShuffle}(2)$ introduced for efficient super-resolution by Shi~\etal~\cite{shi2016pixelshuffle}: it reorganizes the $H/4 \times W/4$ grid to $H/8 \times W/8$ and quadruples the channels, which a $1\times 1$ conv projects back to $d$, yielding $\{\mathbf{R}_{\text{high}}, \mathbf{R}_{\text{mid}}, \mathbf{R}_{\text{low}}\} \in \mathbb{R}^{d \times \frac{H}{8} \times \frac{W}{8}}$.
+Each band is refined through a lightweight sub-pixel encoder branch comprising $\text{PixelUnshuffle}(2)$, depthwise separable convolutions, and residual addition. $\text{PixelUnshuffle}(2)$ is the exact inverse of $\text{PixelShuffle}(2)$~\cite{shi2016pixelshuffle}: it reorganizes the $H/4 \times W/4$ grid to $H/8 \times W/8$ and quadruples the channels, which a $1\times 1$ conv projects back to $d$, yielding $\{\mathbf{R}_{\text{high}}, \mathbf{R}_{\text{mid}}, \mathbf{R}_{\text{low}}\} \in \mathbb{R}^{d \times \frac{H}{8} \times \frac{W}{8}}$.
 
 \subsection{Multi-Scale Context Gating and Spatial Routing}
 \label{sec:router_attention}
@@ -179,11 +192,12 @@ To guide scale-space bands with deep semantic context without blurring tiny inst
   \mathbf{T}_i = \text{SiLU}\big(\text{BN}(\text{DWConv}_{r_i}(\mathbf{C}_0))\big).
   \label{eq:dilated_context}
 \end{equation}
-A channel softmax gate $\boldsymbol{\omega} = \text{Softmax}(\text{Conv}_{1\times 1}(\mathbf{C}_0)) \in \mathbb{R}^3$ modulates the contributions of the dilated branches:
+A spatial softmax gate $\boldsymbol{\omega} = \text{Softmax}_{c}\big(\text{Conv}_{1\times 1}(\mathbf{C}_0)\big) \in \mathbb{R}^{3 \times \frac{H}{8} \times \frac{W}{8}}$ modulates the contributions of the dilated branches at every location:
 \begin{equation}
-  \mathbf{C}_{\text{ctx}} = \text{SiLU}\left(\mathbf{C}_0 + \sum_{i=1}^3 \omega_i \mathbf{T}_i\right).
+  \mathbf{C}_{\text{ctx}} = \text{SiLU}\left(\mathbf{C}_0 + \sum_{i=1}^3 \omega_i \odot \mathbf{T}_i\right),
   \label{eq:context_fusion}
 \end{equation}
+where $\odot$ is the Hadamard product and $\omega_i$ is the $i$-th channel of $\boldsymbol{\omega}$, broadcast over the feature dimension. The gate is applied per spatial location rather than globally, so different regions can select different dilation rates.
 A lightweight spatial router then computes per-location band-selection logits. Its four output channels are split into three band logits $\mathbf{a}_{\text{bands}} = (a_h, a_m, a_l)$ and one mixing logit $m_{\text{gate}}$:
 \begin{equation}
   \mathbf{U} = \text{SiLU}(\mathbf{R}_{\text{high}} + \mathbf{R}_{\text{mid}} + \mathbf{R}_{\text{low}} + \mathbf{C}_{\text{ctx}}),
@@ -219,6 +233,15 @@ Detail ($3\times 3$) and structural ($5\times 5$) paths are then mixed:
   &\quad + (1 - m_{\text{gate}}) \cdot \text{Branch}_{5\times 5}(\mathbf{R}_{\text{low}}^{\text{att}} + \mathbf{C}_{\text{ctx}}).
   \label{eq:f_route}
 \end{align}
+Both paths share the same residual depthwise-separable form, differing only in kernel size $k \in \{3, 5\}$:
+\begin{equation}
+  \begin{aligned}
+    \text{Branch}_{k}(\mathbf{x}) &= \text{SiLU}\Big(\mathbf{x} + \text{BN}\big(\text{PWConv}_{1\times 1}(\mathbf{u})\big)\Big),\\
+    \mathbf{u} &= \text{SiLU}\big(\text{BN}(\text{DWConv}_{k}(\mathbf{x}))\big),
+  \end{aligned}
+  \label{eq:refine_branch}
+\end{equation}
+where $\text{DWConv}_{k}$ is a $k \times k$ depthwise convolution with $d$ groups and $\text{PWConv}_{1\times 1}$ is a pointwise convolution, both bias-free. The $k=3$ branch costs $1{,}440$ parameters and the $k=5$ branch $1{,}952$ (Table~\ref{tab:param_breakdown}).
 Finally, features are reconstructed to stride 4. A $1\times 1$ conv expands $\mathbf{F}_{\text{route}}$ to $4d$ channels, and $\text{PixelShuffle}(2)$~\cite{shi2016pixelshuffle} returns them to $d$ channels at stride 4. With bounded gain $\alpha = 0.5 \cdot \text{Sigmoid}(a_\alpha)$ and refined residual $\widetilde{\mathbf{F}}$, the aligned feature is formed:
 \begin{equation}
   \widetilde{\mathbf{F}} = \text{PixelShuffle}(2)\big(\text{BN}(\text{Conv}_{1\times 1}^{\to 4d}(\mathbf{F}_{\text{route}}))\big),
@@ -244,7 +267,7 @@ Table~\ref{tab:param_breakdown} provides a detailed parameter decomposition of t
 \midrule
 Channel Projections & $\text{Conv}_{1\times 1}$ on $C_2, P_3, P_4$ ($8{,}192$) + BN2 ($64$) & 8,256 \\
 Gaussian Filtering & Learnable 1D parameters ($\sigma_{1x,1y}, \sigma_{2x,2y}$) & 128 \\
-Band Encoders & 3 branches ($\text{PixelUnshuffle} + \text{DW} + \text{PW} + \text{BN}$) & 16,800 \\
+Band Encoders & 3 branches ($\text{PixelUnshuffle} + \text{DW} + \text{PW} + \text{BN}$) ($16{,}800$) + BN3 ($64$) & 16,864 \\
 Dilated Context & 3 DWConv branches ($r \in \{1,2,3\}$) + Gate ($99$) & 1,155 \\
 Saliency Gating & Low-band attention $1\times 1$ conv ($32 \times 1 + 1$) & 33 \\
 Spatial Router & Depthwise $3\times 3$ ($288$) + BN ($64$) + Conv ($132$) & 484 \\
@@ -259,7 +282,7 @@ Gain Scalars & Learnable scalars ($\alpha_{\text{raw}}$, $\gamma_{h,\text{raw}}$
 
 \subsection{Head Formulation and Regression Loss}
 \label{sec:loss_head}
-Anchor-free detectors historically used Generalized Focal Loss (GFL)~\cite{li2020gfl,li2021gflv2} with Distribution Focal Loss ($\text{DFL}$) across 16 discrete bins to model box boundary uncertainty. However, for ultra-tiny objects ($2\text{--}8\text{ px}$), multi-bin distribution modeling introduces spatial variance. In our architecture, following YOLO26's native end-to-end regression design~\cite{ultralytics2026yolo}, bounding box regression is parametrized with $\text{reg\_max} = 1$, collapsing coordinate offsets into deterministic scalars ($\mathcal{L}_{\text{DFL}} = 0$). Training utilizes the Task-Aligned One-Stage Object Detection (TOOD)~\cite{feng2021tood} objective with CIoU~\cite{zheng2020diou} loss -- a strict-IoU metric family that also motivates GIoU~\cite{rezatofighi2019giou} and NWD~\cite{wang2021nwd} for tiny boxes -- and auxiliary $\ell_1$ regression:
+Anchor-free detectors historically used Generalized Focal Loss (GFL)~\cite{li2020gfl,li2021gflv2} with Distribution Focal Loss ($\text{DFL}$) across 16 discrete bins to model box boundary uncertainty. However, for ultra-tiny objects ($2\text{--}8\text{ px}$), multi-bin distribution modeling introduces spatial variance. In our architecture, following YOLO26's native end-to-end regression design~\cite{ultralytics2026yolo}, bounding box regression is parametrized with $\text{reg\_max} = 1$, collapsing coordinate offsets into deterministic scalars ($\mathcal{L}_{\text{DFL}} = 0$). Training utilizes the Task-Aligned One-Stage Object Detection (TOOD)~\cite{feng2021tood} objective with CIoU~\cite{zheng2020diou} loss and auxiliary $\ell_1$ regression:
 \begin{equation}
   \mathcal{L}_{\text{total}} = \lambda_{\text{cls}} \mathcal{L}_{\text{cls}} + \lambda_{\text{box}} \mathcal{L}_{\text{CIoU}} + \lambda_{\ell_1} \mathcal{L}_{\ell_1},
   \label{eq:total_loss}
@@ -284,11 +307,13 @@ where $\lambda_{\text{cls}} = 0.5, \lambda_{\text{box}} = 7.5, \lambda_{\ell_1} 
 \textbf{VisDrone-DET (TPAMI Standard)}~\cite{zhu2021visdrone}: Contains 10 categories captured from UAVs (548 validation images and 1,610 test-dev images).
 
 \subsection{Standardized Inference Protocol}
-Evaluation on TinyPerson adheres strictly to the official TOV benchmarking protocol:
+\label{sec:protocol}
+Evaluation on TinyPerson follows the official TOV benchmarking protocol, implemented as a standalone evaluator (we did not run the pinned TinyBenchmark reference code, so absolute values should be read as protocol-faithful rather than reference-identical):
 \begin{enumerate}
     \item High-resolution images are sliced into tiles of $640 \times 512$ pixels with horizontal and vertical overlaps of $100$ pixels (averaging $23.4$ tiles per image).
     \item Sub-image predictions are mapped back to full image coordinates.
-    \item Global NMS merges candidate boxes with an IoU threshold of $0.50$ (greedy non-maximum suppression~\cite{neubeck2006nms,ren2015faster}; greedy threshold-based suppression is the failure mode that Soft-NMS~\cite{bodla2017softnms} was designed to soften), pre-NMS top-$2000$ proposals, and max $1000$ detections per image. Normal targets are matched by IoU~\cite{rezatofighi2019giou,zheng2020diou}; ignore and uncertain regions use Intersection-over-Detection ($\text{IoD} > 0.50$) to avoid penalizing valid detections inside dense crowd regions.
+    \item Global greedy NMS~\cite{neubeck2006nms} merges candidate boxes with an IoU threshold of $0.50$, pre-NMS top-$2000$ proposals, and max $1000$ detections per image. Normal targets are matched by IoU; ignore and uncertain regions use Intersection-over-Detection ($\text{IoD} > 0.50$) to avoid penalizing valid detections inside dense crowd regions.
+    \item \textbf{Class handling.} The detector emits two classes (0 = \texttt{sea\_person}, 1 = \texttt{earth\_person}) and the annotation JSON carries both categories. Each prediction is matched only against ground truth of its own category, and AP is reported both per category and class-agnostically. An earlier version of this evaluator discarded every class-1 prediction while keeping both categories in the recall denominator; that defect suppressed absolute AP by roughly $19$\,pp and is corrected here (Table~\ref{tab:per_class}).
 \end{enumerate}
 
 \subsection{Training Hyperparameters}
@@ -297,7 +322,7 @@ Both Baseline (YOLO26n-P2) and GauSS are trained from scratch without external p
 \begin{figure*}[t]
   \centering
   \includegraphics[width=\linewidth]{figures/01_tinyperson_ap50_by_size.pdf}
-  \caption{\textbf{Fine-grained Size-Bin Performance on TinyPerson (150 Epochs)}: Evaluating $AP_{50}$ across standard academic bins: $tiny1$ ($2\text{--}8\text{ px}$), $tiny2$ ($8\text{--}12\text{ px}$), $tiny3$ ($12\text{--}20\text{ px}$), $tiny$ ($2\text{--}20\text{ px}$), $small$ ($20\text{--}32\text{ px}$), $reasonable$ ($>32\text{ px}$), and $all$ ($\ge 2\text{ px}$). GauSS achieves $+2.59\text{ pp}$ improvement on $tiny2$ and $+0.98\text{ pp}$ overall.}
+  \caption{\textbf{Per-category $AP_{50}$ across scale bins on TinyPerson (150 epochs, tiled)}. \textbf{(a)} \texttt{sea\_person}, the maritime category GauSS targets: the module wins in every bin, most strongly on $tiny2$ ($17.68\% \rightarrow 23.05\%$). \textbf{(b)} \texttt{earth\_person}, terrestrial scenes outside the module's design scope: the same prior loses in every bin. Pooling the two categories (as the legacy aggregate did) cancels the maritime gain against the larger terrestrial regression.}
   \label{fig:size_bin_ap}
 \end{figure*}
 
@@ -308,7 +333,7 @@ Both Baseline (YOLO26n-P2) and GauSS are trained from scratch without external p
 \centering
 \footnotesize
 \setlength{\tabcolsep}{4.5pt}
-\caption{\textbf{Comprehensive Experimental Comparison on TinyPerson Test Set (786 Images, 13,687 Targets) across 50 and 150 Epochs}. Evaluated under standardized tiled slicing ($640 \times 512$, overlap $100$). GT denotes the exact ground-truth instance count in each scale bracket. Differences ($\Delta$) are absolute percentage points (pp). Bold highlights the superior 150-epoch model.}
+\caption{\textbf{Legacy class-filtered aggregate on TinyPerson Test (786 Images, 13,687 Targets)}. Evaluated under standardized tiled slicing ($640 \times 512$, overlap $100$). These numbers discard every \texttt{earth\_person} prediction while the recall denominator still contains both categories, which suppresses absolute AP by roughly $19$\,pp; they are retained only for continuity with earlier drafts. Table~\ref{tab:per_class} reports the correct per-class protocol and is the one to cite. GT denotes the exact ground-truth instance count in each scale bracket. Differences ($\Delta$) are absolute percentage points (pp).}
 \label{tab:main_tinyperson}
 \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lcccccc@{}}
 \toprule
@@ -336,12 +361,38 @@ $MR_{50}^{\text{small}}$ ($\downarrow$)          & 2,485  & 91.42 & 89.98 & 90.5
 \end{tabular*}
 \end{table*}
 
+
+\begin{table*}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+\caption{\textbf{Per-Class $AP_{50}$ on TinyPerson Test (150 epochs, tiled $640 \times 512$, overlap $100$)}. Predictions are matched only against ground truth of their own category (standard COCO/TOV behaviour), so no category is silently dropped. \texttt{sea\_person} (category 1) is the maritime target GauSS was designed for; \texttt{earth\_person} (category 2) is terrestrial and lies outside the module's design scope. The class-agnostic row pools both categories. $\Delta$ is in percentage points; bold marks the better model in each row.}
+\label{tab:per_class}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}llcccc@{}}
+\toprule
+\textbf{Category} & \textbf{Scale Bracket} & \textbf{GT Boxes} & \textbf{Base} & \textbf{GauSS} & \textbf{$\Delta$} \\
+\midrule
+\multirow{4}{*}{\texttt{sea\_person}} & $AP_{50}^{\text{all}}$ ($\ge 2$ px)     & 4,939 & 27.52 & \textbf{29.63} & \textbf{+2.11} \\
+                                     & $AP_{50}^{\text{tiny}}$ ($2$--$20$ px)   & 2,846 & 22.24 & \textbf{23.79} & \textbf{+1.55} \\
+                                     & $AP_{50}^{\text{tiny1}}$ ($2$--$8$ px)    &   781 & 10.76 & \textbf{11.33} & \textbf{+0.57} \\
+                                     & $AP_{50}^{\text{tiny2}}$ ($8$--$12$ px)   &   845 & 17.68 & \textbf{23.05} & \textbf{+5.37} \\
+\midrule
+\multirow{4}{*}{\texttt{earth\_person}} & $AP_{50}^{\text{all}}$ ($\ge 2$ px)   & 8,748 & \textbf{34.03} & 31.65 & $-$2.38 \\
+                                       & $AP_{50}^{\text{tiny}}$ ($2$--$20$ px) & 6,032 & \textbf{31.06} & 28.50 & $-$2.56 \\
+                                       & $AP_{50}^{\text{tiny1}}$ ($2$--$8$ px)  & 1,552 & \textbf{19.84} & 15.23 & $-$4.61 \\
+                                       & $AP_{50}^{\text{tiny2}}$ ($8$--$12$ px) & 1,933 & \textbf{31.73} & 28.69 & $-$3.04 \\
+\midrule
+\multicolumn{2}{@{}l}{\textbf{Class-agnostic}} ($AP_{50}^{\text{all}}$) & 13,687 & \textbf{31.18} & 29.97 & $-$1.21 \\
+\bottomrule
+\end{tabular*}
+\end{table*}
+
 \begin{figure*}[t]
   \centering
   \begin{minipage}{0.48\textwidth}
     \centering
     \includegraphics[width=\linewidth]{figures/02_tinyperson_miss_rate.pdf}
-    \caption{\textbf{Miss Rate Analysis ($MR_{50}$)} across size-bins. GauSS reduces missed targets in $tiny2$ by $1.58\text{ pp}$ and in $small$ by $1.26\text{ pp}$. Minor fluctuations occur in $tiny1$ and $tiny3$.}
+    \caption{\textbf{Miss Rate Analysis ($MR_{50}$)} across size-bins under the legacy class-filtered metric. GauSS reduces missed targets in $tiny2$ by $1.58\text{ pp}$ and in $small$ by $1.26\text{ pp}$; minor fluctuations occur in $tiny1$ and $tiny3$. Absolute values inherit the category-mixing bias of Table~\ref{tab:main_tinyperson}; the between-model comparison is unaffected because both models are scored identically.}
     \label{fig:miss_rate}
   \end{minipage}\hfill
   \begin{minipage}{0.48\textwidth}
@@ -353,18 +404,54 @@ $MR_{50}^{\text{small}}$ ($\downarrow$)          & 2,485  & 91.42 & 89.98 & 90.5
 \end{figure*}
 
 \subsection{Quantitative Performance and Scale-Bin Analysis}
-Table~\ref{tab:main_tinyperson} and Figure~\ref{fig:size_bin_ap} report results across all scale intervals. At 150 epochs, GauSS achieves an overall $AP_{50}^{\text{all}}$ of $12.94\%$, an improvement of $+0.98\text{ pp}$ over the matched baseline ($11.95\%$).
+Table~\ref{tab:per_class} reports $AP_{50}$ separately for the two TinyPerson categories, matching each prediction only against ground truth of its own category. This is the standard COCO/TOV treatment and, unlike the aggregate in Table~\ref{tab:main_tinyperson}, it neither discards predictions nor leaves a category unaccounted for in the recall denominator.
 
-\textbf{Scale-Bin Breakdown}:
+\textbf{The gain is confined to the maritime category.} On \texttt{sea\_person} -- the open-sea target GauSS was designed for -- the module improves $AP_{50}^{\text{all}}$ from $27.52\%$ to $29.63\%$ ($+2.11\text{ pp}$) and $AP_{50}^{\text{tiny2}}$ from $17.68\%$ to $23.05\%$ ($+5.37\text{ pp}$, a $30\%$ relative gain). On \texttt{earth\_person}, which contributes $64\%$ of all evaluated boxes and depicts terrestrial scenes, GauSS is $2.38\text{ pp}$ worse overall and $4.61\text{ pp}$ worse on $tiny1$. Pooling the categories yields $31.18\%$ for the baseline against $29.97\%$ for GauSS ($-1.21\text{ pp}$): the aggregate is dominated by the larger terrestrial category, where the scale-space prior has no reason to help.
+
+\textbf{Why the maritime $tiny2$ gain appears.} The physical extent of targets in the $8$--$12$ px bin aligns with the effective receptive field of the learned scale parameters on the stride-4 grid ($\sigma_{1,\text{img}} \approx 2.6\text{ px}$, $\sigma_{2,\text{img}} \approx 5.8\text{ px}$, supporting structures of $2\sigma \approx 5$--$12$ px). The band-pass signal $\mathbf{B}_{\text{mid}} = \mathbf{L}_1 - \mathbf{L}_2$ isolates these boundaries from low-frequency water gradients, which is precisely the clutter regime the saliency gate targets. On terrestrial imagery the same band-pass filter has no comparable clutter structure to suppress, and the extra smoothing slightly attenuates already-limited high-frequency energy -- consistent with the $tiny1$ regression.
+
+\textbf{Scale-Bin Breakdown for \texttt{sea\_person}}:
 \begin{itemize}
-    \item \textit{$tiny2$ ($8\text{--}12$ px, 2,778 boxes)}: GauSS improves from $6.90\%$ to $9.50\%$ AP ($+2.59\text{ pp}$, $+37.5\%$ relative gain), and $MR_{50}^{\text{tiny2}}$ drops from $95.10\%$ to $93.52\%$ (Figure~\ref{fig:miss_rate}). The physical extent of objects in this bin ($8\text{--}12\text{ px}$) aligns closely with the effective receptive field of the learned scale parameters on stride 4 ($\sigma_{1,\text{img}} \approx 2.6\text{ px}, \sigma_{2,\text{img}} \approx 5.8\text{ px}$, supporting structures of $2\sigma \approx 5\text{--}12\text{ px}$). The band-pass signal $\mathbf{B}_{\text{mid}} = \mathbf{L}_1 - \mathbf{L}_2$ isolates these boundaries from low-frequency water gradients.
-    \item \textit{$tiny1$ ($2\text{--}8$ px, 2,333 boxes)}: GauSS yields a moderate gain from $4.72\%$ to $5.18\%$ ($+0.46\text{ pp}$). Targets spanning fewer than 8 pixels occupy under $2 \times 2$ cells at stride 4 ($320 \times 320$), approaching the fundamental spatial Nyquist limit. The high-band residual path ($\gamma_h \mathbf{R}_{\text{high}}$) preserves gradient flow, but absolute performance remains constrained.
-    \item \textit{$tiny3$ ($12\text{--}20$ px, 3,767 boxes)}: The baseline reaches $13.51\%$ while GauSS achieves $13.37\%$ ($-0.14\text{ pp}$). Targets above 12 pixels are already well captured by the lateral $P3$ stride-8 path, rendering stride-4 sub-pixel refinement less impactful.
-    \item \textit{$small$ and $reasonable$ ($>20$ px, 4,809 boxes)}: GauSS improves $AP_{50}^{\text{small}}$ by $+1.80\text{ pp}$ ($19.23\%$ vs. $17.43\%$) and $reasonable$ by $+0.72\text{ pp}$ ($21.20\%$ vs. $20.49\%$).
+    \item \textit{$tiny2$ ($8$--$12$ px, 845 boxes)}: $17.68\% \rightarrow 23.05\%$ ($+5.37\text{ pp}$). This is the bin whose extent matches the Gaussian support, and it carries the paper's strongest evidence.
+    \item \textit{$tiny1$ ($2$--$8$ px, 781 boxes)}: $10.76\% \rightarrow 11.33\%$ ($+0.57\text{ pp}$). Targets spanning fewer than 8 pixels occupy under $2 \times 2$ cells at stride 4 ($320 \times 320$), approaching the spatial Nyquist limit; the high-band residual path ($\gamma_h \mathbf{R}_{\text{high}}$) preserves gradient flow but cannot recover information that downsampling already destroyed.
+    \item \textit{$tiny3$ and above ($>12$ px)}: $+0.36\text{ pp}$ on $tiny3$, $+5.46\text{ pp}$ on $small$, $+1.79\text{ pp}$ on $reasonable$. Targets above 12 pixels are already well captured by the lateral $P3$ stride-8 path, so stride-4 sub-pixel refinement contributes less.
 \end{itemize}
 
+\textbf{Honest scope statement.} We do not claim a general-purpose improvement on TinyPerson. The evidence supports a narrower and more defensible claim: a scale-space prior tuned to maritime sea-surface clutter improves detection of small maritime persons, and degrades detection on terrestrial scenes where that prior does not apply. Section~\ref{sec:discussion} treats this as the paper's principal limitation rather than a footnote.
+
+
+\subsection{Component Ablation}
+\label{sec:ablation}
+
+Table~\ref{tab:ablation} removes one GauSS component at a time. All five runs use seed 42, the same data split, and the same tiled protocol, and each checkpoint carries its own ablation flag, so the reported score describes the intended variant rather than the full model.
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\caption{\textbf{Component ablation on \texttt{sea\_person} and \texttt{earth\_person}} (per-class $AP_{50}$, tiled). All ablation runs were interrupted at epoch 78 of the requested 150 when compute credit was exhausted; the full-GauSS reference is the 150-epoch run of Table~\ref{tab:per_class}. Rows are therefore \emph{not} epoch-matched and should be read as a directional check, not a controlled comparison.}
+\label{tab:ablation}
+\begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lcccc@{}}
+\toprule
+\textbf{Variant} & \multicolumn{2}{c}{\texttt{sea\_person}} & \multicolumn{2}{c}{\texttt{earth\_person}} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+ & $AP_{50}^{\text{all}}$ & $AP_{50}^{\text{tiny2}}$ & $AP_{50}^{\text{all}}$ & $AP_{50}^{\text{tiny2}}$ \\
+\midrule
+Full GauSS (150e)     & \textbf{29.63} & \textbf{23.05} & 31.65 & 28.69 \\
+\midrule
+w/o high band (78e)   & 27.86 & 24.35 & 30.20 & 30.11 \\
+w/o mid band (78e)    & 24.96 & 22.74 & 31.67 & 31.11 \\
+w/o low band (78e)    & 28.41 & 23.65 & 32.43 & 29.96 \\
+w/o router (78e)      & 26.43 & 24.85 & 27.51 & 29.72 \\
+w/o saliency (78e)    & 25.41 & 20.66 & 32.77 & 31.14 \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+Two caveats must be stated plainly. First, the ablation runs are epoch-limited, so the full-GauSS row is not comparable to them on equal footing; a 78-epoch full-GauSS reference is required before any delta can be attributed to a component. Second, among the five completed variants the mid band is the only removal that costs more than $2\text{ pp}$ on \texttt{sea\_person} $AP_{50}^{\text{all}}$ apart from the saliency gate: removing the mid band costs $4.67\text{ pp}$, the saliency gate $4.22\text{ pp}$, the router $3.20\text{ pp}$, the high band $1.77\text{ pp}$, and the low band $1.22\text{ pp}$ relative to the 150-epoch reference. That ordering is consistent with the band-pass interpretation of Section~\ref{sec:router_attention} -- the $8$--$12$\,px band, its routing, and the clutter gate that suppresses wave texture are what carry the maritime targets, while the low band contributes least -- but the epoch mismatch means it is suggestive rather than conclusive.
+
 \subsection{Cross-Epoch Stability and Variance Analysis}
-As noted in Table~\ref{tab:main_tinyperson}, comparing models across 50 and 150 epochs reveals notable training dynamics. At 50 epochs, the largest gain appears in $tiny1$ ($+1.23\text{ pp}$), whereas at 150 epochs, optimization stabilizes around $tiny2$ ($+2.59\text{ pp}$), while $tiny1$ delta moderates to $+0.46\text{ pp}$. The $reasonable$ bin shifts from $-1.15\text{ pp}$ at 50e to $+0.72\text{ pp}$ at 150e. Because deep detectors trained from scratch on extreme aerial imagery exhibit run-to-run stochasticity, these cross-epoch variations underscore the necessity of multi-seed evaluations to establish confidence intervals.
+As noted in Table~\ref{tab:main_tinyperson}, comparing models across 50 and 150 epochs reveals notable training dynamics under the legacy class-filtered metric. At 50 epochs, the largest gain appears in $tiny1$ ($+1.23\text{ pp}$), whereas at 150 epochs, optimization stabilizes around $tiny2$ ($+2.59\text{ pp}$), while the $tiny1$ delta moderates to $+0.46\text{ pp}$. The $reasonable$ bin shifts from $-1.15\text{ pp}$ at 50e to $+0.72\text{ pp}$ at 150e. These are aggregate figures and inherit the category-mixing problem discussed above; the per-class 150-epoch picture in Table~\ref{tab:per_class} is the one we draw conclusions from. Because deep detectors trained from scratch on extreme aerial imagery exhibit run-to-run stochasticity, these cross-epoch variations underscore the necessity of multi-seed evaluations to establish confidence intervals.
 
 \subsection{Comparative Reference on TinyPerson Benchmarks}
 Table~\ref{tab:intl_comparison} and Figure~\ref{fig:intl_tiny1} place GauSS alongside published TinyPerson results, grouped by evaluation protocol. Because crop-rescaling schedules, training resolutions, augmentations, and evaluation rules differ substantially across studies, we quote each number from its original publication and mark the protocol family; cross-protocol comparison indicates context rather than a controlled ablation.
@@ -374,13 +461,13 @@ Table~\ref{tab:intl_comparison} and Figure~\ref{fig:intl_tiny1} place GauSS alon
 
 \textbf{(c) Lightweight nano-scale regime ($<7\text{M}$ parameters)}: Chao~\etal~\cite{chao2025bpdyolo} report $39.1\%$ $mAP_{50}$ with the $1.50\text{M}$-parameter BPD-YOLO, alongside YOLOv8n+P2 ($38.0\%$, $2.93\text{M}$), YOLOv8n+P2+BiFPN ($38.4\%$, $2.34\text{M}$), and YOLOv8n+P2+AFPN ($39.2\%$, $6.05\text{M}$) on TinyPerson at input size $1024$ with Mosaic/MixUp augmentation, $300$-epoch schedules, the official $794$/$816$ split, and a single merged ``people'' class under the standard COCO $mAP_{50}$ protocol. These figures again use a different protocol family and are therefore not directly comparable to our tiled-protocol numbers; they establish that published nano-scale detectors operate in the same $38\text{--}39\%$ band under their settings.
 
-\textbf{Why the absolute gap is large}: The $9.76\%$ vs.\ $38\text{--}59\%$ spread across groups is dominated by protocol choices rather than detector quality. Group (b) uses ImageNet-pretrained two-stage backbones trained on $640 \times 512$ cropped patches with the official per-class COCO-style AP; group (c) merges both person categories into one class and trains for $300$ epochs with strong augmentation. Our setting is deliberately harsher: training from scratch on $746$ frames with $150$ epochs and no Mosaic/MixUp. Additionally, our tiled evaluator scores detections class-agnostically against the pooled ground-truth set while retaining only the primary person category from the detector's two-class output, which suppresses absolute recall relative to both reference protocols. We therefore present Table~\ref{tab:intl_comparison} strictly as cross-protocol context; no cross-group delta should be read as a controlled comparison.
+\textbf{Why the absolute gap is large}: The $9.76\%$ vs.\ $38\text{--}59\%$ spread across groups is dominated by protocol choices rather than detector quality. Group (b) uses ImageNet-pretrained two-stage backbones trained on $640 \times 512$ cropped patches with the official per-class COCO-style AP; group (c) merges both person categories into one class and trains for $300$ epochs with strong augmentation. Our setting is deliberately harsher: training from scratch on $746$ frames with $150$ epochs and no Mosaic/MixUp. A further gap comes from the training budget rather than the evaluator: groups (b) and (c) use ImageNet-pretrained backbones and $300$-epoch schedules, whereas our models start from random initialisation. We therefore present Table~\ref{tab:intl_comparison} strictly as cross-protocol context; no cross-group delta should be read as a controlled comparison. Note that an earlier draft attributed part of this gap to a \emph{class-agnostic} evaluator; that explanation was incorrect -- the evaluator was discarding an entire output category, which is a defect, and it has since been fixed (Table~\ref{tab:per_class}).
 
 \begin{table}[t]
 \centering
 \scriptsize
 \setlength{\tabcolsep}{2.5pt}
-\caption{\textbf{Reference Comparison on TinyPerson Test Set}, grouped by protocol family. (a) Original benchmark numbers from Yu~\etal~\cite{yu2020tinyperson} (official per-class AP, ImageNet-pretrained). (b) Two-stage pipeline zoo from Hong~\etal~\cite{hong2022sspnet} (their re-implementation protocol). (c) Nano-scale YOLO family from Chao~\etal~\cite{chao2025bpdyolo} (input $1024$, Mosaic/MixUp, $300$ epochs, merged single class, COCO $mAP_{50}$). All prior entries are quoted verbatim from the cited publications; protocols, training schedules, and evaluation rules differ across groups, so cross-group deltas are indicative context only. YOLO26n-P2 and GauSS are trained from scratch without external pre-training under identical settings; see the text for the class-scoring difference that further separates our rows from all reference groups.}
+\caption{\textbf{Reference Comparison on TinyPerson Test Set}, grouped by protocol family. (a) Original benchmark numbers from Yu~\etal~\cite{yu2020tinyperson} (official per-class AP, ImageNet-pretrained). (b) Two-stage pipeline zoo from Hong~\etal~\cite{hong2022sspnet} (their re-implementation protocol). (c) Nano-scale YOLO family from Chao~\etal~\cite{chao2025bpdyolo} (input $1024$, Mosaic/MixUp, $300$ epochs, merged single class, COCO $mAP_{50}$). All prior entries are quoted verbatim from the cited publications; protocols, training schedules, and evaluation rules differ across groups, so cross-group deltas are indicative context only. YOLO26n-P2 and GauSS are trained from scratch without external pre-training under identical settings. Our first two rows use the legacy class-filtered metric and are shown only for continuity; the final two rows use per-class matching restricted to the maritime category, which is the closest available analogue to the single-class protocol of group~(c). Even so, group~(c) trains for $300$ epochs at $1024$\,px with Mosaic/MixUp, so the gap remains dominated by protocol and budget rather than architecture.}
 \label{tab:intl_comparison}
 \begin{tabular}{lcccc}
 \toprule
@@ -414,6 +501,10 @@ BPD-YOLO~\cite{chao2025bpdyolo}             & From scratch & 1.50M & 39.1\% & --
 \midrule
 YOLO26n-P2 (Base)                    & None     & 2.52M          & 9.07\% & 4.72\% \\
 \textbf{GauSS (Ours)}                & None     & \textbf{2.55M} & \textbf{9.76\%} & \textbf{5.18\%} \\
+\midrule
+\multicolumn{5}{l}{\textit{Our rows, per-class (Table~\ref{tab:per_class}), \texttt{sea\_person} only}}\\
+YOLO26n-P2 (Base)                    & None     & 2.52M          & 22.24\% & 10.76\% \\
+\textbf{GauSS (Ours)}                & None     & \textbf{2.55M} & \textbf{23.79\%} & \textbf{11.33\%} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -478,7 +569,7 @@ To examine the internal representations of GauSS, we inspect four qualitative an
 
 \subsection{Density-Stratified Evaluation}
 \label{sec:density_stratified}
-Test images are stratified into three density tiers based on ground-truth target counts (Figure~\ref{fig:density}): sparse ($<15$ targets, $72.8\%$ of frames), medium ($15\text{--}50$ targets, $16.9\%$), and crowded ($>50$ targets, $10.3\%$).
+Test images are stratified into three density tiers based on ground-truth target counts (Figure~\ref{fig:density}): sparse ($<15$ targets, $572$ frames), medium ($15\text{--}50$ targets, $133$ frames), and crowded ($>50$ targets, $81$ frames). Recall here is computed on the legacy class-filtered predictions, so the absolute values inherit the same category-mixing bias as Table~\ref{tab:main_tinyperson}; the within-tier comparison between the two models remains valid because both are scored identically.
 \begin{itemize}
     \item \textit{Sparse ($<15$ targets)}: GauSS improves recall from $74.93\%$ to $76.85\%$ ($+1.92\text{ pp}$).
     \item \textit{Medium ($15\text{--}50$ targets)}: GauSS achieves $76.87\%$ vs. $77.71\%$ ($-0.84\text{ pp}$).
@@ -492,7 +583,7 @@ Table~\ref{tab:hardware_bench} and Figure~\ref{fig:hardware} detail profiling on
     \item \textbf{Complexity}: GauSS adds $0.51\text{ GFLOPs}$ ($+6.7\%$) in tiled mode ($640 \times 512$: $7.62$ vs. $8.13\text{ GFLOPs}$) and $2.02\text{ GFLOPs}$ ($+6.3\%$) in full-frame mode ($31.97$ vs. $33.99\text{ GFLOPs}$).
     \item \textbf{Throughput}: Single-tile latency is $15.19\text{ ms}$ ($65.8\text{ FPS}$) for GauSS vs. $11.28\text{ ms}$ ($88.6\text{ FPS}$) for baseline. Full-frame latency is $16.58\text{ ms}$ ($60.3\text{ FPS}$) vs. $11.85\text{ ms}$ ($84.4\text{ FPS}$).
     \item \textbf{Latency-to-FLOP Overhead}: While FLOPs increase by only $6.7\%$, latency increases by $+34.7\%$ in tiled mode and $+39.9\%$ in full-frame mode. This discrepancy stems from memory-bandwidth bottlenecks in depthwise separable convolutions, multi-branch routing, and sub-pixel reorganization ($\text{PixelShuffle}/\text{PixelUnshuffle}$), which are latency-bound rather than compute-bound at batch size 1.
-    \item \textbf{End-to-End Tiling vs. Full-Frame Throughput}: Because test images have diverse native resolutions (median $3840 \times 2160$ px), slicing generates an average of $23.4$ overlapping tiles ($640 \times 512$). Sequential inference over $23.4$ tiles requires $\sim 355\text{ ms}$ per full capture ($\sim 2.8\text{ FPS}$), while a $1280 \times 1280$ capture yields 9 tiles ($\sim 137\text{ ms} \approx 7.3\text{ FPS}$). Conversely, direct full-frame evaluation ($1280 \times 1280$) achieves $16.58\text{ ms}$ ($\mathbf{60.3\text{ FPS}}$ end-to-end), representing an $8.3\times$ speedup over the 9-tile pipeline. As detailed in Table~\ref{tab:hardware_bench}, full-frame inference retains high overall accuracy ($12.53\%$ $AP_{50}^{\text{all}}$), but tiled slicing yields superior localization on microscopic scale intervals ($9.50\%$ vs. $6.90\%$ $AP_{50}^{\text{tiny2}}$) by preserving native sub-pixel detail.
+    \item \textbf{End-to-End Tiling vs. Full-Frame Throughput}: Because test images have diverse native resolutions (median $3840 \times 2160$ px), slicing generates an average of $23.4$ overlapping tiles ($640 \times 512$). Sequential inference over $23.4$ tiles requires $\sim 355\text{ ms}$ per full capture ($\sim 2.8\text{ FPS}$), while a $1280 \times 1280$ capture yields 9 tiles ($\sim 137\text{ ms} \approx 7.3\text{ FPS}$). Conversely, direct full-frame evaluation ($1280 \times 1280$) achieves $16.58\text{ ms}$ ($\mathbf{60.3\text{ FPS}}$ end-to-end), representing an $8.3\times$ speedup over the 9-tile pipeline. As detailed in Table~\ref{tab:hardware_bench}, full-frame inference retains high overall accuracy ($12.53\%$ $AP_{50}^{\text{all}}$), but tiled slicing yields superior localization on microscopic scale intervals ($9.50\%$ vs. $6.90\%$ $AP_{50}^{\text{tiny2}}$) by preserving native sub-pixel detail. This gain is specific to the tiled regime: in full-frame mode GauSS is $0.30\text{ pp}$ \emph{below} the baseline on $AP_{50}^{\text{tiny2}}$ ($9.60\%$ vs. $9.90\%$), because at $1280\times1280$ the stride-4 P2 grid already resolves $8\text{--}12$\,px targets without slicing, and the extra Gaussian smoothing slightly attenuates their already-limited high-frequency energy.
     \item \textbf{VRAM}: Peak VRAM is $122.1\text{ MB}$ in tiled mode and $367.2\text{ MB}$ in full-frame mode.
 \end{itemize}
 
@@ -500,11 +591,11 @@ Table~\ref{tab:hardware_bench} and Figure~\ref{fig:hardware} detail profiling on
 \centering
 \small
 \setlength{\tabcolsep}{6pt}
-\caption{\textbf{Comprehensive Hardware and Accuracy Trade-Off: Tiled ($640 \times 512$) vs. Full-Frame ($1280 \times 1280$)}. Timing is measured on an NVIDIA A10G GPU (FP16, batch size 1). End-to-end frame rate considers the full image slicing and inference pipeline. Accuracy is reported across representative scale bins.}
+\caption{\textbf{Hardware and Accuracy Trade-Off: Tiled ($640 \times 512$) vs. Full-Frame ($1280 \times 1280$)}. Timing is measured on an NVIDIA A10G GPU (FP16, batch size 1). End-to-end frame rate considers the full image slicing and inference pipeline. The accuracy columns use the legacy class-filtered metric of Table~\ref{tab:main_tinyperson} so that the tiled and full-frame rows remain comparable with each other; per-class accuracy for both regimes is given in Section~\ref{sec:results}.}
 \label{tab:hardware_bench}
 \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}llccccc@{}}
 \toprule
-\textbf{Mode} & \textbf{Model} & \textbf{Params} & \textbf{Latency / FPS} & \textbf{End-to-End FPS} & \textbf{$AP_{50}^{\text{all}}$} & \textbf{$AP_{50}^{\text{tiny2}}$} \\
+\textbf{Mode} & \textbf{Model} & \textbf{Params} & \textbf{Latency / FPS} & \textbf{End-to-End FPS} & \textbf{$AP_{50}^{\text{all}\dagger}$} & \textbf{$AP_{50}^{\text{tiny2}\dagger}$} \\
 \midrule
 \multirow{2}{*}{Tiled ($640 \times 512$)}     & Baseline & 2.52M & 11.28 ms / 88.6 & 3.8 -- 9.8 FPS$^\dagger$ & 11.95\% & 6.90\% \\
                                               & GauSS    & 2.55M & 15.19 ms / 65.8 & 2.8 -- 7.3 FPS$^\dagger$ & \textbf{12.94\%} & \textbf{9.50\%} \\
@@ -514,7 +605,7 @@ Table~\ref{tab:hardware_bench} and Figure~\ref{fig:hardware} detail profiling on
 \bottomrule
 \end{tabular*}
 \vspace{1pt}
-\raggedright \footnotesize $^\dagger$Range reflects full image resolutions: $\sim 2.8\text{ FPS}$ on high-resolution median ($3840 \times 2160$, 23.4 tiles) up to $\sim 7.3\text{ FPS}$ on standard $1280 \times 1280$ images (9 tiles), sequential without pipeline parallelization.
+\raggedright \footnotesize $^\dagger$Legacy class-filtered metric (see Table~\ref{tab:main_tinyperson}); the recall denominator contains both person categories while only class-0 predictions are scored. The end-to-end FPS range reflects full image resolutions: $\sim 2.8\text{ FPS}$ on high-resolution median ($3840 \times 2160$, 23.4 tiles) up to $\sim 7.3\text{ FPS}$ on standard $1280 \times 1280$ images (9 tiles), sequential without pipeline parallelization.
 \end{table*}
 
 \subsection{Multi-Class Transfer Adaptation on VisDrone}
@@ -549,6 +640,32 @@ Test-dev: Truck AP     & 3.69\%  & 4.49\%  & $+$0.80 pp \\
 \end{tabular}
 \end{table}
 
+\section{Discussion, Limitations, and Ethical Impact}
+\label{sec:discussion}
+Figures~\ref{fig:train_loss} and~\ref{fig:train_lr} in Appendix~\ref{app:convergence} indicate smooth optimization convergence across 150 epochs. Below we synthesize key limitations, threats to validity, and broader impacts:
+\begin{enumerate}
+    \item \textbf{Category Dependence}: The maritime gain ($+2.11\text{ pp}$ $AP_{50}^{\text{all}}$, $+5.37\text{ pp}$ $AP_{50}^{\text{tiny2}}$ on \texttt{sea\_person}) reverses on \texttt{earth\_person} ($-2.38\text{ pp}$ and $-3.04\text{ pp}$), so the pooled TinyPerson aggregate is negative ($-1.21\text{ pp}$). GauSS encodes a prior about sea-surface clutter; it is not a general tiny-object module. Any deployment claim must therefore be scoped to maritime imagery, and a domain-adaptive gate that detects when the prior does not apply is the natural next step.
+    \item \textbf{Incomplete Component Ablation}: Section~\ref{sec:ablation} removes individual bands, but those runs stopped at epoch 78 while the reference ran 150, so no delta can yet be attributed to a component on equal footing. Two controls remain outstanding: a parameter-matched standard-convolution block (isolating the effect of the $+34{,}666$ parameters from the scale-space structure) and a 78-epoch full-GauSS reference (isolating the effect of the epoch budget). Until both exist, the maritime gain is consistent with the band-pass interpretation but not proven by it.
+    \item \textbf{Strict-Threshold Localization ($AP_{75}$)}: On the legacy class-filtered aggregate GauSS improves $AP_{50}^{\text{all}}$ by $+0.98\text{ pp}$, but strict-threshold precision remains very low ($AP_{75} = 1.40\%$ vs. $1.28\%$). Targets spanning only $2\text{--}8$ pixels contain few unambiguous boundary pixels; minute coordinate offsets of 1--2 pixels trigger severe relative IoU drops below $0.75$, demonstrating the fundamental difficulty of high-precision bounding box localization without sub-pixel offset heads.
+    \item \textbf{Single-Seed Variance and Bin Fluctuations}: Models were evaluated from single scratch runs per configuration. As shown in Table~\ref{tab:main_tinyperson}, cross-epoch trajectories exhibit non-trivial shifts (e.g., $tiny1$ gain diminishes from $+1.23\text{ pp}$ at 50e to $+0.46\text{ pp}$ at 150e, while $reasonable$ delta shifts from $-1.15\text{ pp}$ to $+0.72\text{ pp}$). Small variations (such as the $-0.14\text{ pp}$ change in $tiny3$) should therefore be treated with caution until multi-seed bootstrap confidence intervals across video sequences are evaluated.
+    \item \textbf{End-to-End Tiling vs. Deployment Trade-Off}: While per-tile latency exceeds $60\text{ FPS}$ ($15.19\text{ ms}$), full image slicing produces $23.4$ tiles on native high-resolution images, dropping sequential throughput to $\sim 2.8\text{ FPS}$ ($\sim 7.3\text{ FPS}$ on $1280 \times 1280$). Direct full-frame inference restores $60.3\text{ FPS}$ real-time throughput ($16.58\text{ ms}$), offering an $8.3\times$ speedup at the cost of a much smaller accuracy gain: under per-class matching the maritime $AP_{50}^{\text{all}}$ delta shrinks from $+2.11\text{ pp}$ (tiled) to $+0.62\text{ pp}$ (full-frame), and the maritime $tiny2$ delta from $+5.37\text{ pp}$ to $+0.06\text{ pp}$. Tiled slicing is what makes the scale-space prior pay off.
+    \item \textbf{Cross-Domain Generalization}: On VisDrone-DET, fine-tuning GauSS yields $25.31\%$ validation $mAP_{50}$ (vs. $25.64\%$ baseline, $-0.33\text{ pp}$) and $20.33\%$ test-dev $mAP_{50}$ (vs. $20.81\%$, $-0.48\text{ pp}$). While truck and pedestrian categories show slight positive deltas, overall transfer is comparable but marginally lower, indicating that scale-space inductive biases designed for maritime sea clutter do not automatically transfer to dense terrestrial urban traffic.
+    \item \textbf{Ethical and Societal Implications}: Aerial tiny person detection serves critical humanitarian goals in maritime search and rescue. However, UAV-based person detection can be dual-use for unauthorized surveillance. Deployment should adhere to strict privacy safeguards and regulatory frameworks.
+\end{enumerate}
+
+\section{Conclusion}
+\label{sec:conclusion}
+We presented \textbf{GauSS}, a scale-space-inspired module for stride-4 feature refinement in nano-scale tiny object detection. By combining learnable Gaussian filtering, frequency band decomposition, and spatial routing, GauSS improves maritime-category detection on TinyPerson by $+2.11\text{ pp}$ $AP_{50}^{\text{all}}$ and $+5.37\text{ pp}$ $AP_{50}^{\text{tiny2}}$ with $+34{,}666$ parameters ($+1.38\%$). The improvement does not extend to the terrestrial category, where GauSS is $2.38\text{ pp}$ behind the baseline; the class-agnostic aggregate therefore falls by $1.21\text{ pp}$. We regard this scoping as the paper's central finding: a scale-space prior matched to sea-surface clutter helps where that clutter exists and hurts where it does not. On VisDrone, transfer performance is comparable but slightly lower, consistent with that reading. Future work includes the two outstanding controls identified in Section~\ref{sec:discussion} (a parameter-matched convolution block and an epoch-matched full-GauSS reference), completing the three remaining component removals, multi-seed variance analysis, kernel fusion for latency reduction, and edge evaluation on embedded Jetson platforms.
+
+{\small
+\bibliographystyle{ieee}
+\bibliography{references}
+}
+
+
+\appendix
+\section{Training Convergence Curves}
+\label{app:convergence}
 \begin{figure*}[t]
   \centering
   \begin{minipage}{0.48\textwidth}
@@ -565,24 +682,5 @@ Test-dev: Truck AP     & 3.69\%  & 4.49\%  & $+$0.80 pp \\
   \end{minipage}
 \end{figure*}
 
-\section{Discussion, Limitations, and Ethical Impact}
-\label{sec:discussion}
-Figures~\ref{fig:train_loss} and~\ref{fig:train_lr} indicate smooth optimization convergence across 150 epochs. Below we synthesize key limitations, threats to validity, and broader impacts:
-\begin{enumerate}
-    \item \textbf{Strict-Threshold Localization ($AP_{75}$)}: While GauSS improves $AP_{50}^{\text{all}}$ by $+0.98\text{ pp}$, strict-threshold precision remains very low ($AP_{75} = 1.40\%$ vs. $1.28\%$). Targets spanning only $2\text{--}8$ pixels contain few unambiguous boundary pixels; minute coordinate offsets of 1--2 pixels trigger severe relative IoU drops below $0.75$, demonstrating the fundamental difficulty of high-precision bounding box localization without sub-pixel offset heads.
-    \item \textbf{Single-Seed Variance and Bin Fluctuations}: Models were evaluated from single scratch runs per configuration. As shown in Table~\ref{tab:main_tinyperson}, cross-epoch trajectories exhibit non-trivial shifts (e.g., $tiny1$ gain diminishes from $+1.23\text{ pp}$ at 50e to $+0.46\text{ pp}$ at 150e, while $reasonable$ delta shifts from $-1.15\text{ pp}$ to $+0.72\text{ pp}$). Small variations (such as the $-0.14\text{ pp}$ change in $tiny3$) should therefore be treated with caution until multi-seed bootstrap confidence intervals across video sequences are evaluated.
-    \item \textbf{End-to-End Tiling vs. Deployment Trade-Off}: While per-tile latency exceeds $60\text{ FPS}$ ($15.19\text{ ms}$), full image slicing produces $23.4$ tiles on native high-resolution images, dropping sequential throughput to $\sim 2.8\text{ FPS}$ ($\sim 7.3\text{ FPS}$ on $1280 \times 1280$). Direct full-frame inference restores $60.3\text{ FPS}$ real-time throughput ($16.58\text{ ms}$), offering an $8.3\times$ speedup at the cost of diminished microscopic gain ($+0.10\text{ pp}$ vs. $+0.98\text{ pp}$ on $AP_{50}^{\text{all}}$).
-    \item \textbf{Cross-Domain Generalization}: On VisDrone-DET, fine-tuning GauSS yields $25.31\%$ validation $mAP_{50}$ (vs. $25.64\%$ baseline, $-0.33\text{ pp}$) and $20.33\%$ test-dev $mAP_{50}$ (vs. $20.81\%$, $-0.48\text{ pp}$). While truck and pedestrian categories show slight positive deltas, overall transfer is comparable but marginally lower, indicating that scale-space inductive biases designed for maritime sea clutter do not automatically transfer to dense terrestrial urban traffic.
-    \item \textbf{Ethical and Societal Implications}: Aerial tiny person detection serves critical humanitarian goals in maritime search and rescue. However, UAV-based person detection can be dual-use for unauthorized surveillance. Deployment should adhere to strict privacy safeguards and regulatory frameworks.
-\end{enumerate}
-
-\section{Conclusion}
-\label{sec:conclusion}
-We presented \textbf{GauSS}, a scale-space-inspired module for stride-4 feature refinement in nano-scale tiny object detection. By combining learnable Gaussian filtering, frequency band decomposition, and spatial routing, GauSS improves $AP_{50}^{\text{all}}$ by $+0.98\text{ pp}$ and $AP_{50}^{\text{tiny2}}$ by $+2.59\text{ pp}$ on TinyPerson with $+34{,}666$ parameters ($+1.38\%$). On VisDrone, transfer performance is comparable but slightly lower than the baseline. Future work includes extensive parameter-matched ablations against standard convolutions and attention mechanisms, multi-seed variance analysis, kernel fusion for latency reduction, and edge evaluation on embedded Jetson platforms.
-
-{\small
-\bibliographystyle{ieee}
-\bibliography{references}
-}
 
 \end{document}
