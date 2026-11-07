@@ -5,7 +5,9 @@ Follows the exact specifications defined in the respective original papers:
    - Classes: [sea_person, earth_person] (or single-class 'person')
    - Positive boxes: not ignore and not uncertain
    - Excludes dense images (>220 boxes) per official benchmark
-   - Splits: train (746 images) and test/val (786 images)
+   - The parquet ships train (746 images) and test (786 images) collections only.
+     `val` is carved out of the train collection with a group-aware split, and
+     `test` stays a separate split that is never trained on.
 
 2. VisDrone2019-DET (Zhu et al., PAMI 2021):
    - 10 evaluated classes: pedestrian, people, bicycle, car, van, truck, tricycle, awning-tricycle, bus, motor
@@ -21,6 +23,10 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
+import random
+import re
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -30,6 +36,43 @@ import yaml
 
 def _clamp(val: float, min_val: float, max_val: float) -> float:
     return max(min_val, min(val, max_val))
+
+
+def _group_key(filename: str) -> str:
+    """Infer a video/source group from a TinyPerson filename.
+
+    Kept in sync with ``scripts/prepare_tinyperson_yolo.py`` so both generators
+    produce the same train/validation partition for the same input.
+    """
+    stem = Path(filename).stem
+    match = re.match(r"^(.*)_I\d+$", stem)
+    if match:
+        return match.group(1)
+    match = re.match(r"^(.*?)[_-](?:frame)?\d+$", stem, flags=re.IGNORECASE)
+    return match.group(1) if match else stem
+
+
+def _split_groups(names: list[str], val_fraction: float, seed: int) -> set[str]:
+    """Choose whole groups for validation so no video leaks across the split."""
+    groups: dict[str, list[str]] = defaultdict(list)
+    for name in names:
+        groups[_group_key(name)].append(name)
+    keys = sorted(groups)
+    if len(keys) < 2:
+        raise ValueError("Cannot make a train/val split with fewer than 2 filename groups")
+    rng = random.Random(seed)
+    rng.shuffle(keys)
+    target = max(1, round(len(names) * val_fraction))
+    chosen: set[str] = set()
+    count = 0
+    for key in keys:
+        if count >= target:
+            break
+        chosen.add(key)
+        count += len(groups[key])
+    if len(chosen) == len(keys):
+        chosen.discard(keys[-1])
+    return chosen
 
 
 def _to_yolo_bbox(
@@ -60,6 +103,45 @@ def _write_single_image(
     label_dest.write_text(label_content, encoding="utf-8")
 
 
+def _tinyperson_rows(
+    files: list[str], include_dense: bool, limit: int | None
+) -> list[dict]:
+    """Materialise the parquet rows that survive the official dense-image filter."""
+    rows: list[dict] = []
+    for file in files:
+        if limit and len(rows) >= limit:
+            break
+        frame = pl.read_parquet(file)
+        for row in frame.iter_rows(named=True):
+            if limit and len(rows) >= limit:
+                break
+            objs = row["objects"]
+            if not include_dense and any(objs.get("in_dense_image", [])):
+                continue
+            rows.append(row)
+    return rows
+
+
+def _tinyperson_labels(row: dict, single_class: bool) -> list[str]:
+    """Convert one parquet row's objects into YOLO label lines."""
+    objs = row["objects"]
+    w_img = float(row["width"])
+    h_img = float(row["height"])
+    bboxes = objs["bbox"]
+    ignores = objs.get("ignore", [False] * len(bboxes))
+    uncertains = objs.get("uncertain", [False] * len(bboxes))
+    lines = []
+    for cat, bbox, ign, unc in zip(objs["category"], bboxes, ignores, uncertains):
+        if ign or unc:
+            continue
+        cls_id = 0 if single_class else int(cat)
+        coords = _to_yolo_bbox(*map(float, bbox), w_img, h_img)
+        if coords is not None:
+            cx, cy, nw, nh = coords
+            lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+    return lines
+
+
 def convert_tinyperson(
     input_dir: Path,
     output_dir: Path,
@@ -67,81 +149,101 @@ def convert_tinyperson(
     include_dense: bool = False,
     limit: int | None = None,
     workers: int = 8,
+    val_fraction: float = 0.1,
+    seed: int = 42,
 ) -> None:
+    """Convert TinyPerson parquet into train/val/test YOLO splits.
+
+    The Hugging Face parquet only ships two collections: ``train-*`` (the 746
+    non-dense training images) and ``test-*`` (the official 786-image test set).
+    Using the test collection as ``val`` would leak the benchmark into model
+    selection, so ``val`` is carved out of the training collection with a
+    group-aware split (whole videos stay on one side) and ``test`` is kept as a
+    separate, never-trained-on split.
+    """
+    if not 0 < val_fraction < 0.5:
+        raise ValueError("val_fraction must be between 0 and 0.5")
     print(f"\n--- Converting TinyPerson from {input_dir} -> {output_dir} ---")
-    splits_map = {
-        "train": sorted(glob.glob(str(input_dir / "train-*.parquet"))),
-        "val": sorted(glob.glob(str(input_dir / "test-*.parquet"))),
-    }
+    train_files = sorted(glob.glob(str(input_dir / "train-*.parquet")))
+    test_files = sorted(glob.glob(str(input_dir / "test-*.parquet")))
 
     class_names = ["person"] if single_class else ["sea_person", "earth_person"]
 
-    for split in ["train", "val"]:
+    for split in ("train", "val", "test"):
         (output_dir / "images" / split).mkdir(parents=True, exist_ok=True)
         (output_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
 
-    total_images, total_boxes = 0, 0
+    train_rows = _tinyperson_rows(train_files, include_dense, limit)
+    if not train_rows:
+        raise ValueError(f"No training rows found under {input_dir}")
+    val_groups = _split_groups([str(row["file_name"]) for row in train_rows],
+                               val_fraction, seed)
 
-    for split, files in splits_map.items():
-        if not files:
-            continue
+    plan: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    for row in train_rows:
+        split = "val" if _group_key(str(row["file_name"])) in val_groups else "train"
+        plan[split].append(row)
+    plan["test"] = _tinyperson_rows(test_files, include_dense, limit)
+
+    manifest: dict[str, list[dict]] = {}
+    totals = Counter()
+    for split, rows in plan.items():
         tasks = []
-        for file in files:
-            if limit and len(tasks) >= limit:
-                break
-            df = pl.read_parquet(file)
-            for row in df.iter_rows(named=True):
-                if limit and len(tasks) >= limit:
-                    break
-                objs = row["objects"]
-                if not include_dense and any(objs.get("in_dense_image", [])):
-                    continue
-
-                img_id = row["id"]
-                w_img = float(row["width"])
-                h_img = float(row["height"])
-                img_bytes = row["image"]["bytes"]
-
-                yolo_lines = []
-                categories = objs["category"]
-                bboxes = objs["bbox"]
-                ignores = objs.get("ignore", [False] * len(bboxes))
-                uncertains = objs.get("uncertain", [False] * len(bboxes))
-
-                for cat, bbox, ign, unc in zip(categories, bboxes, ignores, uncertains):
-                    if ign or unc:
-                        continue
-                    cls_id = 0 if single_class else int(cat)
-                    x, y, w, h = bbox
-                    coords = _to_yolo_bbox(x, y, w, h, w_img, h_img)
-                    if coords is not None:
-                        cx, cy, nw, nh = coords
-                        yolo_lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
-
-                img_dest = output_dir / "images" / split / f"{img_id}.jpg"
-                lbl_dest = output_dir / "labels" / split / f"{img_id}.txt"
-                if img_dest.is_file() and lbl_dest.is_file():
-                    continue
-                tasks.append((img_dest, lbl_dest, img_bytes, yolo_lines))
-                total_boxes += len(yolo_lines)
-
+        records = []
+        for row in rows:
+            yolo_lines = _tinyperson_labels(row, single_class)
+            img_id = row["id"]
+            img_dest = output_dir / "images" / split / f"{img_id}.jpg"
+            lbl_dest = output_dir / "labels" / split / f"{img_id}.txt"
+            tasks.append((img_dest, lbl_dest, row["image"]["bytes"], yolo_lines))
+            records.append({
+                "image_id": img_id,
+                "source_file_name": str(row["file_name"]),
+                "group": _group_key(str(row["file_name"])),
+                "output_image": str(img_dest.relative_to(output_dir)),
+                "output_label": str(lbl_dest.relative_to(output_dir)),
+                "width": int(row["width"]),
+                "height": int(row["height"]),
+                "objects": len(yolo_lines),
+            })
+            totals[f"{split}_objects"] += len(yolo_lines)
         print(f"Writing {len(tasks)} images for split '{split}'...")
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(_write_single_image, *t) for t in tasks]
-            for f in futures:
-                f.result()
-        total_images += len(tasks)
+            for future in futures:
+                future.result()
+        totals[f"{split}_images"] = len(tasks)
+        manifest[split] = records
 
     data_yaml = {
         "path": str(output_dir.resolve()),
         "train": "images/train",
         "val": "images/val",
+        "test": "images/test",
         "names": {i: name for i, name in enumerate(class_names)},
     }
     with open(output_dir / "data.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(data_yaml, f, sort_keys=False)
 
-    print(f"TinyPerson done: {total_images} images, {total_boxes} boxes.")
+    (output_dir / "manifest.json").write_text(json.dumps({
+        "source": str(input_dir.resolve()),
+        "source_format": "huggingface-parquet",
+        "single_class": single_class,
+        "include_dense": include_dense,
+        "seed": seed,
+        "validation_fraction_requested": val_fraction,
+        "split_strategy": (
+            "val carved from the train collection by filename group; "
+            "test kept separate and never trained on"
+        ),
+        "val_groups": sorted(val_groups),
+        "counts": dict(totals),
+        "images": manifest,
+    }, indent=2) + "\n", encoding="utf-8")
+
+    print(f"TinyPerson done: {totals['train_images']} train / {totals['val_images']} val / "
+          f"{totals['test_images']} test images; {totals['train_objects']} train boxes.")
+
 
 
 def convert_visdrone(
@@ -357,6 +459,18 @@ def main() -> None:
         help="Limit number of images per split (useful for testing).",
     )
     parser.add_argument("--workers", type=int, default=8, help="Number of worker threads.")
+    parser.add_argument(
+        "--val-fraction",
+        type=float,
+        default=0.1,
+        help="TinyPerson: fraction of train images held out for validation (group-aware).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="TinyPerson: seed for the deterministic train/validation group split.",
+    )
 
     args = parser.parse_args()
 
@@ -371,6 +485,8 @@ def main() -> None:
                 include_dense=args.include_dense,
                 limit=args.limit,
                 workers=args.workers,
+                val_fraction=args.val_fraction,
+                seed=args.seed,
             )
 
     if args.dataset in ("visdrone", "all"):

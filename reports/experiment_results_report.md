@@ -42,12 +42,21 @@ Báo cáo trình bày kết quả của 6 nhóm thực nghiệm trên bài toán
 
 | Hạng mục | Giá trị |
 | :--- | :--- |
-| Dataset huấn luyện | `/mnt/data/tinyperson_official_v1/data.yaml` |
+| Dataset huấn luyện | derivative 2 lớp cũ trên Modal Volume (đã ngừng dùng — xem ghi chú bên dưới) |
 | Số ảnh derivative | 746 (662 train / 84 validation) |
 | Tập kiểm tra chính thức | 816 ảnh, loại 30 ảnh dense theo protocol → **786 ảnh được chấm** |
 | Ground-truth dương trên test | **13,687** |
 | Độ phân giải đầu vào | 1280 × 1280 |
 | Dataset signature | `c306a33f71f4628908c598749be1cef99a64a25ae5da178587bb6e6e2715579d` |
+
+> **Ghi chú provenance (2026-11-07).** Báo cáo này là hồ sơ lịch sử của các run đã chạy;
+> số liệu bên dưới giữ nguyên, không chỉnh sửa. Derivative 2 lớp mô tả trong báo cáo đã bị
+> loại bỏ khỏi repo và không còn là nguồn dữ liệu chuẩn. Kiểm tra lại artifact sau này cho
+> thấy các run thực tế trỏ `/mnt/data/tinyperson-yolo` với `val: images/train` và 2 lớp
+> `sea_person`/`earth_person`; vì vậy cột "Validation" trong mục 3–4 được đo trên chính tập
+> train và không phải validation độc lập. Derivative hiện hành là `tinyperson-yolo-v2`
+> (một lớp `person`, val 84 ảnh tách theo nhóm video, test 786 ảnh riêng) — xem
+> `docs/TINYPERSON_BENCHMARK.md`.
 
 Phân bố kích thước đối tượng (derivative validation, 322 ảnh):
 
@@ -111,7 +120,7 @@ Mọi metric báo cáo lấy từ checkpoint `best.pt`.
 
 ## 3. Kết quả ablation kiến trúc (A0–A3)
 
-Validation, 50 epoch, seed 42, dataset official_v1:
+Validation, 50 epoch, seed 42, dataset official_v1 (xem ghi chú provenance ở mục 2.1 — cột này đo trên tập train):
 
 | Model | AP@[.50:.95] | AP@0.50 | AP@0.75 | Precision | Recall | Params | Latency L4 |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

@@ -1,5 +1,5 @@
-# YOLO26n-P2 Baseline model for TinyPerson (WACV 2020 Standard: sea_person, earth_person)
-nc: 2
+# YOLO26n-P2 Baseline model for TinyPerson (official protocol: single 'person' class)
+nc: 1
 end2end: True
 reg_max: 1
 tal_beta: 6.0

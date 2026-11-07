@@ -848,7 +848,7 @@ def _run_comparison_report():
             else:
                 raise FileNotFoundError(f"Missing checkpoint for {name}: {p}")
 
-    raw_data_yaml = DATA_ROOT / "tinyperson-yolo" / "data.yaml"
+    raw_data_yaml = DATA_ROOT / "tinyperson-yolo-v2" / "data.yaml"
     if not raw_data_yaml.is_file():
         raise FileNotFoundError(f"Data yaml not found: {raw_data_yaml}")
     data_yaml = normalize_dataset_yaml(raw_data_yaml)
@@ -882,8 +882,8 @@ def _run_comparison_report():
     # 2. Measure per-bin accuracy & geometry errors using analyze_msr_validation.py
     out_dir = RUN_ROOT / "comparison_report_qac_v3_vs_dfl16"
     out_dir.mkdir(parents=True, exist_ok=True)
-    img_dir = DATA_ROOT / "tinyperson-yolo" / "images" / "val"
-    lbl_dir = DATA_ROOT / "tinyperson-yolo" / "labels" / "val"
+    img_dir = DATA_ROOT / "tinyperson-yolo-v2" / "images" / "val"
+    lbl_dir = DATA_ROOT / "tinyperson-yolo-v2" / "labels" / "val"
 
     cmd = [
         sys.executable,
@@ -999,11 +999,13 @@ def _run_checkpoint_evaluation(relative_checkpoint: str, name: str, split: str =
     if not checkpoint.is_file():
         raise FileNotFoundError(checkpoint)
 
-    data_yaml = normalize_dataset_yaml(DATA_ROOT / "tinyperson-yolo" / "data.yaml")
+    data_yaml = normalize_dataset_yaml(DATA_ROOT / "tinyperson-yolo-v2" / "data.yaml")
     if split == "test":
-        annotation_source = DATA_ROOT / "tinyperson-yolo" / "annotations" / "tiny_set_test_with_dense.json"
+        annotation_source = DATA_ROOT / "tinyperson-yolo-v2" / "annotations" / "tiny_set_test.json"
     else:
-        annotation_source = DATA_ROOT / "tinyperson-yolo" / "annotations" / "tiny_set_train_with_dense.json"
+        # The derivative is built from the erase train JSON, which already has the
+        # ignore/uncertain regions painted out, so it carries no special annotations.
+        annotation_source = DATA_ROOT / "tinyperson-yolo-v2" / "annotations" / "tiny_set_train.json"
     if not annotation_source.is_file():
         raise FileNotFoundError(annotation_source)
 
@@ -1021,6 +1023,7 @@ def _run_checkpoint_evaluation(relative_checkpoint: str, name: str, split: str =
         "--data", str(data_yaml),
         "--output", str(output_dir),
         "--split", split,
+        "--class-mode", "merge",
         "--imgsz", "1280",
         "--batch-size", "8",
         "--device", "cuda:0",
@@ -1120,8 +1123,8 @@ def _run_tiled_checkpoint_evaluation(relative_checkpoint: str, name: str):
 
     model = YOLO(checkpoint)
     # Use the filtered 786-image test annotations
-    data_yaml = normalize_dataset_yaml(DATA_ROOT / "tinyperson-yolo" / "data.yaml")
-    raw_annotation_source = DATA_ROOT / "tinyperson-yolo" / "annotations" / "tiny_set_test_with_dense.json"
+    data_yaml = normalize_dataset_yaml(DATA_ROOT / "tinyperson-yolo-v2" / "data.yaml")
+    raw_annotation_source = DATA_ROOT / "tinyperson-yolo-v2" / "annotations" / "tiny_set_test.json"
     if not raw_annotation_source.is_file():
         raise FileNotFoundError(raw_annotation_source)
 
@@ -1132,7 +1135,7 @@ def _run_tiled_checkpoint_evaluation(relative_checkpoint: str, name: str):
     )
 
     data_payload = json.loads(annotation_source.read_text())
-    image_dir = DATA_ROOT / "tinyperson-yolo" / "images" / "test"
+    image_dir = DATA_ROOT / "tinyperson-yolo-v2" / "images" / "test"
 
     predictions = []
     print(f"--> Starting tiled inference for {len(data_payload['images'])} images...", flush=True)
@@ -1176,7 +1179,8 @@ def _run_tiled_checkpoint_evaluation(relative_checkpoint: str, name: str):
     pred_file.write_text(json.dumps({"images": predictions}))
 
     print("--> Running standardized TinyPerson benchmark on merged predictions...", flush=True)
-    bench_result = evaluate_tinyperson(annotation_source, pred_file, workers=4)
+    bench_result = evaluate_tinyperson(annotation_source, pred_file, workers=4,
+                                       class_mode="merge")
     (output_dir / "benchmark.json").write_text(json.dumps(bench_result, indent=2))
 
     summary = {

@@ -8,26 +8,28 @@ Script `evaluate_tinyperson_benchmark.py` tính AP theo các size bins TinyPerso
 
 ## Chuẩn bị train/validation derivative
 
-Dùng erase annotation train không phải corner/crop cùng ảnh tương ứng. Script từ chối ảnh dense và annotation đặc biệt còn sót, kiểm tra kích thước raster theo COCO, gộp `sea_person` và `earth_person` về class `person`, rồi tạo split train/val xác định theo nhóm tên file.
+Dùng erase annotation train không phải corner/crop cùng ảnh tương ứng. Script từ chối ảnh dense và annotation đặc biệt còn sót, kiểm tra kích thước raster theo COCO, gộp `sea_person` và `earth_person` về class `person`, rồi tạo split train/val xác định theo nhóm tên file. Truyền thêm `--test-annotations`/`--test-image-root` để derivative có luôn split test chính thức (786 ảnh non-dense) phục vụ chuỗi đánh giá.
 
 ```bash
 python scripts/prepare_tinyperson_yolo.py \
   --annotations /data/TinyPerson/erase_with_uncertain_dataset/annotations/tiny_set_train.json \
   --image-root /data/TinyPerson/erase_with_uncertain_dataset/train \
-  --output /data/derived/tinyperson-yolo
+  --output /data/derived/tinyperson-yolo-v2 \
+  --test-annotations /data/TinyPerson/annotations/tiny_set_test_with_dense.json \
+  --test-image-root /data/TinyPerson/test
 ```
 
 Xem `manifest.json`, đặc biệt cách suy ra group từ filename và số `singleton_group_count`. Giữ nguyên dữ liệu gốc. Upload derivative vào versioned path trong Modal Volume:
 
 ```bash
-python tools/upload_data.py data /data/derived/tinyperson-yolo \
-  --remote /tinyperson_official_v1
+python tools/upload_data.py data /data/derived/tinyperson-yolo-v2 \
+  --remote /tinyperson-yolo-v2
 modal run modal/app.py::compare \
   --config configs/experiment/ablation_msr_p2.yaml \
   --preflight-only --require-source-metadata
 ```
 
-Config hiện tại dùng `/mnt/data/tinyperson_official_v1/data.yaml`. Preflight kiểm tra ảnh/label gốc, signature dữ liệu và COCO dimensions trước khi mở GPU. Preflight pass không thay thế kiểm tra chất lượng split.
+Config hiện tại dùng `/mnt/data/tinyperson-yolo-v2/data.yaml`. Derivative này có đúng một lớp `person`, `val` gồm 84 ảnh tách theo nhóm video từ train, và `test` là 786 ảnh chính thức không bao giờ dùng để chọn checkpoint. `annotations/tiny_set_test.json` đã lọc sẵn 786 ảnh non-dense để audit dimension khớp raster; JSON gốc 816 ảnh vẫn nằm trong `datasets/TinyPerson_official`. Preflight kiểm tra ảnh/label gốc, signature dữ liệu và COCO dimensions trước khi mở GPU. Preflight pass không thay thế kiểm tra chất lượng split.
 
 ## Đánh giá validation theo COCO AP-small
 
@@ -35,8 +37,9 @@ Config hiện tại dùng `/mnt/data/tinyperson_official_v1/data.yaml`. Prefligh
 
 ```fish
 modal volume get tiny-person-runs /MODEL/RUN_ID/evaluation-val outputs/MODEL/RUN_ID/evaluation-val
-modal volume get tiny-person-data /tinyperson_official_v1/annotations/tiny_set_train.json data/tiny_set_train.json
-modal volume get tiny-person-data /tinyperson_official_v1/manifest.json data/manifest.json
+modal volume get tiny-person-data /tinyperson-yolo-v2/annotations/tiny_set_train.json data/tiny_set_train.json
+modal volume get tiny-person-data /tinyperson-yolo-v2/annotations/tiny_set_test.json data/tiny_set_test.json
+modal volume get tiny-person-data /tinyperson-yolo-v2/manifest.json data/manifest.json
 uv run --extra cpu --with pycocotools python scripts/evaluate_coco_small.py \
   --run outputs/MODEL/RUN_ID \
   --annotations data/tiny_set_train.json --manifest data/manifest.json
