@@ -14,7 +14,7 @@ def benchmark(run: Path, iterations: int = 100, warmup: int = 10) -> dict:
     if iterations <= 0 or warmup < 0:
         raise ValueError("iterations must be positive and warmup nonnegative")
     if not torch.cuda.is_available():
-        raise RuntimeError("Benchmark requires Modal GPU")
+        raise RuntimeError("Benchmark requires a CUDA GPU")
     config = yaml.safe_load((run / "config.yaml").read_text())
     checkpoint = run / "checkpoints" / "best.pt"
     if not checkpoint.is_file():

@@ -45,19 +45,35 @@ def label_path(image_path: Path) -> Path:
     return Path(*parts).with_suffix(".txt")
 
 
-def normalize_dataset_yaml(path: str | Path) -> Path:
-    """Return a portable YAML copy whose relative split paths resolve beside source YAML."""
+def normalize_dataset_yaml(path: str | Path, root: str | Path | None = None) -> Path:
+    """Return a portable YAML copy whose split paths resolve beside source YAML.
+
+    When ``root`` is given it overrides the YAML's ``path`` key, which lets a
+    caller point a dataset YAML at a copy of the data on a different host
+    (e.g. Colab/Kaggle local disk) without editing the tracked YAML.
+    """
     source = resolve_dataset_yaml(path)
     config = yaml.safe_load(source.read_text())
     if not isinstance(config, dict):
         raise TypeError(f"Dataset YAML must be a mapping: {source}")
-    configured_root = Path(config.get("path", source.parent)).expanduser()
-    if not configured_root.is_absolute():
-        configured_root = source.parent / configured_root
+    if root is not None:
+        configured_root = Path(root).expanduser()
+        if not configured_root.is_absolute():
+            # An explicit root is a caller-supplied path: resolve it against the
+            # working directory, not against the YAML's location.
+            configured_root = configured_root.resolve()
+    else:
+        configured_root = Path(config.get("path", source.parent)).expanduser()
+        if not configured_root.is_absolute():
+            configured_root = source.parent / configured_root
     if not configured_root.is_dir():
+        if root is not None:
+            raise FileNotFoundError(f"Dataset root does not exist: {configured_root}")
         configured_root = source.parent
     config["path"] = str(configured_root.resolve())
-    key = hashlib.sha256(str(source).encode() + source.read_bytes()).hexdigest()[:16]
+    key = hashlib.sha256(
+        str(source).encode() + source.read_bytes() + config["path"].encode()
+    ).hexdigest()[:16]
     target = Path(tempfile.gettempdir()) / "tinydet-dataset-yaml" / key / "data.yaml"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(yaml.safe_dump(config, sort_keys=False))

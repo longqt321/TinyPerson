@@ -17,6 +17,7 @@ dependencies = [
     "modal>=1,<2",
     "scikit-learn>=1.5,<2",
     "seaborn>=0.13.2",
+    "wandb>=0.21,<1",
 ]
 
 [project.optional-dependencies]

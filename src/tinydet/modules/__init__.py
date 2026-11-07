@@ -1,4 +1,4 @@
-"""Tiny object detection modules: DCAF v2.1."""
+"""Tiny object detection modules: DCAF v2.1, P2Refine."""
 
 from tinydet.modules.dcaf import (
     CONTROL_PARAM_SUFFIXES,
@@ -12,6 +12,7 @@ from tinydet.modules.dcaf import (
     configure_dcaf_control_param_group,
     is_dcaf_control_param_name,
 )
+from tinydet.modules.p2_refine import P2Refine
 
 __all__ = [
     "CONTROL_PARAM_SUFFIXES",
@@ -19,6 +20,7 @@ __all__ = [
     "BandBranch",
     "DilatedContextBranch",
     "LearnableGaussianScaleSpace",
+    "P2Refine",
     "RefinementBranch",
     "collect_dcaf_control_params",
     "compute_dcaf_analytical_macs",

@@ -9,6 +9,7 @@ import torch
 from tinydet.models.registry import build_model
 from tinydet.modules.dcaf import configure_dcaf_control_param_group
 from tinydet.training.iou_logging import log_ap_by_iou
+from tinydet.training.module_diagnostics import register_p2refine_callbacks
 from tinydet.training.wandb_media import WandbMediaCallback
 from tinydet.utils.config import load_config
 from tinydet.utils.dataset import resolve_dataset_yaml
@@ -73,7 +74,10 @@ def train(
     on_epoch_end_callback: Callable[[], None] | None = None,
 ) -> Path:
     if not torch.cuda.is_available():
-        raise RuntimeError("Training requires Modal GPU")
+        raise RuntimeError(
+            "Training requires a CUDA GPU. CPU training is intentionally disabled; "
+            "run on a GPU host (Modal, Colab, Kaggle, RunPod, ...)."
+        )
     config = load_config(config_path)
     effective_dataset_config = resolve_dataset_yaml(dataset_config or config.data["config"])
     if config.model.get("pretrained"):
@@ -107,7 +111,8 @@ def train(
     diagnostics = None
     media = None
     started = monotonic()
-    torch.cuda.reset_peak_memory_stats()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
 
     stage2_cfg = config.stage2 or config.train.get("stage2") or config.train.get("two_stage") or {}
     is_two_stage = bool(stage2_cfg.get("enabled", False))
@@ -166,6 +171,7 @@ def train(
                 model.callbacks["on_fit_epoch_end"].insert(
                     0, partial(log_ap_by_iou, wandb_enabled=bool(project))
                 )
+                register_p2refine_callbacks(model, wandb_enabled=bool(project))
                 model.callbacks["on_train_start"].insert(0, _log_active_head)
                 model.callbacks["on_pretrain_routine_end"].append(_setup_dcaf_optimizer)
                 if on_epoch_end_callback is not None:
@@ -263,6 +269,7 @@ def train(
             model.callbacks["on_fit_epoch_end"].insert(
                 0, partial(log_ap_by_iou, wandb_enabled=bool(project))
             )
+            register_p2refine_callbacks(model, wandb_enabled=bool(project))
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(_setup_dcaf_optimizer)
             if on_epoch_end_callback is not None:
@@ -308,6 +315,7 @@ def train(
             model.callbacks["on_fit_epoch_end"].insert(
                 0, partial(log_ap_by_iou, wandb_enabled=bool(project))
             )
+            register_p2refine_callbacks(model, wandb_enabled=bool(project))
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(_setup_dcaf_optimizer)
             if on_epoch_end_callback is not None:
@@ -350,7 +358,9 @@ def train(
         if wandb_run is not None:
             details["wandb_project"] = f"{wandb_run.entity}/{wandb_run.project}"
         details["training_seconds"] = monotonic() - started
-        details["peak_vram_gb"] = torch.cuda.max_memory_allocated() / 2**30
+        details["peak_vram_gb"] = (
+            torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else None
+        )
         if is_two_stage:
             details["two_stage"] = True
             details["stage1_best"] = str(stage1_best)

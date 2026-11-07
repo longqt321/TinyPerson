@@ -1,4 +1,4 @@
-"""Explicit registration and hooks for custom DCAF modules parsed from YAML."""
+"""Explicit registration and hooks for custom TinyDet modules parsed from YAML."""
 
 
 def _install_hooks() -> None:
@@ -24,7 +24,7 @@ def _install_hooks() -> None:
 
 
 def register_ultralytics_modules() -> None:
-    """Register TinyDet DCAF modules before Ultralytics parses a model YAML."""
+    """Register TinyDet modules (DCAF, P2Refine) before Ultralytics parses a model YAML."""
     import torch
     from ultralytics.nn import tasks
 
@@ -35,14 +35,18 @@ def register_ultralytics_modules() -> None:
         LearnableGaussianScaleSpace,
         RefinementBranch,
     )
+    from tinydet.modules.p2_refine import P2Refine
 
     tasks.DCAF = DCAF
     tasks.BandBranch = BandBranch
     tasks.DilatedContextBranch = DilatedContextBranch
     tasks.LearnableGaussianScaleSpace = LearnableGaussianScaleSpace
     tasks.RefinementBranch = RefinementBranch
+    tasks.P2Refine = P2Refine
 
-    # Patch parse_model to support multi-input layers like DCAF: [ [c2, p3, p4], 1, DCAF, [32] ]
+    # Patch parse_model to support multi-input layers:
+    #   DCAF:     [ [c2, p3, p4], 1, DCAF, [32] ]
+    #   P2Refine: [ [c2, p3], 1, P2Refine, [32] ]
     if not getattr(tasks, "_tinydet_dcaf_patched", False):
         import inspect
 
@@ -52,12 +56,17 @@ def register_ultralytics_modules() -> None:
             c1 = [ch[x] for x in f]
             c2 = args[0] if len(args) > 0 else 32
             args = [c1, c2, *args[1:]]
+        elif m is P2Refine:
+            c1 = [ch[x] for x in f]
+            c2 = args[0] if len(args) > 0 else 32
+            args = [c1, c2, *args[1:]]
         else:
             c2 = ch[f]"""
         if target in src:
             new_src = src.replace(target, replacement, 1)
             glb = dict(tasks.__dict__)
             glb["DCAF"] = DCAF
+            glb["P2Refine"] = P2Refine
             exec(new_src, glb)  # noqa: S102
             tasks.parse_model = glb["parse_model"]
             tasks._tinydet_dcaf_patched = True
@@ -69,6 +78,7 @@ def register_ultralytics_modules() -> None:
             DilatedContextBranch,
             LearnableGaussianScaleSpace,
             RefinementBranch,
+            P2Refine,
         ])
 
     _install_hooks()

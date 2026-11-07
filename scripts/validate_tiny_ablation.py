@@ -9,10 +9,9 @@ from torch import nn
 from ultralytics.nn.tasks import DetectionModel
 
 DEFAULT_MODELS = [
-    Path("configs/model/yolo26n_tiny_A0_baseline.yaml"),
-    Path("configs/model/yolo26n_tiny_A1_no_sppf.yaml"),
     Path("configs/model/yolo26n_tiny_A2_p2.yaml"),
-    Path("configs/model/yolo26n_tiny_A3_p2_no_sppf.yaml"),
+    Path("configs/model/yolo26n_tiny_A2_p2_tinyperson.yaml"),
+    Path("configs/model/yolo26n_tiny_A2_p2_p2refine_tinyperson.yaml"),
 ]
 
 
@@ -21,7 +20,7 @@ def validate(path: Path, imgsz: int) -> None:
     if config.get("nc") != 1 or config.get("scale") != "n":
         raise ValueError(f"Expected nc=1 and scale=n: {path}")
 
-    if "_msr" in path.stem or "_btrm" in path.stem:
+    if any(tag in path.stem for tag in ("_msr", "_btrm", "_p2refine")):
         from tinydet.models.ultralytics import register_ultralytics_modules
 
         register_ultralytics_modules()
@@ -46,6 +45,17 @@ def validate(path: Path, imgsz: int) -> None:
     no_sppf = "no_sppf" in path.name
     if no_sppf != isinstance(model.model[9], nn.Identity):
         raise ValueError(f"Unexpected layer 9 module in {path}: {type(model.model[9]).__name__}")
+
+    if "_p2refine" in path.stem:
+        from tinydet.modules.p2_refine import P2Refine
+
+        refine = next(m for m in model.modules() if isinstance(m, P2Refine))
+        c2 = torch.randn(1, 64, imgsz // 4, imgsz // 4)
+        p3 = torch.randn(1, 64, imgsz // 8, imgsz // 8)
+        with torch.inference_mode():
+            delta = refine([c2, p3]) - refine.stem(c2, p3)
+        if refine.out.weight.abs().max() != 0 or delta.abs().max() != 0:
+            raise ValueError(f"P2Refine is not identity at init in {path}")
 
     layers, params, gradients, gflops = model.info(imgsz=imgsz, verbose=True)
     print(f"{path.name}: nc={head.nc}, strides={strides}, features={feature_shapes}, "
