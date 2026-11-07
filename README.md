@@ -46,7 +46,8 @@ Chi tiết đầy đủ (đa ngưỡng IoU, full-frame, VisDrone, so sánh quố
   - `yolo26n_tiny_A2_p2_dcaf_tinyperson.yaml`: Mô hình GauSS (DCAF v2.1).
   - `yolo26n_tiny_A2_p2_visdrone.yaml` / `..._dcaf_visdrone.yaml`: Cặp tương ứng cho VisDrone.
 - `configs/experiment/`: cặp paired baseline/GauSS cho TinyPerson, VisDrone TPAMI, VisDrone fine-tune; `ablation/` chứa 5 ablation bỏ thành phần.
-- `src/tinydet/modules/`: `dcaf.py` — module GauSS duy nhất còn lại.
+- `src/tinydet/modules/`: `dcaf.py` — module GauSS duy nhất còn lại; `p2_refine.py` — P2Refine.
+- `train.py`: cổng vào huấn luyện độc lập môi trường (Modal, Colab, Kaggle, RunPod).
 - `modal/app.py`: Modal cloud entrypoints để huấn luyện (`train`, `compare`), đánh giá (`evaluate`, `evaluate_checkpoint`), đo tốc độ (`benchmark`), phân tích hình học (`analyze_geometry`).
 - `modal/ablation_runner.py`: chạy 5 ablation song song trên 5 GPU A10.
 - `reports/gauss_final_report.md`: báo cáo khoa học hoàn chỉnh nhất với đầy đủ số liệu.
@@ -54,6 +55,29 @@ Chi tiết đầy đủ (đa ngưỡng IoU, full-frame, VisDrone, so sánh quố
 ---
 
 ## 4. Các Lệnh Thực thi Chính trên Modal
+
+### Huấn luyện trên GPU host bất kỳ (Colab, Kaggle, RunPod, ...):
+```bash
+pip install -q uv
+uv sync --extra gpu --group dev
+
+uv run --extra gpu python train.py \
+  --config configs/experiment/p2refine_tinyperson_wacv.yaml \
+  --data /content/data_local/tinyperson-yolo-v2/data.yaml \
+  --output-root /content/drive/MyDrive/tinydet_runs \
+  --device 0 --batch 8 --imgsz 1280 --workers 4 \
+  --name p2refine_colab_seed42
+```
+
+Kiểm tra cấu hình mà không cần GPU (chạy được trên CPU):
+```bash
+uv run --extra cpu --group dev python train.py \
+  --config configs/experiment/p2refine_tinyperson_wacv.yaml \
+  --data datasets/derived/tinyperson-yolo-v2/data.yaml --dry-run
+```
+
+Train trên CPU bị chặn có chủ đích: cả `train.py` và `tinydet.training.trainer.train`
+đều từ chối khi không có CUDA.
 
 ### Huấn luyện so sánh song song (Baseline vs GauSS):
 ```bash

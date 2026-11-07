@@ -39,7 +39,7 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
   theo — nhưng phải ghi vào `docs/DECISIONS.md` vì nó làm tăng dung lượng volume
   và có thể ảnh hưởng thời gian epoch.
 
-## BL-004: `scripts/validate_tiny_ablation.py` trỏ tới model YAML không tồn tại
+## BL-004: `scripts/validate_tiny_ablation.py` trỏ tới model YAML không tồn tại (đã đóng — xem BL-015)
 
 - **Phát hiện:** 2026-11-06
 - **Hiện trạng:** `DEFAULT_MODELS` trong `scripts/validate_tiny_ablation.py`
@@ -63,3 +63,76 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Đề xuất:** thêm banner "lịch sử — đã ngừng" ở đầu file, hoặc chuyển vào
   `docs/archive/` khi không còn ai cần đối chiếu.
 
+
+## BL-012: `compute_dcaf_analytical_macs` chưa có phiên bản chuẩn hóa cho P2Refine
+
+> Ghi chú: BL-006 đến BL-011 thuộc một thay đổi khác (evaluator `class_mode`) chưa được
+> commit trong nhánh này, nên số hiệu được giữ nguyên và để trống ở đây.
+
+- **Phát hiện:** 2026-11-08
+- **Hiện trạng:** Trong `src/tinydet/modules/dcaf.py` có hàm giải tích tính MACs cho DCAF.
+  Đối với `P2Refine`, MACs hiện được đo thực nghiệm độc lập bằng script `measure_p2refine.py`.
+- **Ảnh hưởng:** Các script báo cáo hoặc profile tự động cần một hàm giải tích thống nhất
+  để xuất bảng thống kê FLOPs chi tiết cho từng block mà không cần instantiate tensor.
+- **Đề xuất:** Thêm hàm `compute_p2refine_analytical_macs` vào `src/tinydet/modules/p2_refine.py`
+  và re-export trong `tinydet.modules`.
+
+## BL-013: DCAF diagnostics chưa từng được lưu trong 21 lượt train trước
+
+- **Phát hiện:** 2026-11-08
+- **Hiện trạng:** 21 thư mục run cũ trên Modal volume (`metadata.json`) không có bất kỳ log
+  nào về router gate, band weight hay dynamic scale-space.
+- **Đã xử lý:** Đã triển khai `P2RefineDiagnosticsCallback` gắn tự động qua trainer lifecycle
+  để ghi lại `rho_mean`, `rho_max`, `cos_x0_delta`, `w_out_norm` cho P2Refine.
+- **Chưa xử lý:** Không thể phục hồi dữ liệu động học (training dynamics) của 21 run DCAF cũ
+  ngoại trừ các checkpoint `best.pt`/`last.pt` còn lưu.
+
+## BL-014: `wandb` thiếu khỏi `pyproject.toml` nên `uv sync` không cài
+
+- **Phát hiện:** 2026-11-08
+- **Hiện trạng:** `src/tinydet/training/trainer.py`, `iou_logging.py`, `module_diagnostics.py`
+  và `wandb_media.py` đều `import wandb` trong `try/except` hoặc có guard, nhưng `wandb`
+  không nằm trong `[project.dependencies]` và không có trong `uv.lock`. Trên Modal thì
+  `modal/image.py:8` cài riêng nên không lộ; trên máy local hoặc Colab/Kaggle dùng
+  `uv sync` thì W&B **im lặng tắt** — `_init_wandb` bắt `ImportError` và in
+  "W&B disabled after init failure".
+- **Ảnh hưởng:** mọi run chạy bằng `uv sync` đều không log W&B dù config có
+  `wandb_project`. Không mất dữ liệu (CSV và metadata.json vẫn ghi), nhưng mất khả năng
+  theo dõi trực tuyến.
+- **Đã xử lý:** thêm `"wandb>=0.21,<1"` vào `[project.dependencies]`, chạy `uv lock`
+  (thêm `wandb v0.31.0`). Kiểm chứng: `uv run --extra cpu python -c "import wandb"` →
+  `0.31.0`.
+- **Chưa xử lý:** `modal` vẫn là dependency bắt buộc (xem BL-016).
+
+## BL-015: `scripts/validate_tiny_ablation.py` trỏ tới 3 model YAML đã xóa
+
+- **Phát hiện:** 2026-11-08
+- **Hiện trạng:** `DEFAULT_MODELS` liệt kê `yolo26n_tiny_A0_baseline.yaml`,
+  `yolo26n_tiny_A1_no_sppf.yaml`, `yolo26n_tiny_A3_p2_no_sppf.yaml`. Cả ba không còn
+  trong `configs/model/`, nên chạy script không tham số sẽ `FileNotFoundError`.
+- **Đã xử lý:** rút `DEFAULT_MODELS` còn 3 file thực có:
+  `yolo26n_tiny_A2_p2.yaml`, `yolo26n_tiny_A2_p2_tinyperson.yaml`,
+  `yolo26n_tiny_A2_p2_p2refine_tinyperson.yaml`. Chạy không tham số giờ pass cả 3.
+- **Ghi chú:** mục này thay thế BL-004 (đã đóng).
+
+## BL-016: `modal` vẫn là dependency bắt buộc của package
+
+- **Phát hiện:** 2026-11-08
+- **Hiện trạng:** `pyproject.toml:17` khai báo `modal>=1,<2` trong `[project.dependencies]`.
+  Trên Colab/Kaggle, `pip install -e .` kéo theo `modal` dù không dùng.
+- **Ảnh hưởng:** tăng thời gian cài và dung lượng, nhưng không chặn gì. `src/tinydet/**`
+  không import `modal` ở đâu.
+- **Đề xuất:** chuyển `modal` sang optional-dependency (ví dụ `[project.optional-dependencies]
+  modal = [...]`) và cập nhật `uv sync` trong tài liệu. Chưa làm vì sẽ đổi lệnh cài mặc
+  định của mọi người và ảnh hưởng workflow Modal hiện tại.
+
+## BL-017: Chưa có smoke test tự động cho `train.py`
+
+- **Phát hiện:** 2026-11-08
+- **Hiện trạng:** `train.py` được kiểm chứng thủ công bằng `--dry-run` trên CPU và bằng
+  cách gọi `trainer.train()` để xác nhận cổng chặn CUDA. Repo chưa có test suite
+  (`pytest` không nằm trong dependency).
+- **Ảnh hưởng:** nếu ai sửa `_resolve_model_config` hoặc `_resolve_paths`, lỗi chỉ lộ ra
+  khi chạy thật.
+- **Đề xuất:** thêm `tests/test_train_cli.py` kiểm tra `--dry-run` exit 0 và không có
+  `--dry-run` exit 1 trên CPU. Cần thêm `pytest` vào `[dependency-groups].dev` trước.

@@ -4,8 +4,10 @@ Audience: AI coding agents.
 
 ## Training
 
-Full training and benchmark require Modal with an NVIDIA L4. The local trainer
-intentionally fails without CUDA.
+Full training requires a CUDA GPU. CPU training is intentionally disabled: both
+`train.py` and `tinydet.training.trainer.train` refuse to run without CUDA.
+
+### Modal (primary)
 
 ```bash
 modal run --detach modal/app.py::compare \
@@ -14,6 +16,44 @@ modal run --detach modal/app.py::compare \
 ```
 
 Use `--smoke` only to check the pipeline. Five-epoch metrics do not rank models.
+
+### Any other CUDA host (Colab, Kaggle, RunPod, ...)
+
+`train.py` is the environment-agnostic entry point. It resolves every path to an
+absolute path, so the working directory does not matter.
+
+The project is managed with `uv`. `uv sync --extra gpu` provisions a Python 3.12
+environment and installs the CUDA build of torch pinned in `uv.lock`
+(`torch==2.11.0+cu128`), matching the Modal image. Do not `pip install` torch
+separately: a CPU wheel would shadow the CUDA one.
+
+```bash
+# One-time per session: install uv, then the pinned environment.
+pip install -q uv
+uv sync --extra gpu --group dev
+
+uv run --extra gpu python train.py \
+  --config configs/experiment/p2refine_tinyperson_wacv.yaml \
+  --data /content/data_local/tinyperson-yolo-v2/data.yaml \
+  --output-root /content/drive/MyDrive/tinydet_runs \
+  --device 0 --batch 8 --imgsz 1280 --workers 4 \
+  --name p2refine_colab_seed42
+```
+
+- `--data` overrides `data.config`; `--data-root` overrides the `path` key inside
+  the dataset YAML (use it when the data lives somewhere other than the tracked
+  YAML expects).
+- `--output-root`, `--name`, `--seed`, `--device`, `--epochs`, `--batch`,
+  `--imgsz`, `--workers` override the experiment YAML. `--no-wandb` disables W&B.
+- Resume is automatic: rerunning the same command picks up
+  `training/weights/last.pt` and passes `resume=True` to Ultralytics.
+- `--dry-run` resolves the config, dataset and model and prints parameters,
+  GFLOPs and strides without training. It runs on CPU, so it is the way to
+  validate a setup before spending GPU time.
+
+Copy the dataset from Drive to local disk before training; reading images over a
+FUSE mount starves the GPU. On Kaggle, `/kaggle/working` persists between
+sessions, so it can hold checkpoints without mounting Drive.
 
 ## Artifacts
 
