@@ -64,10 +64,85 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
   `docs/archive/` khi không còn ai cần đối chiếu.
 
 
-## BL-012: `compute_dcaf_analytical_macs` chưa có phiên bản chuẩn hóa cho P2Refine
+## BL-006: Evaluator TinyPerson bỏ toàn bộ dự đoán lớp thứ hai (đã sửa)
 
-> Ghi chú: BL-006 đến BL-011 thuộc một thay đổi khác (evaluator `class_mode`) chưa được
-> commit trong nhánh này, nên số hiệu được giữ nguyên và để trống ở đây.
+- **Phát hiện:** 2026-11-06
+- **Hiện trạng:** `src/tinydet/evaluation/tinyperson_benchmark.py` lọc
+  `if int(class_id) != 0: continue` trong khi `_load_gt` giữ ground truth của cả
+  `sea_person` (category 1) và `earth_person` (category 2). Mọi bảng AP tuyệt
+  đối trong bản thảo trước ngày 2026-11-06 đều bị ảnh hưởng.
+- **Ảnh hưởng định lượng:** AP50_all của GauSS 12.94 → 29.97 (per-class) /
+  35.39 (merged); Baseline 11.95 → 31.18 / 36.81. Kết luận "+0.98 pp" đảo thành
+  −1.21 pp khi khớp đúng lớp.
+- **Đã sửa:** thêm `class_mode` với ba chế độ; `per_class` là mặc định, `primary`
+  giữ hành vi cũ để tái lập số đã công bố. Xem ADR-008.
+- **Còn lại:** các bảng legacy trong `paper/main.tex` (Table 3, Table 5) vẫn
+  dùng số cũ, đã gắn nhãn cảnh báo; cần quyết định có xoá hẳn hay không.
+
+## BL-007: 5 run ablation seed-42 dừng ở epoch 78/150 và không có mAP trong log
+
+- **Phát hiện:** 2026-11-06
+- **Hiện trạng:** `backups/ablation_seed42/*/*/training/results.csv` chỉ có 78
+  dòng (epoch 1–78), cột `metrics/mAP50(B)` bằng 0 ở **mọi** epoch của **cả 5**
+  run. `backups/MANIFEST.json` ghi rõ: "interrupted at epoch 77/150 (Modal credit
+  exhausted)". `metadata.json` của cả 5 run vẫn để `status: RUNNING`.
+- **Nguyên nhân cột mAP = 0:** `config.yaml` đặt `train.val: false`, nên
+  Ultralytics không chạy validation trong lúc train và để trống các cột metrics.
+  Đây là hành vi đã biết, không phải lỗi dữ liệu.
+- **Ảnh hưởng:** mọi so sánh ablation hiện tại là giữa các checkpoint 78 epoch,
+  không phải 150 epoch như run tham chiếu. Không thể coi là ablation hoàn chỉnh.
+- **Đề xuất:** hoặc train lại 5 run đủ 150 epoch (cần ngân sách Modal), hoặc ghi
+  rõ trong bài là "78-epoch ablation, so với reference 150-epoch" và không so
+  sánh trực tiếp với run tham chiếu.
+
+## BL-008: Không thể truy vết cờ ablation từ artifact đã lưu
+
+- **Phát hiện:** 2026-11-06
+- **Hiện trạng:** không `metadata.json`, `config.yaml` hay `environment.txt` nào
+  của 5 run ablation ghi lại giá trị `TINYDET_ABLATION` lúc train. Cờ chỉ được
+  pickle vào checkpoint (`DCAF.ablation_flags`), nên chỉ đọc được khi load model.
+- **Bằng chứng cờ có hiệu lực:** trọng số EMA khác nhau giữa 5 run
+  (`gamma_h_raw` = −0.4055, −0.2607, −0.2739, −0.4915, −0.2030), nên các run
+  thực sự phân kỳ chứ không phải cùng một model.
+- **Đề xuất:** ghi cờ vào `metadata.json` ngay từ đầu trong lần chạy sau; thêm
+  kiểm tra trong `modal/app.py` để từ chối ghi artifact khi thiếu trường này.
+
+## BL-009: Derivative train thực tế có `val` trỏ vào chính tập train và 2 lớp
+
+- **Phát hiện:** 2026-11-07
+- **Hiện trạng:** snapshot `/mnt/data/tinyperson-yolo` (nay là `backups/data/tinyperson-yolo`)
+  có `data.yaml` ghi `val: images/train`, `names: {0: sea_person, 1: earth_person}`.
+  Mọi config experiment cũ trỏ vào derivative này với `train.val: false`.
+- **Ảnh hưởng:** `best.pt` trùng `last.pt`; không có checkpoint selection thực sự. Train
+  2 lớp trong khi benchmark chính thức gộp 2 category. Mọi kết luận "GauSS thắng/thua"
+  trong `paper/main.tex` đứng trên nền protocol này.
+- **Đã xử lý:** sinh lại derivative `tinyperson-yolo-v2` (1 lớp, val 84 ảnh tách theo
+  nhóm video, test 786 ảnh riêng) và bật `val: true`, `patience: 20`. Cần train lại
+  (chờ duyệt GPU) trước khi trích dẫn bất kỳ số nào.
+- **Chưa xử lý:** chưa xác định được ai đã sửa `val: images/train` trên volume.
+
+## BL-010: Derivative parquet local có `val` = chính tập test
+
+- **Phát hiện:** 2026-11-07
+- **Hiện trạng:** `datasets/derived/tinyperson-yolo` (sinh bởi `convert_parquet_to_yolo.py`
+  phiên bản cũ) gán `val` = `test-*.parquet`, tức 786 ảnh test chính thức. Bật `val: true`
+  với derivative này là leak test vào checkpoint selection.
+- **Đã xử lý:** converter giờ sinh `train`/`val`/`test` riêng; `val` tách từ train theo
+  nhóm filename, `test` không bao giờ dùng để chọn checkpoint.
+- **Chưa xử lý:** derivative cũ vẫn còn trên đĩa; nên xóa hoặc đổi tên để tránh dùng nhầm.
+
+## BL-011: Ảnh parquet khác ảnh erase ở vùng ignore
+
+- **Phát hiện:** 2026-11-07
+- **Hiện trạng:** ảnh trong `datasets/tiny-object-detection/tinyperson` là ảnh gốc, còn
+  `erase_with_uncertain_dataset` đã tô vùng ignore/uncertain. So sánh pixel trên 3 ảnh mẫu
+  cho khác biệt 1,1–11,9 %.
+- **Ảnh hưởng:** hai nguồn không thể trộn trong cùng một derivative; người dùng cần biết
+  mình đang train trên bản nào khi so sánh với con số công bố của TinyPerson.
+- **Đề xuất:** coi erase là nguồn canonical (khuyến nghị chính thức của tác giả), ghi rõ
+  trong paper; giữ parquet làm nguồn phụ có ghi chú.
+
+## BL-012: `compute_dcaf_analytical_macs` chưa có phiên bản chuẩn hóa cho P2Refine
 
 - **Phát hiện:** 2026-11-08
 - **Hiện trạng:** Trong `src/tinydet/modules/dcaf.py` có hàm giải tích tính MACs cho DCAF.

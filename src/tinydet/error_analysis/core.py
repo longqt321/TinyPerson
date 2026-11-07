@@ -639,6 +639,18 @@ def _crosscheck_reference(
 
     from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
 
+    # A single-class detector cannot be scored per category; mirror that here so the
+    # cross-check stays available instead of tripping the evaluator's guard.
+    detected_classes = {
+        int(label)
+        for row in predictions.rows.values()
+        for label in row.get("classes", [])
+    }
+    gt_categories = {
+        int(ann["category_id"]) for ann in annotations.raw["annotations"]
+    }
+    class_mode = "merge" if detected_classes <= {0} and len(gt_categories) > 1 else "per_class"
+
     expected = set(expected_ids)
     image_ids = {annotations.images[image_id]["basename"]: image_id for image_id in expected}
     predicted = {
@@ -658,7 +670,8 @@ def _crosscheck_reference(
                 "categories": annotations.raw["categories"],
             }))
             prediction_file.write_text(json.dumps({"images": list(predicted.values())}))
-            reference = evaluate_tinyperson(annotation_file, prediction_file, workers=0)
+            reference = evaluate_tinyperson(annotation_file, prediction_file, workers=0,
+                                            class_mode=class_mode)
     except (KeyError, TypeError, ValueError, OSError) as error:
         return {"available": False, "reason": f"reference evaluator failed: {error}"}
     return {"available": True, "reference": reference}

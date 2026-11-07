@@ -38,7 +38,8 @@ from tinydet.utils.dataset import dataset_images
 register_ultralytics_modules()
 
 
-def _run_oracles(annotations: Path, predictions: Path, output_dir: Path, workers: int) -> dict[str, Any]:
+def _run_oracles(annotations: Path, predictions: Path, output_dir: Path, workers: int,
+                 class_mode: str = "per_class") -> dict[str, Any]:
     """Run the AP75 diagnostic oracles (baseline / score / box / both)."""
     import subprocess
     import sys
@@ -51,6 +52,7 @@ def _run_oracles(annotations: Path, predictions: Path, output_dir: Path, workers
             "--predictions", str(predictions),
             "--output-dir", str(output_dir / "oracle"),
             "--workers", str(workers),
+            "--class-mode", class_mode,
         ],
         capture_output=True, text=True, check=False,
     )
@@ -88,9 +90,10 @@ def _run_error_analysis(
     return result.summary
 
 
-def _benchmark_metrics(annotations: Path, predictions: Path, workers: int) -> dict[str, Any]:
+def _benchmark_metrics(annotations: Path, predictions: Path, workers: int,
+                       class_mode: str = "per_class") -> dict[str, Any]:
     """Run the official TinyPerson benchmark evaluator."""
-    return evaluate_tinyperson(annotations, predictions, workers)
+    return evaluate_tinyperson(annotations, predictions, workers, class_mode=class_mode)
 
 
 def _geometry_summary(analysis_summary: dict[str, Any]) -> dict[str, Any]:
@@ -131,6 +134,10 @@ def main() -> None:
                         help="Skip the AP75 oracle step")
     parser.add_argument("--skip-error-analysis", action="store_true",
                         help="Skip the sample-level error analysis step")
+    parser.add_argument("--class-mode", default="per_class",
+                        choices=["per_class", "merge", "primary"],
+                        help="How detector classes map onto TinyPerson categories. "
+                             "A single-class model must use 'merge'.")
     args = parser.parse_args()
 
     if not args.checkpoint.is_file():
@@ -158,14 +165,16 @@ def main() -> None:
 
     # Step 2: benchmark
     print("[2/4] Running TinyPerson benchmark evaluator")
-    benchmark = _benchmark_metrics(args.annotations, predictions_path, args.workers)
+    benchmark = _benchmark_metrics(args.annotations, predictions_path, args.workers,
+                                   args.class_mode)
     (args.output / "benchmark.json").write_text(json.dumps(benchmark, indent=2) + "\n")
 
     # Step 3: oracles
     oracles: dict[str, Any] | None = None
     if not args.skip_oracle:
         print("[3/4] Running AP75 diagnostic oracles")
-        oracles = _run_oracles(args.annotations, predictions_path, args.output, args.workers)
+        oracles = _run_oracles(args.annotations, predictions_path, args.output, args.workers,
+                               args.class_mode)
         (args.output / "oracle_summary.json").write_text(json.dumps(oracles, indent=2) + "\n")
 
     # Step 4: error analysis
@@ -189,6 +198,7 @@ def main() -> None:
         "split": args.split,
         "imgsz": args.imgsz,
         "conf": args.conf,
+        "class_mode": args.class_mode,
         "benchmark": benchmark,
         "oracle": oracles,
         "error_analysis": _geometry_summary(analysis_summary) if analysis_summary else None,

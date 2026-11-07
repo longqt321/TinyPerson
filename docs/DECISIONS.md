@@ -25,10 +25,65 @@
 - **Xóa kèm**: `.superpowers/` (ledger phiên trước), `.history/` (backup VS Code, untracked), `reports/geometry/tiny_A2_p2_qac_v2*/` (artifact QAC v2) — theo xác nhận của người dùng.
 - **Rủi ro**: lịch sử QAC chỉ còn trong git history và `reports/experiment_results_report.md`; nếu cần tái lập QAC phải checkout commit cũ.
 
-## ADR-010: Thay thế DCAF v2.1 bằng P2Refine và dọn dẹp chuỗi layer chết
+## ADR-008: Sửa lỗi lọc lớp trong evaluator TinyPerson (`class_mode`)
 
-> Ghi chú: ADR-008 và ADR-009 thuộc một thay đổi khác (evaluator `class_mode`) chưa
-> được commit trong nhánh này, nên số hiệu được giữ nguyên và để trống ở đây.
+- **Trạng thái**: Chấp thuận
+- **Ngày**: 2026-11-06
+- **Lý do**: `evaluate_tinyperson` bỏ toàn bộ dự đoán có `class_id != 0`
+  (`tinyperson_benchmark.py`, vòng lặp dựng `detections`), trong khi `_load_gt`
+  vẫn giữ ground truth của **cả hai** category (`sea_person` = 1,
+  `earth_person` = 2). Hệ quả: mẫu số recall chứa cả 8.748 hộp `earth_person`
+  nhưng không có dự đoán nào cho chúng, nên AP tuyệt đối bị nén xuống khoảng
+  19 pp. Đây là lỗi pipeline, không phải "protocol khắt khe hơn" như bản thảo cũ
+  lập luận.
+- **Phương án đã xem**:
+  1. Gộp hai lớp thành một lớp duy nhất trước khi khớp (`merge`).
+  2. Giữ nguyên hành vi cũ và chỉ ghi chú trong bài (`primary`).
+  3. Khớp theo từng category đúng chuẩn COCO/TOV, đồng thời trả về cả bản gộp
+     (`per_class`).
+- **Lựa chọn**: (3) làm mặc định, giữ (1) và (2) làm tuỳ chọn để tái lập số cũ.
+  `merge` che mất cả phần thắng lẫn phần thua; `per_class` vừa đúng chuẩn vừa
+  kể được câu chuyện có phạm vi trung thực.
+- **API**: thêm tham số `class_mode: str = "per_class"` vào
+  `evaluate_tinyperson()`; giá trị hợp lệ nằm trong `CLASS_MODES`. Mọi caller
+  hiện có đều truyền tham số vị trí nên không phải sửa.
+- **Kiểm chứng hồi quy**: `class_mode="primary"` tái lập chính xác số đã công bố
+  — GauSS 12.9360 / 5.1776 / 9.4962, Baseline 11.9538 / 4.7164 / 6.9036
+  (all / tiny1 / tiny2). Đây là cổng chặn: nếu lệch, phép sửa đã làm hỏng logic
+  cũ.
+- **Rủi ro**: số liệu trong `paper/main.tex` thay đổi ở mọi bảng dùng AP tuyệt
+  đối. Bảng legacy được giữ lại nhưng gắn nhãn rõ là sai và không nên trích dẫn.
+- **Ảnh hưởng**: `reports/eval/*_per_class.json` (4 file mới),
+  `reports/eval/ablation/*/summary_per_class.json`.
+
+## ADR-009: Một lớp `person` và derivative `tinyperson-yolo-v2` là nguồn train chuẩn
+
+- **Trạng thái**: Chấp thuận
+- **Ngày**: 2026-11-07
+- **Lý do**: benchmark TinyPerson chính thức gộp `sea_person` + `earth_person` khi chấm
+  (evaluator dùng `class_mode="merge"`), và mọi con số so sánh được với tài liệu
+  (BPD-YOLO 38–39 %) đều ở chế độ một lớp. Derivative cũ trên Modal có
+  `val: images/train` nên `best.pt` không có ý nghĩa, còn derivative parquet local lại
+  đặt `val` = chính tập test.
+- **Phương án đã xem**:
+  1. Giữ 2 lớp và chấm `per_class` — trung thực về mặt phân loại nhưng không so sánh được
+     với protocol công bố, và làm mẫu số recall khác đi.
+  2. Giữ 2 lớp nhưng chấm `merge` — lãng phí một đầu ra, vẫn cần val thật.
+  3. Một lớp `person` + eval `merge` (chọn).
+- **Lựa chọn**: (3). Nguồn ảnh là `erase_with_uncertain_dataset` vì tác giả TinyPerson
+  khuyến nghị tô vùng ignore để chúng không trở thành negative ngầm. `val` (84 ảnh) tách
+  theo nhóm video từ train; `test` (786 ảnh) nằm trong split riêng và không bao giờ dùng
+  để chọn checkpoint.
+- **API**: `scripts/prepare_tinyperson_yolo.py` thêm `--test-annotations` /
+  `--test-image-root`; `scripts/convert_parquet_to_yolo.py` thêm `--val-fraction` /
+  `--seed` và sinh 3 split. `evaluate_tinyperson` từ chối `per_class` khi model chỉ phát
+  một lớp trên annotation 2 category.
+- **Kiểm chứng**: derivative mới có 662/84/786 ảnh, 14 825/3 608/13 687 box, 100 % label
+  là class `0`, giao theo basename giữa 3 split bằng 0.
+- **Rủi ro**: mọi số liệu cũ trong `paper/main.tex` phải được đo lại; không được trộn
+  kết quả từ derivative cũ với derivative mới.
+
+## ADR-010: Thay thế DCAF v2.1 bằng P2Refine và dọn dẹp chuỗi layer chết
 
 - **Trạng thái**: Chấp thuận
 - **Ngày**: 2026-11-08

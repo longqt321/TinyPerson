@@ -88,7 +88,24 @@ def _flags(model) -> frozenset[str]:
     raise RuntimeError("No DCAF module found in the loaded model")
 
 
-def evaluate(ablation: str, annotations: Path, test_dir: Path, limit: int | None) -> dict:
+def _trained_epochs(checkpoint: Path) -> int:
+    """Number of epochs actually completed, read from the sibling results.csv.
+
+    The five seed-42 ablation runs were interrupted when Modal credit ran out,
+    so the requested 150 epochs were never reached. Recording the real count
+    prevents a partial run from being reported as a full-length one.
+    """
+    results_csv = checkpoint.parent.parent / "results.csv"
+    if not results_csv.is_file():
+        raise FileNotFoundError(results_csv)
+    lines = results_csv.read_text().strip().splitlines()
+    if len(lines) < 2:
+        return 0
+    return int(lines[-1].split(",")[0])
+
+
+def evaluate(ablation: str, annotations: Path, test_dir: Path, limit: int | None,
+             class_mode: str = "merge") -> dict:
     out_dir = OUT_ROOT / f"abl_gauss_{ablation}_seed42"
     out_dir.mkdir(parents=True, exist_ok=True)
     pred_file = out_dir / "predictions_tiled.json"
@@ -148,18 +165,25 @@ def evaluate(ablation: str, annotations: Path, test_dir: Path, limit: int | None
         print(f"[{ablation}] --limit set; skipping benchmark (partial predictions)", flush=True)
         return {"ablation": ablation, "inference_seconds": elapsed, "limited": True}
 
-    bench = evaluate_tinyperson(annotations, pred_file, workers=4)
+    bench = evaluate_tinyperson(annotations, pred_file, workers=4, class_mode=class_mode)
     summary = {
         "name": f"abl_gauss_{ablation}_seed42",
         "checkpoint": str(ckpt),
         "ablation": ablation,
         "ablation_flags": sorted(flags),
-        "epoch": 77,
-        "protocol": "Tiled crop 640x512 + NMS merge 0.50 (CPU)",
+        "epoch": _trained_epochs(ckpt),
+        "epochs_requested": 150,
+        "training_complete": _trained_epochs(ckpt) >= 150,
+        "protocol": f"Tiled crop 640x512 + NMS merge 0.50 (CPU); class_mode={class_mode}",
         "inference_seconds": round(elapsed, 1),
         "benchmark": bench,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    # The per-class breakdown is also written on its own so that every ablation
+    # run exposes the same artifact regardless of when it was scored.
+    (out_dir / "summary_per_class.json").write_text(
+        json.dumps(bench, indent=2) + "\n"
+    )
     print(f"[{ablation}] wrote {out_dir / 'summary.json'}", flush=True)
     return summary
 
@@ -170,6 +194,9 @@ def main() -> None:
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--limit", type=int, default=None,
                         help="Only first N images (smoke test; skips benchmark)")
+    parser.add_argument("--class-mode", default="merge",
+                        choices=["per_class", "merge", "primary"],
+                        help="Single-class TinyPerson models must use 'merge'.")
     args = parser.parse_args()
 
     runs = list(ABLATIONS) if args.all else (args.runs or [])
@@ -186,7 +213,7 @@ def main() -> None:
     results = []
     for ablation in runs:
         try:
-            results.append(evaluate(ablation, annotations, test_dir, args.limit))
+            results.append(evaluate(ablation, annotations, test_dir, args.limit, args.class_mode))
         except Exception as exc:  # noqa: BLE001 - report and continue to next run
             print(f"[{ablation}] FAILED: {type(exc).__name__}: {exc}", flush=True)
             results.append({"ablation": ablation, "error": f"{type(exc).__name__}: {exc}"})

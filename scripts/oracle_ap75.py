@@ -82,6 +82,8 @@ def main() -> None:
     parser.add_argument("--predictions", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--class-mode", default="per_class",
+                        choices=["per_class", "merge", "primary"])
     args = parser.parse_args()
 
     raw_annotations = json.loads(args.annotations.read_text())
@@ -110,7 +112,8 @@ def main() -> None:
             matched_gt, matched_detections = payload.pop("matched_gt"), payload.pop("matched_detections")
         temporary = args.output_dir / f"{variant}.json"
         temporary.write_text(json.dumps(payload, indent=2) + "\n")
-        result = evaluate_tinyperson(args.annotations, temporary, args.workers)
+        result = evaluate_tinyperson(args.annotations, temporary, args.workers,
+                                     class_mode=args.class_mode)
         temporary.unlink()
         summary[variant] = {
             "metrics": result, "matched_gt_iou_075": matched_gt,

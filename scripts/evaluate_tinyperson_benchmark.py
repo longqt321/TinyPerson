@@ -17,8 +17,13 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("metrics/tinyperson_test.json"))
     parser.add_argument("--workers", type=int, default=0,
                         help="CPU processes across size ranges; 0 uses up to 7 cores")
+    parser.add_argument("--class-mode", default="per_class",
+                        choices=["per_class", "merge", "primary"],
+                        help="How detector classes map onto TinyPerson categories. "
+                             "A single-class model must use 'merge'.")
     args = parser.parse_args()
-    result = evaluate_tinyperson(args.annotations, args.predictions, args.workers)
+    result = evaluate_tinyperson(args.annotations, args.predictions, args.workers,
+                                 class_mode=args.class_mode)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))

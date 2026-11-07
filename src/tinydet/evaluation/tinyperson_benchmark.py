@@ -1,4 +1,25 @@
-"""TinyPerson benchmark-compatible AP on original-coordinate predictions."""
+"""TinyPerson benchmark-compatible AP on original-coordinate predictions.
+
+Class handling
+--------------
+TinyPerson annotates two person categories (``sea_person`` = category 1,
+``earth_person`` = category 2) which the detector emits as class ids 0 and 1.
+``class_mode`` selects how predictions are matched against ground truth:
+
+``per_class`` (default)
+    Correct COCO/TOV behaviour. Every prediction is kept and matched only
+    against ground truth of its own category. ``result[bin]`` holds the
+    class-agnostic aggregate over all categories, and ``result["per_class"]``
+    holds the per-category breakdown.
+``merge``
+    All categories are collapsed into a single class before matching.
+``primary``
+    Legacy behaviour: predictions whose class id is not 0 are discarded while
+    ground truth still contains both categories. This silently drops ~40% of
+    the ground truth from the recall denominator and is retained only to
+    reproduce numbers published before 2026-11-06. Do not use it for new
+    results.
+"""
 from __future__ import annotations
 
 import json
@@ -14,6 +35,7 @@ import numpy as np
 
 IOU_THRESHOLDS = (0.25, 0.50, 0.75)
 MAX_DETECTIONS = 200
+CLASS_MODES = ("per_class", "merge", "primary")
 # TinyBenchmark official size ranges (AS = sqrt(w * h)):
 # tiny1: [2, 8), tiny2: [8, 12), tiny3: [12, 20], tiny: [2, 20], small: (20, 32], all: [2, 100000]
 SIZE_RANGES: dict[str, tuple[float, float, bool, bool]] = {
@@ -25,7 +47,8 @@ SIZE_RANGES: dict[str, tuple[float, float, bool, bool]] = {
     "small": (20.0, 32.0, False, True),
     "reasonable": (32.0, 100000.0, False, True),
 }
-_EVAL_CONTEXT: tuple[list[int], dict, list[tuple[float, int, list[float]]]] | None = None
+_EVAL_CONTEXT: tuple[list[int], dict, list[tuple[float, int, list[float], int]]] | None = None
+MERGED_CATEGORY = 0
 
 
 def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
@@ -33,45 +56,57 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
         raise RuntimeError("Evaluator worker context was not initialized")
     eval_ids, gt_by_image, scored = _EVAL_CONTEXT
     size_spec = SIZE_RANGES[bin_name]
-    bin_gt, positive_count = {}, 0
+    bin_gt: dict[int, dict[str, Any]] = {}
+    positive_count = 0
+    positive_count_by_cat: dict[int, int] = defaultdict(int)
     for image_id in eval_ids:
         positives = gt_by_image[image_id]["positive"]
-        inside = [b for b in positives if _in_range(b, size_spec)]
-        outside = [b for b in positives if not _in_range(b, size_spec)]
+        inside: dict[int, list[list[float]]] = {}
+        outside: dict[int, list[list[float]]] = {}
+        for category, boxes in positives.items():
+            inside[category] = [b for b in boxes if _in_range(b, size_spec)]
+            outside[category] = [b for b in boxes if not _in_range(b, size_spec)]
+            positive_count += len(inside[category])
+            positive_count_by_cat[category] += len(inside[category])
         bin_gt[image_id] = {
             "positive": inside, "outside": outside,
             "ignored": gt_by_image[image_id]["ignored"],
         }
-        positive_count += len(inside)
 
-    metrics = {}
+    metrics: dict[str, Any] = {}
+    per_category: dict[int, dict[str, Any]] = defaultdict(dict)
     num_eval_images = len(eval_ids)
     for threshold in IOU_THRESHOLDS:
-        matched = {image_id: set() for image_id in eval_ids}
-        matched_outside = {image_id: set() for image_id in eval_ids}
+        matched: dict[tuple[int, int], set[int]] = defaultdict(set)
+        matched_outside: dict[tuple[int, int], set[int]] = defaultdict(set)
         matched_ignored_iou = {image_id: set() for image_id in eval_ids}
         tp, fp = [], []
-        for _, image_id, box in scored:
-            target = bin_gt[image_id]["positive"]
+        tp_by_cat: dict[int, list[int]] = defaultdict(list)
+        fp_by_cat: dict[int, list[int]] = defaultdict(list)
+        for _, image_id, box, category in scored:
+            target = bin_gt[image_id]["positive"].get(category, [])
+            key = (image_id, category)
             overlaps = [_iou(box, candidate) for candidate in target]
             candidates = [i for i, overlap in enumerate(overlaps)
-                          if overlap >= threshold and i not in matched[image_id]]
+                          if overlap >= threshold and i not in matched[key]]
             if candidates:
                 best = max(candidates, key=lambda i: overlaps[i])
-                matched[image_id].add(best)
+                matched[key].add(best)
                 tp.append(1)
                 fp.append(0)
+                tp_by_cat[category].append(1)
+                fp_by_cat[category].append(0)
                 continue
 
-            outside = bin_gt[image_id]["outside"]
+            outside = bin_gt[image_id]["outside"].get(category, [])
             outside_overlaps = [_iou(box, candidate) for candidate in outside]
             outside_candidates = [
                 i for i, overlap in enumerate(outside_overlaps)
-                if overlap >= threshold and i not in matched_outside[image_id]
+                if overlap >= threshold and i not in matched_outside[key]
             ]
             if outside_candidates:
                 best = max(outside_candidates, key=lambda i: outside_overlaps[i])
-                matched_outside[image_id].add(best)
+                matched_outside[key].add(best)
                 continue
 
             ignored = bin_gt[image_id]["ignored"]
@@ -87,14 +122,29 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
                 continue
             tp.append(0)
             fp.append(1)
+            tp_by_cat[category].append(0)
+            fp_by_cat[category].append(1)
         metrics[f"AP@{threshold:.2f}"] = _ap(tp, fp, positive_count)
         metrics[f"MR@{threshold:.2f}"] = _mr(tp, fp, positive_count, num_eval_images)
+        for category, category_gt in positive_count_by_cat.items():
+            per_category[category][f"AP@{threshold:.2f}"] = _ap(
+                tp_by_cat[category], fp_by_cat[category], category_gt
+            )
+            per_category[category][f"MR@{threshold:.2f}"] = _mr(
+                tp_by_cat[category], fp_by_cat[category],
+                category_gt, num_eval_images,
+            )
 
     valid_ap = [metrics[f"AP@{t:.2f}"] for t in IOU_THRESHOLDS if metrics[f"AP@{t:.2f}"] is not None]
+    for category, values in per_category.items():
+        valid = [values[f"AP@{t:.2f}"] for t in IOU_THRESHOLDS if values[f"AP@{t:.2f}"] is not None]
+        values["AP_mean_IoU_0.25_0.50_0.75"] = float(np.mean(valid)) if valid else None
+        values["positive_ground_truths"] = positive_count_by_cat[category]
     return bin_name, {
         **metrics,
         "AP_mean_IoU_0.25_0.50_0.75": float(np.mean(valid_ap)) if valid_ap else None,
         "positive_ground_truths": positive_count,
+        "per_category": {str(k): v for k, v in sorted(per_category.items())},
     }
 
 
@@ -198,6 +248,7 @@ def _load_gt(path: Path) -> dict[str, Any]:
             raise ValueError(f"Unknown image_id={image_id} in annotation")
         row = {
             "box": _xywh_to_xyxy(ann["bbox"]),
+            "category": int(ann.get("category_id", 0)),
             "ignore": bool(ann.get("ignore", False)),
             "uncertain": bool(ann.get("uncertain", False)),
             "dense": bool(ann.get("in_dense_image", False)),
@@ -215,20 +266,54 @@ def _load_gt(path: Path) -> dict[str, Any]:
 
 
 def evaluate_tinyperson(annotation_file: str | Path,
-                        predictions_file: str | Path, workers: int = 0) -> dict[str, Any]:
+                        predictions_file: str | Path, workers: int = 0,
+                        class_mode: str = "per_class") -> dict[str, Any]:
     """Evaluate predictions/test.json against the original TinyPerson COCO test JSON.
 
     Predictions must contain an images list with path, boxes (xyxy in source pixels),
     scores and classes, matching the repository's exported test predictions.
+
+    ``class_mode`` controls how the detector's two output classes are matched
+    against the two TinyPerson categories; see the module docstring.
     """
     if workers < 0:
         raise ValueError("workers must be non-negative")
+    if class_mode not in CLASS_MODES:
+        raise ValueError(f"class_mode must be one of {CLASS_MODES}, got {class_mode!r}")
     annotation_file, predictions_file = Path(annotation_file), Path(predictions_file)
     gt = _load_gt(annotation_file)
     payload = json.loads(predictions_file.read_text())
     rows = payload.get("images")
     if not isinstance(rows, list):
         raise TypeError("Prediction JSON must contain an images list")
+
+    # Map the detector's zero-based class ids onto TinyPerson category ids.
+    # The detector emits class 0 for sea_person (category 1) and class 1 for
+    # earth_person (category 2), so the offset is +1. If the annotation file
+    # does not use category ids 1..N we fall back to identity.
+    gt_categories = sorted({ann["category"] for anns in gt["annotations"].values()
+                            for ann in anns})
+    use_offset = bool(gt_categories) and min(gt_categories) == 1
+
+    # A single-class detector emits only class 0. Under `per_class` that would map
+    # every detection onto one TinyPerson category and silently halve the recall
+    # denominator, so refuse the combination instead of reporting a wrong number.
+    predicted_classes = {
+        int(class_id) for row in rows for class_id in row.get("classes", [])
+    }
+    if (class_mode == "per_class" and len(gt_categories) > 1
+            and predicted_classes and predicted_classes <= {0}):
+        raise ValueError(
+            "Single-class predictions cannot be scored with class_mode='per_class' "
+            f"against {len(gt_categories)} TinyPerson categories: every detection would "
+            "be matched to one category only. Use class_mode='merge' for a single-class "
+            "model, or train a detector with one output per category."
+        )
+
+    def _category_of(class_id: int) -> int:
+        if class_mode in ("merge", "primary"):
+            return MERGED_CATEGORY
+        return class_id + 1 if use_offset else class_id
 
     pred_by_id: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
@@ -247,14 +332,17 @@ def evaluate_tinyperson(annotation_file: str | Path,
             raise ValueError(f"boxes/scores/classes length mismatch for {basename}")
         detections = []
         for box, score, class_id in zip(boxes, scores, classes):
-            if int(class_id) != 0:
+            if class_mode == "primary" and int(class_id) != 0:
                 continue
             box = list(map(float, box))
             if len(box) != 4 or not all(math.isfinite(v) for v in box):
                 raise ValueError(f"Invalid prediction box for {basename}: {box}")
             if box[2] <= box[0] or box[3] <= box[1]:
                 continue
-            detections.append({"box": box, "score": float(score)})
+            detections.append({
+                "box": box, "score": float(score),
+                "category": _category_of(int(class_id)),
+            })
         detections.sort(key=lambda d: d["score"], reverse=True)
         pred_by_id[image_id] = detections[:MAX_DETECTIONS]
 
@@ -268,11 +356,13 @@ def evaluate_tinyperson(annotation_file: str | Path,
         )
 
     eval_ids = sorted(expected - gt["dense_ids"])
-    gt_by_image: dict[int, dict[str, list[list[float]]]] = {}
+    gt_by_image: dict[int, dict[str, Any]] = {}
     ann_counts = Counter()
     for image_id in eval_ids:
-        positives, ignored = [], []
+        positives: dict[int, list[list[float]]] = defaultdict(list)
+        ignored = []
         for ann in gt["annotations"].get(image_id, []):
+            category = MERGED_CATEGORY if class_mode in ("merge", "primary") else ann["category"]
             if ann["ignore"]:
                 ignored.append(ann["box"])
                 ann_counts["ignore"] += 1
@@ -280,11 +370,11 @@ def evaluate_tinyperson(annotation_file: str | Path,
                 ignored.append(ann["box"])
                 ann_counts["uncertain"] += 1
             else:
-                positives.append(ann["box"])
-        gt_by_image[image_id] = {"positive": positives, "ignored": ignored}
+                positives[category].append(ann["box"])
+        gt_by_image[image_id] = {"positive": dict(positives), "ignored": ignored}
 
     scored = sorted(
-        ((d["score"], image_id, d["box"])
+        ((d["score"], image_id, d["box"], d["category"])
          for image_id in eval_ids for d in pred_by_id[image_id]),
         key=lambda item: item[0], reverse=True,
     )
@@ -314,8 +404,15 @@ def evaluate_tinyperson(annotation_file: str | Path,
             key: list(value) for key, value in SIZE_RANGES.items()
         },
         "ignored_annotations": dict(ann_counts),
+        "class_mode": class_mode,
+        "categories": gt_categories,
         "matching": {
             "normal_positive": "IoU",
+            "class": {
+                "per_class": "detections match only same-category ground truth",
+                "merge": "all categories collapsed into one class",
+                "primary": "non-zero class ids discarded (legacy, incorrect recall)",
+            }[class_mode],
             "ignore_uncertain": "IoU match or intersection over detection (IoD)",
             "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored",
         },
