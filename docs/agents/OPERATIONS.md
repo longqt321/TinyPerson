@@ -45,8 +45,16 @@ uv run --extra gpu python train.py \
   YAML expects).
 - `--output-root`, `--name`, `--seed`, `--device`, `--epochs`, `--batch`,
   `--imgsz`, `--workers` override the experiment YAML. `--no-wandb` disables W&B.
-- Resume is automatic: rerunning the same command picks up
-  `training/weights/last.pt` and passes `resume=True` to Ultralytics.
+- Resume requires `--run-id`. Without it every invocation creates a fresh
+  timestamped run folder (`YYYYMMDD-HHMMSS-<commit>-seed<seed>`), so
+  `training/weights/last.pt` is never found and training restarts from epoch 0.
+  Pass the same `--run-id` on the rerun to pick up `last.pt` with
+  `resume=True`. Modal does this for you via a stable run id; `train.py` does
+  not guess.
+- Always pass `--extra gpu` to `uv run`. A bare `uv run python ...` re-syncs the
+  environment without the extra and pulls a different torch build (the PyPI
+  wheel, e.g. `2.14.0+cu130`) over the pinned `2.11.0+cu128`. Verified locally:
+  bare `uv run` swapped the wheel; `uv run --extra gpu [--group dev]` kept it.
 - `--dry-run` resolves the config, dataset and model and prints parameters,
   GFLOPs and strides without training. It runs on CPU, so it is the way to
   validate a setup before spending GPU time.

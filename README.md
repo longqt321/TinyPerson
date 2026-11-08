@@ -66,8 +66,15 @@ uv run --extra gpu python train.py \
   --data /content/data_local/tinyperson-yolo-v2/data.yaml \
   --output-root /content/drive/MyDrive/tinydet_runs \
   --device 0 --batch 8 --imgsz 1280 --workers 4 \
-  --name p2refine_colab_seed42
+  --name p2refine_colab_seed42 --run-id run1
 ```
+
+Lưu ý:
+- Luôn truyền `--extra gpu` cho `uv run`. Gõ `uv run python ...` không có extra
+  sẽ kéo một bản torch khác từ PyPI đè lên bản `2.11.0+cu128` đã khoá.
+- Muốn resume khi run bị ngắt giữa chừng, phải truyền lại đúng `--run-id`.
+  Không có `--run-id` thì mỗi lần chạy tạo thư mục run mới (theo timestamp)
+  và train lại từ epoch 0.
 
 Kiểm tra cấu hình mà không cần GPU (chạy được trên CPU):
 ```bash

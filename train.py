@@ -13,12 +13,16 @@ Modal keeps using ``modal/app.py``; this CLI is for GPU hosts without Modal::
         --data /content/data_local/tinyperson-yolo-v2/data.yaml \
         --output-root /content/drive/MyDrive/tinydet_runs \
         --device 0 --batch 8 --imgsz 1280 --workers 4 \
-        --name p2refine_colab_seed42
+        --name p2refine_colab_seed42 --run-id run1
+
+Pass the same ``--run-id`` again to resume an interrupted run. Without it each
+invocation creates a new timestamped run folder, so ``last.pt`` is never found
+and training restarts from epoch 0.
 
 Validate the whole path without a GPU (no training, no CUDA required)::
 
     python train.py --config configs/experiment/p2refine_tinyperson_wacv.yaml \
-        --data datasets/tinyperson-yolo-v2/data.yaml --dry-run
+        --data datasets/derived/tinyperson-yolo-v2/data.yaml --dry-run
 """
 
 import argparse
@@ -44,6 +48,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output-root", type=Path, help="Override output.root (run directory).")
     parser.add_argument("--name", help="Override the experiment name (run folder).")
+    parser.add_argument(
+        "--run-id",
+        help="Run folder name under <output-root>/<name>/. Reuse the same value to resume an "
+        "interrupted run: without it every invocation gets a new timestamped folder and "
+        "training restarts from scratch.",
+    )
     parser.add_argument("--device", help="CUDA device list, e.g. '0' or '0,1'.")
     parser.add_argument("--epochs", type=int, help="Override train.epochs.")
     parser.add_argument("--batch", type=int, help="Override train.batch.")
@@ -162,6 +172,30 @@ def _dry_run(config: ExperimentConfig, dataset_yaml: Path) -> None:
     print("[DRY RUN] config, dataset and model all resolve. No training performed.", flush=True)
 
 
+def _check_output_root(config: ExperimentConfig) -> None:
+    """Fail early with an actionable message when the run root is not writable.
+
+    Experiment YAMLs default to ``/mnt/runs``, which only exists on Modal. On
+    Colab, Kaggle or a bare GPU host that path is either missing or read-only,
+    and the failure otherwise surfaces as a bare PermissionError deep inside
+    ``create_run``.
+    """
+    root = Path(config.output["root"])
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".tinydet-write-probe"
+        probe.write_text("")
+        probe.unlink()
+    except OSError as error:
+        raise SystemExit(
+            f"Output root is not writable: {root} ({error}).\n"
+            "Pass --output-root to point the run directory at a writable path, e.g.\n"
+            "  --output-root /content/drive/MyDrive/tinydet_runs   (Colab, Drive)\n"
+            "  --output-root /kaggle/working/runs                  (Kaggle)\n"
+            "  --output-root ~/runs                                (any host)"
+        ) from error
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     experiment_path = Path(args.config).expanduser().resolve()
@@ -190,10 +224,11 @@ def main(argv: list[str] | None = None) -> int:
 
     from tinydet.training.trainer import train
 
+    _check_output_root(config)
     with tempfile.TemporaryDirectory(prefix="tinydet-cfg-") as temporary:
         config_file = Path(temporary) / "experiment.yaml"
         config_file.write_text(yaml.safe_dump(asdict(config), sort_keys=False))
-        run = train(config_file, dataset_config=dataset_yaml)
+        run = train(config_file, dataset_config=dataset_yaml, run_id=args.run_id)
     print(f"Run directory: {run}", flush=True)
     return 0
 
