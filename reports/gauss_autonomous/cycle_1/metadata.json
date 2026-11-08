@@ -1,0 +1,31 @@
+{
+  "experiment": "gauss_cycle_1",
+  "run_id": "20261101-215526-6fceb3b-seed42",
+  "seed": 42,
+  "git_commit": "6fceb3b",
+  "git_dirty": true,
+  "python": "3.12.10",
+  "torch": "2.11.0+cu128",
+  "torchvision": "0.26.0+cu128",
+  "ultralytics": "8.4.164",
+  "cuda": "12.8",
+  "gpu": "NVIDIA A10",
+  "dataset": "/mnt/data/tinyperson_official_v1/data.yaml",
+  "model_config_sha256": "a995045305c338955e5ae87e13c31addf7f13f9d74b94504ed19757fc1673041",
+  "started_at": "2026-11-01T21:55:26.237668+00:00",
+  "status": "COMPLETED",
+  "dataset_preflight": {
+    "report_path": "/mnt/runs/preflight/dataset-audit-c102d38dd4d1.json",
+    "source_signature": "c8312213dd1c36424c05cfb15c853afbf8ddcf9878de35e1381e36ac3d80f98b",
+    "imgsz": 1280,
+    "images_total": 746,
+    "severe_resolution_loss": false
+  },
+  "wandb_project": "hoangngan/tiny-person-research",
+  "training_seconds": 4046.522193587,
+  "peak_vram_gb": 11.456759452819824,
+  "two_stage": true,
+  "stage1_best": "/mnt/runs/gauss_cycle_1/20261101-215526-6fceb3b-seed42/stage1/weights/best.pt",
+  "stage2_epochs": 50,
+  "finished_at": "2026-11-01T23:03:06.775203+00:00"
+}

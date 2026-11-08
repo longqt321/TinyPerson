@@ -8,7 +8,7 @@ Only the device differs (cpu instead of cuda:0), because Modal is over its
 spend limit. Nothing in the protocol is changed.
 
 The ablation flag is NOT passed on the command line: it is read from the
-checkpoint itself, where `DCAF.ablation_flags` was pickled during training.
+checkpoint itself, where `GauSS.ablation_flags` was pickled during training.
 This script asserts the flag matches the expected value so a silent
 full-model evaluation cannot happen.
 
@@ -83,9 +83,9 @@ def _checkpoint(ablation: str) -> Path:
 
 def _flags(model) -> frozenset[str]:
     for _, module in model.model.named_modules():
-        if type(module).__name__ == "DCAF":
+        if type(module).__name__ == "GauSS":
             return frozenset(getattr(module, "ablation_flags", frozenset()))
-    raise RuntimeError("No DCAF module found in the loaded model")
+    raise RuntimeError("No GauSS module found in the loaded model")
 
 
 def _trained_epochs(checkpoint: Path) -> int:

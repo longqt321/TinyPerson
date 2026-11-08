@@ -21,8 +21,8 @@ models = modal.Volume.from_name("tiny-person-models", create_if_missing=True)
 runs = modal.Volume.from_name("tiny-person-runs", create_if_missing=True)
 wandb_secret = modal.Secret.from_name("wandb-secret", required_keys=["WANDB_API_KEY"])
 mounts = {str(DATA_ROOT): data, str(MODEL_ROOT): models, str(RUN_ROOT): runs}
-CPU_LIMIT = (8.0, 16.0)
-MEMORY_LIMIT_MB = (16384, 49152)
+CPU_LIMIT = (4.0, 8.0)
+MEMORY_LIMIT_MB = (12288, 24576)
 
 
 def _dataset_yaml_path(path: str | Path) -> Path:
@@ -135,7 +135,7 @@ def _train(
     ablation: str = "",
 ):
     os.chdir("/root")
-    # Must be set before the model is built: DCAF reads the flags in __init__.
+    # Must be set before the model is built: GauSS reads the flags in __init__.
     # Passed as an argument (not inherited) because .remote() runs in a new container.
     os.environ["TINYDET_ABLATION"] = ablation
     runs.reload()

@@ -53,7 +53,7 @@
   - Các kỹ thuật giải quyết bài toán người nhỏ: Tiled Slicing (SAHI), Scale Match, Feature Pyramid mở rộng (P2 layer).
 * **2.3. Scale-Space Theory & Attention Mechanisms in Feature Pyramids**:
   - Lý thuyết Scale-Space kinh điển của Witkin & Koenderink.
-  - Các cơ chế chú ý định tuyến dòng đặc trưng (BiFPN, DyHead, DCAF/GauSS) và lý do tại sao router attention cục bộ vượt trội hơn global self-attention trong bài toán nano-detector.
+  - Các cơ chế chú ý định tuyến dòng đặc trưng (BiFPN, DyHead, GauSS) và lý do tại sao router attention cục bộ vượt trội hơn global self-attention trong bài toán nano-detector.
 
 ---
 

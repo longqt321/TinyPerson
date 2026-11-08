@@ -53,8 +53,8 @@ def plot_training_loss_curves():
     df_base = pd.read_csv("reports/data/baseline_results.csv")
     df_base.columns = [c.strip() for c in df_base.columns]
 
-    df_dcaf = pd.read_csv("reports/data/dcaf_results.csv")
-    df_dcaf.columns = [c.strip() for c in df_dcaf.columns]
+    df_gauss = pd.read_csv("reports/data/gauss_results.csv")
+    df_gauss.columns = [c.strip() for c in df_gauss.columns]
 
     fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.4))
 
@@ -74,8 +74,8 @@ def plot_training_loss_curves():
             alpha=0.85,
         )
         ax.plot(
-            df_dcaf["epoch"],
-            df_dcaf[col],
+            df_gauss["epoch"],
+            df_gauss[col],
             label="GauSS (Ours)",
             color=C_GAUSS,
             linewidth=1.4,
@@ -95,11 +95,11 @@ def plot_total_loss_and_lr():
     df_base = pd.read_csv("reports/data/baseline_results.csv")
     df_base.columns = [c.strip() for c in df_base.columns]
 
-    df_dcaf = pd.read_csv("reports/data/dcaf_results.csv")
-    df_dcaf.columns = [c.strip() for c in df_dcaf.columns]
+    df_gauss = pd.read_csv("reports/data/gauss_results.csv")
+    df_gauss.columns = [c.strip() for c in df_gauss.columns]
 
     df_base["total_loss"] = df_base["train/box_loss"] + df_base["train/cls_loss"]
-    df_dcaf["total_loss"] = df_dcaf["train/box_loss"] + df_dcaf["train/cls_loss"]
+    df_gauss["total_loss"] = df_gauss["train/box_loss"] + df_gauss["train/cls_loss"]
 
     fig, ax1 = plt.subplots(figsize=(5.6, 2.8))
 
@@ -111,8 +111,8 @@ def plot_total_loss_and_lr():
         linewidth=1.6,
     )
     ax1.plot(
-        df_dcaf["epoch"],
-        df_dcaf["total_loss"],
+        df_gauss["epoch"],
+        df_gauss["total_loss"],
         label="Total Loss (GauSS)",
         color=C_GAUSS,
         linewidth=1.6,

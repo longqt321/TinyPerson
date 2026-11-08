@@ -1,29 +1,37 @@
-"""Tiny object detection modules: DCAF v2.1, P2Refine."""
+"""Tiny object detection modules: GauSS, P2Refine."""
 
-from tinydet.modules.dcaf import (
+from tinydet.modules.gauss import (
     CONTROL_PARAM_SUFFIXES,
-    DCAF,
     BandBranch,
     DilatedContextBranch,
+    DySampleUp,
+    GauSS,
     LearnableGaussianScaleSpace,
     RefinementBranch,
-    collect_dcaf_control_params,
-    compute_dcaf_analytical_macs,
-    configure_dcaf_control_param_group,
-    is_dcaf_control_param_name,
+    collect_gauss_control_params,
+    collect_gauss_router_zloss,
+    compute_gauss_analytical_macs,
+    configure_gauss_control_param_group,
+    is_gauss_control_param_name,
+    mode_unused_param_names,
+    remap_v3_to_v31_state_dict,
 )
 from tinydet.modules.p2_refine import P2Refine
 
 __all__ = [
     "CONTROL_PARAM_SUFFIXES",
-    "DCAF",
     "BandBranch",
     "DilatedContextBranch",
+    "DySampleUp",
+    "GauSS",
     "LearnableGaussianScaleSpace",
     "P2Refine",
     "RefinementBranch",
-    "collect_dcaf_control_params",
-    "compute_dcaf_analytical_macs",
-    "configure_dcaf_control_param_group",
-    "is_dcaf_control_param_name",
+    "collect_gauss_control_params",
+    "collect_gauss_router_zloss",
+    "compute_gauss_analytical_macs",
+    "configure_gauss_control_param_group",
+    "is_gauss_control_param_name",
+    "mode_unused_param_names",
+    "remap_v3_to_v31_state_dict",
 ]

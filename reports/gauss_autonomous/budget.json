@@ -1,0 +1,50 @@
+{
+  "productive_epochs": 200,
+  "wasted_epochs": 1,
+  "total_epochs": 201,
+  "hard_limit": 350,
+  "productive_limit": 300,
+  "wasted_limit": 50,
+  "cycles": [
+    {
+      "cycle": 1,
+      "attempt": 1,
+      "run_id": "20261101-215132-6fceb3b-seed42",
+      "status": "FAILED",
+      "error": "zip() argument 2 is shorter than argument 1 (lr_scheduler LambdaLR sync issue)",
+      "consumed_epochs": 1,
+      "type": "wasted",
+      "resolution": "Synchronized scheduler.lr_lambdas and base_lrs in _setup_gauss_optimizer"
+    },
+    {
+      "cycle": 1,
+      "attempt": 2,
+      "run_id": "20261101-215526-6fceb3b-seed42",
+      "status": "COMPLETED",
+      "consumed_epochs": 100,
+      "type": "productive",
+      "stage1_epochs": 50,
+      "stage2_epochs": 50,
+      "best_mAP50_95": 0.07226,
+      "best_mAP50": 0.23865,
+      "best_recall": 0.30238,
+      "latency_ms": 14.43
+    },
+    {
+      "cycle": 2,
+      "attempt": 1,
+      "run_id": "20261101-231118-6fceb3b-seed42",
+      "status": "COMPLETED",
+      "consumed_epochs": 100,
+      "type": "productive",
+      "stage1_epochs": 50,
+      "stage2_epochs": 50,
+      "best_mAP50_95": 0.08010,
+      "best_mAP50": 0.26172,
+      "best_mAP75": 0.02203,
+      "precision": 0.40447,
+      "best_recall": 0.31513,
+      "latency_ms": 14.15
+    }
+  ]
+}

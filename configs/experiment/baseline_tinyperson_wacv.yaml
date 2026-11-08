@@ -2,8 +2,8 @@ seed: 42
 data:
   config: /mnt/data/tinyperson-yolo-v2/data.yaml
 train:
-  epochs: 150
-  patience: 20
+  epochs: 60
+  patience: 15
   val: true
   imgsz: 1280
   batch: 8
@@ -12,7 +12,7 @@ train:
   lr0: 0.002
   lrf: 0.1
   cos_lr: true
-  warmup_epochs: 5.0
+  warmup_epochs: 2.0
   amp: true
   deterministic: false
   degrees: 0.0

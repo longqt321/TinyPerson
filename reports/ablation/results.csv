@@ -1,5 +1,5 @@
 run,ablation,seed,status,training_seconds,peak_vram_gb,error,AP50_all,AP50_tiny1,AP50_tiny2,AP50_tiny3,AP50_small,MR50_tiny2,AP75_all
-dcaf_v2_1_tinyperson_wacv,"none (full GauSS, paper run)",42,REFERENCE,,,,12.936,5.1776,9.4962,13.3721,19.2287,93.5245,1.3973
+gauss_v2_1_tinyperson_wacv,"none (full GauSS, paper run)",42,REFERENCE,,,,12.936,5.1776,9.4962,13.3721,19.2287,93.5245,1.3973
 abl_gauss_no_high_band_seed42,no_high_band,42,INCOMPLETE,,,,,,,,,,
 abl_gauss_no_mid_band_seed42,no_mid_band,42,INCOMPLETE,,,,,,,,,,
 abl_gauss_no_low_band_seed42,no_low_band,42,INCOMPLETE,,,,,,,,,,

@@ -1,7 +1,7 @@
 # YOLO26n-P2 P2Refine model for TinyPerson (official protocol: single 'person' class)
-# Diff vs yolo26n_tiny_A2_p2_dcaf_tinyperson.yaml:
+# Diff vs yolo26n_tiny_A2_p2_gauss_tinyperson.yaml:
 #   - layers 17/18/19 removed (dead chain: their output fed nothing)
-#   - DCAF (P2 producer) replaced by P2Refine taking [C2, P3]
+#   - GauSS (P2 producer) replaced by P2Refine taking [C2, P3]
 #   - indices shifted by -3 from old layer 20 onwards
 nc: 1
 end2end: True

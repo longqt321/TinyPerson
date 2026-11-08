@@ -24,4 +24,4 @@ Tài liệu tổng hợp ban đầu gợi ý kết quả thay đổi theo bin k�
 
 ## 4.5 Tái lập và tài liệu cần bổ sung
 
-Để hoàn tất đánh giá, cần bổ sung config model/train/eval, checkpoint baseline và GauSS, log huấn luyện, kết quả evaluator đầy đủ, script hoặc lệnh inference, cùng profiler output và thông tin GPU cho phép tái lập latency, FLOPs và VRAM. Cần xác nhận thêm quan hệ giữa tên GauSS trong báo cáo và implementation mang tên DCAF trong checkout. Khi dữ liệu nguồn có mặt, có thể dựng biểu đồ và bảng bằng pipeline sẵn có; hiện chưa khai báo hoặc sinh hình/bảng định lượng.
+Để hoàn tất đánh giá, cần bổ sung config model/train/eval, checkpoint baseline và GauSS, log huấn luyện, kết quả evaluator đầy đủ, script hoặc lệnh inference, cùng profiler output và thông tin GPU cho phép tái lập latency, FLOPs và VRAM. Cần xác nhận thêm quan hệ giữa tên GauSS trong báo cáo và implementation mang tên GauSS trong checkout. Khi dữ liệu nguồn có mặt, có thể dựng biểu đồ và bảng bằng pipeline sẵn có; hiện chưa khai báo hoặc sinh hình/bảng định lượng.

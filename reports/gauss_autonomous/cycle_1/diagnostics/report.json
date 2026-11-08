@@ -1,0 +1,38 @@
+{
+  "images": 84,
+  "imgsz": 1280,
+  "prediction_confidence_floor": 0.001,
+  "matching_confidence_threshold": 0.25,
+  "matching_iou_threshold": 0.5,
+  "max_detections": 300,
+  "size_bins": [
+    "0-8px",
+    "8-16px",
+    "16-32px",
+    "32px+"
+  ],
+  "matching_policy": "descending-confidence greedy one-to-one match at confidence >= match-conf and IoU >= threshold",
+  "models": [
+    {
+      "model": "A2",
+      "checkpoint": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/gauss_cycle_1/20261101-215526-6fceb3b-seed42/checkpoints/best.pt",
+      "run_status": "unknown",
+      "completed_epochs": 0,
+      "images": 84,
+      "objects": 3608,
+      "detected": 940,
+      "misses": 1078,
+      "localization_errors": 1590,
+      "false_positives": 1131,
+      "background_fp": 337,
+      "duplicate": 239,
+      "localization_fp": 555,
+      "recall_conf025_iou050": 0.26053215077605324
+    }
+  ],
+  "limitations": [
+    "YOLO validation labels do not encode official COCO ignore/uncertain regions or dense-image handling.",
+    "The four checkpoints have different completed epoch counts; this is descriptive, not a controlled architecture comparison.",
+    "FP type thresholds (0.05 confidence, 0.1 IoU) are diagnostic conventions, not official benchmark rules."
+  ]
+}

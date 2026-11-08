@@ -7,11 +7,11 @@
 - **Lựa chọn**: Seaborn 0.13.2 (dựa trên Matplotlib, cú pháp thống kê rõ ràng, style chuẩn báo cáo paper).
 - **License**: BSD-3-Clause (hoàn toàn tự do sử dụng).
 
-## ADR-006: Cờ ablation DCAF qua biến môi trường TINYDET_ABLATION
+## ADR-006: Cờ ablation GauSS qua biến môi trường TINYDET_ABLATION
 
 - **Trạng thái**: Chấp thuận
 - **Lý do**: Cần 5 ablation (bỏ band cao/giữa/thấp, bỏ router, bỏ saliency gate) mà không viết lại module, không đổi số tham số, giữ checkpoint tương thích. Env var cho phép bật cờ per-run qua Modal không cần sửa model YAML.
-- **Phương án đã xem**: (1) env var đọc trong DCAF.__init__/forward; (2) 5 file YAML riêng với 5 class DCAF biến thể; (3) YAML flag truyền qua parse_model.
+- **Phương án đã xem**: (1) env var đọc trong GauSS.__init__/forward; (2) 5 file YAML riêng với 5 class GauSS biến thể; (3) YAML flag truyền qua parse_model.
 - **Lựa chọn**: (1) env var — ít xâm nhập nhất, không đổi kiến trúc, mọi run dùng chung model YAML gốc.
 - **Rủi ro**: env var phải set trên Modal function; quên set = chạy full model (an toàn: mặc định là full).
 
@@ -83,31 +83,31 @@
 - **Rủi ro**: mọi số liệu cũ trong `paper/main.tex` phải được đo lại; không được trộn
   kết quả từ derivative cũ với derivative mới.
 
-## ADR-010: Thay thế DCAF v2.1 bằng P2Refine và dọn dẹp chuỗi layer chết
+## ADR-010: Thay thế GauSS v2.1 bằng P2Refine và dọn dẹp chuỗi layer chết
 
 - **Trạng thái**: Chấp thuận
 - **Ngày**: 2026-11-08
 - **Lý do**:
-  1. Phân tích thực nghiệm và lý thuyết cho thấy DCAF v2.1 gặp hiện tượng classification-head desync
+  1. Phân tích thực nghiệm và lý thuyết cho thấy GauSS v2.1 gặp hiện tượng classification-head desync
      ngay từ step 0 (đầu phân loại khởi tạo cho $x_0$, nhưng nhận $y = x_0 + \alpha z$ với năng lượng lệch lớn).
-  2. DCAF v2.1 trong YAML cũ có chuỗi layers 17→18→19 (Upsample từ 16 → Concat với 2 → C3k2) tạo ra output
+  2. GauSS v2.1 trong YAML cũ có chuỗi layers 17→18→19 (Upsample từ 16 → Concat với 2 → C3k2) tạo ra output
      hoàn toàn không được layer nào tiêu thụ (dead branch lãng phí ~0.87 GMAC và 8.7k tham số).
-  3. Cả 5 giả thiết cơ chế của DCAF v2.1 (saliency router, scale-space band, dilated context)
+  3. Cả 5 giả thiết cơ chế của GauSS v2.1 (saliency router, scale-space band, dilated context)
      đều đã bị bác bỏ bởi ablation bootstrap trước đó.
 - **Phương án đã xem**:
-  1. Sửa DCAF v2.1 với đề xuất N4' (zero-init output projection, bỏ double-SiLU) + giữ nguyên kiến trúc.
+  1. Sửa GauSS v2.1 với đề xuất N4' (zero-init output projection, bỏ double-SiLU) + giữ nguyên kiến trúc.
   2. Bỏ hoàn toàn module tinh chế, dùng baseline A2 (không có refine ở P2).
   3. Tích hợp `P2Refine`: module tinh chế tối giản, ReZero-style (zero-init exit projection không BN),
      chỉ lấy input [C2, P3], đảm bảo đồng nhất bit-exact tại step 0, đồng thời dọn sạch chuỗi layer chết (chọn).
 - **Lựa chọn**: (3).
   - Kiến trúc `P2Refine`: Stem kết hợp C2 + Up(P3) qua Conv 1x1 + BN + SiLU. Nhánh residual gồm DW3x3 → PW (chuyển sang mid=16) → DW5x5 → W_out (zero-init, không BN). Output = stem + W_out(h).
-  - Tổng tham số module: 6,000 (so với 34,700 của DCAF).
-  - MACs module: 0.4375 GMAC (so với 1.0176 GMAC của DCAF).
-  - Mô hình đầy đủ: 2,513,272 tham số, 31.067 GFLOPs ở 1280x1280 (giảm so với 32.2 GFLOPs của DCAF).
+  - Tổng tham số module: 6,000 (so với 34,700 của GauSS).
+  - MACs module: 0.4375 GMAC (so với 1.0176 GMAC của GauSS).
+  - Mô hình đầy đủ: 2,513,272 tham số, 31.067 GFLOPs ở 1280x1280 (giảm so với 32.2 GFLOPs của GauSS).
 - **Hệ thống theo dõi & Diagnostics**:
   - Tạo `P2RefineDiagnosticsCallback` trong `src/tinydet/training/module_diagnostics.py` tự động theo dõi
     và ghi lại các chỉ số `rho_mean`, `rho_max`, `cos_x0_delta`, `w_out_norm` vào `metrics/p2refine_diagnostics.csv`
-    và đồng bộ lên W&B mỗi epoch (khắc phục điểm thiếu sót của DCAF khi 21 run trước đó không có log module).
+    và đồng bộ lên W&B mỗi epoch (khắc phục điểm thiếu sót của GauSS khi 21 run trước đó không có log module).
 - **Kiểm chứng**:
   - Module self-test trên CPU: `rel=0.000000 exact=True` ở cả train và eval mode.
   - Tích hợp model YAML: `scripts/validate_tiny_ablation.py` pass với strides [4, 8, 16, 32], shape detection heads chuẩn.
@@ -169,3 +169,85 @@
   train thực sự chạy trên Colab/Kaggle. Cần một run GPU thật để xác nhận.
 - **Rủi ro**: T4 15 GB có thể OOM ở `imgsz 1280, batch 8`; dùng `--batch 4`. Kết quả lệch
   theo GPU khác nhau; `metadata.json` đã log `gpu` và phải ghi GPU nào trong paper.
+
+## ADR-012: Thay GauSS v3 bằng GauSS v3.1 (2026-11-09)
+
+- **Bối cảnh**: Rà soát cuối cho thấy GauSS v3 còn ba điểm yếu kỹ thuật: (1) cổng ReZero
+  dùng `0.5 * sigmoid(raw)` với `raw = -6.0` nên `alpha ≈ 0.0012` chứ không bằng 0, đồng
+  thời đạo hàm tại init bị bão hòa (~0.0012) làm module học rất chậm trong các epoch đầu;
+  (2) hai phép `F.interpolate(mode="nearest")` (P3→P2, P4→P3) gây aliasing đúng tại chỗ
+  giao dải cao/thấp — nơi thông tin của người 2–8 px nằm; (3) cờ `no_high_band` chỉ triệt
+  tiêu `r_h` mà vẫn để lọt nhánh neo trực tiếp `gamma_h * b_h`, làm nhiễm bẩn ablation.
+- **Quyết định**: Thay toàn bộ `src/tinydet/modules/gauss.py` bằng bản v3.1. Giữ nguyên
+  tên class (`GauSS`/`GauSS`), chữ ký constructor `(c1, c2, ...)` và forward `[C2, P3, P4]`,
+  nên YAML, `parse_model` patch và trainer không phải sửa.
+- **Thay đổi chính**:
+  - Cổng ReZero: `0.5 * tanh(raw)`, `raw = 0` → `alpha = gamma_in = gamma_out = 0` chính xác
+    bitwise, đạo hàm tại init 0.5 (gấp ~400 lần bản sigmoid).
+  - `DySampleUp` (offset zero-init) thay `nearest`; tại init bằng đúng
+    `F.interpolate(mode="bilinear", align_corners=False)` (sai số < 1e-5, có test).
+  - Router hybrid: `softmax(log(energy) + corr)` với `corr` zero-init, năng lượng đo trên
+    band thô `b_h/b_m/b_l` ở stride-4 rồi avg-pool về stride-8; kèm `router_z_loss()`
+    (ST-MoE, Eq. 5) và helper `collect_gauss_router_zloss(model)`.
+  - Tách `gamma_in` (neo tinh chế stride-8) và `gamma_out` (neo trực tiếp stride-4).
+  - Ablation sạch: `no_high_band` khóa cả hai nhánh dải cao, thêm cờ `no_direct_anchor`,
+    trọng số band được chuẩn hóa lại trên các band còn hoạt động.
+  - Dilation context `{1, 3, 5}` (ERF stride-8 từ 7×7 lên 11×11).
+  - Toán định tuyến chạy FP32 để an toàn AMP.
+- **Phương án đã xem**: (1) giữ v3 và vá từng điểm — để lại kiến trúc nửa vời, ablation vẫn
+  nhiễm; (2) viết module mới thay thế — trùng lặp nghiệp vụ và tốn công đổi YAML/checkpoint;
+  (3) chọn v3.1 vì là drop-in replacement, không thêm dependency.
+- **Hệ quả**: 36,878 tham số (+2,212), 27 Conv2d (+3), 131 control scalar (+1),
+  1.0413 GMAC (+2.42% module, ~+0.14% forward YOLO26n ở 1280). Checkpoint v3 phải chuyển
+  bằng `remap_v3_to_v31_state_dict()` và load `strict=False`.
+- **Kiểm chứng**: `uv run --extra cpu python src/tinydet/modules/gauss.py` → PASS
+  (params, convs, control scalars, MACs, ReZero identity bitwise, DySample == bilinear,
+  ablation không rò rỉ, remap checkpoint). Load + forward YOLO26n-P2 qua
+  `configs/model/yolo26n_tiny_A2_p2_gauss_tinyperson.yaml`: 2,552,854 tham số, output
+  `one2many`/`one2one` đúng. `ruff check src/` sạch.
+- **Chưa xác minh**: chưa train GPU thật với v3.1; chưa nối `router_z_loss` vào hàm loss của
+  trainer (tùy chọn); DDP nhiều GPU cần `find_unused_parameters=True` hoặc dùng
+  `module.unused_param_names()` vì `route_*`/`saliency_gate` không nhận gradient ở chế độ
+  mặc định.
+
+## ADR-013: Thống nhất tên GauSS, xóa toàn bộ định danh DCAF (2026-11-09)
+
+- **Bối cảnh**: Module trải qua nhiều tên gọi (DCAF v2.1, DCAF/GauSS v3, GauSS v3.1) nằm rải rác
+  trong code, config, docs, script và artifact, gây nhầm lẫn khi viết báo cáo và khi đọc log.
+- **Quyết định**: `GauSS` là tên duy nhất. Xóa class alias `DCAF`, đổi toàn bộ helper
+  (`is_gauss_control_param_name`, `collect_gauss_control_params`,
+  `configure_gauss_control_param_group`, `compute_gauss_analytical_macs`,
+  `collect_gauss_router_zloss`), đổi tên file artifact trong repo (`reports/gauss_*`,
+  `docs/report/GAUSS_BASELINE_HANDOFF.md`, `reports/gauss_autonomous/`), và thay chuỗi
+  `DCAF`/`dcaf` trong toàn bộ văn bản tracked. Tên viết đầy đủ thống nhất là
+  "Gaussian Scale-Space Feature Alignment and Refinement".
+- **Phương án đã xem**: (1) giữ alias `DCAF = GauSS` để load checkpoint cũ — để lại định danh cũ
+  trong code, trái yêu cầu; (2) đổi tên nhưng giữ nguyên tên artifact lịch sử — còn chuỗi `dcaf`
+  trong repo. Chọn phương án đổi toàn bộ, ghi hệ quả vào `docs/BACKLOG.md` (BL-018, BL-019).
+- **Hệ quả**: checkpoint cũ pickle class `DCAF` không unpickle trực tiếp được (BL-018); các
+  đường dẫn trỏ volume Modal cũ (`dcaf_v2_1_*`) không còn khớp cho tới khi có run mới (BL-019).
+- **Kiểm chứng**: `git grep -I -i dcaf` trên file tracked trả về rỗng (trừ `uv.lock`, là hash
+  package không liên quan và không được sửa tay). Self-test `gauss.py` PASS, forward YOLO26n-P2
+  với `configs/model/yolo26n_tiny_A2_p2_gauss_tinyperson.yaml` OK, `ruff check src/` sạch.
+- **Chưa xác minh**: chưa load thử một checkpoint v2.1/v3 thật sau khi đổi tên.
+
+## ADR-014: Đồng bộ TAL assigner cho track VisDrone (2026-11-09)
+
+- **Bối cảnh**: Track TinyPerson đã đặt `tal_beta: 4.0` và bật `tal_tiny_floor: 0.5`
+  (ưu tiên anchor cho vật thể < 8 px). Track VisDrone vẫn giữ `tal_beta: 6.0` mặc định và
+  không có floor, dù VisDrone cũng có mật độ vật thể nhỏ rất cao (pedestrian/people/motor).
+  Nếu hai track dùng assigner khác nhau, mọi so sánh chéo dataset trong báo cáo đều bị nhiễu.
+- **Quyết định**: Đồng bộ `tal_beta: 4.0` + `tal_tiny_floor: 0.5` cho cả hai model VisDrone
+  (`yolo26n_tiny_A2_p2_visdrone.yaml`, `yolo26n_tiny_A2_p2_gauss_visdrone.yaml`).
+- **Phương án đã xem**: (1) giữ 6.0 cho VisDrone và ghi rõ mỗi track tự tune — trung thực
+  nhưng làm yếu claim "module cải thiện cả hai domain"; (2) đồng bộ theo TinyPerson (chọn).
+- **Hệ quả**: Track VisDrone phải train lại từ đầu (chưa có run VisDrone nào với cấu hình này
+  trong repo). Baseline VisDrone và GauSS VisDrone dùng chung assigner, nên ΔAP quy được cho
+  module. Hai track vẫn tách biệt: không trộn số liệu TinyPerson với VisDrone.
+- **Kiểm chứng**: `yaml.safe_load` xác nhận cả hai model YAML có `tal_beta: 4.0`,
+  `tal_tiny_floor: 0.5`, `nc: 10`; build + forward YOLO thành công (baseline 2,518,352 params;
+  GauSS 2,555,230 params; 4 feature levels mỗi head). So khớp experiment config:
+  `baseline_visdrone_tpami` và `gauss_v3_visdrone_tpami` chỉ khác `name` và `model.config`.
+  `ruff check src/ configs/` sạch.
+- **Chưa xác minh**: chưa có run VisDrone thật với assigner mới; ảnh hưởng của floor 0.5 lên
+  10 lớp VisDrone (nhiều lớp trung bình/lớn) chưa được đo.

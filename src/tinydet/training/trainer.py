@@ -7,7 +7,7 @@ from time import monotonic
 import torch
 
 from tinydet.models.registry import build_model
-from tinydet.modules.dcaf import configure_dcaf_control_param_group
+from tinydet.modules.gauss import configure_gauss_control_param_group
 from tinydet.training.iou_logging import log_ap_by_iou
 from tinydet.training.module_diagnostics import register_p2refine_callbacks
 from tinydet.training.wandb_media import WandbMediaCallback
@@ -48,9 +48,9 @@ def _log_active_head(trainer) -> None:
     print("=" * 70, flush=True)
 
 
-def _setup_dcaf_optimizer(trainer) -> None:
-    """Ensure DCAF scale-space and router control parameters have weight_decay=0.0 and sync scheduler."""
-    configure_dcaf_control_param_group(trainer.optimizer, trainer.model)
+def _setup_gauss_optimizer(trainer) -> None:
+    """Ensure GauSS scale-space and router control parameters have weight_decay=0.0 and sync scheduler."""
+    configure_gauss_control_param_group(trainer.optimizer, trainer.model)
     # If the trainer has already constructed its lr_scheduler (LambdaLR),
     # re-synchronize its lr_lambdas and base_lrs to match the updated param_groups.
     if hasattr(trainer, "scheduler") and hasattr(trainer.scheduler, "lr_lambdas"):
@@ -173,7 +173,7 @@ def train(
                 )
                 register_p2refine_callbacks(model, wandb_enabled=bool(project))
                 model.callbacks["on_train_start"].insert(0, _log_active_head)
-                model.callbacks["on_pretrain_routine_end"].append(_setup_dcaf_optimizer)
+                model.callbacks["on_pretrain_routine_end"].append(_setup_gauss_optimizer)
                 if on_epoch_end_callback is not None:
                     model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
                 if project:
@@ -271,7 +271,7 @@ def train(
             )
             register_p2refine_callbacks(model, wandb_enabled=bool(project))
             model.callbacks["on_train_start"].insert(0, _log_active_head)
-            model.callbacks["on_pretrain_routine_end"].append(_setup_dcaf_optimizer)
+            model.callbacks["on_pretrain_routine_end"].append(_setup_gauss_optimizer)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:
@@ -317,7 +317,7 @@ def train(
             )
             register_p2refine_callbacks(model, wandb_enabled=bool(project))
             model.callbacks["on_train_start"].insert(0, _log_active_head)
-            model.callbacks["on_pretrain_routine_end"].append(_setup_dcaf_optimizer)
+            model.callbacks["on_pretrain_routine_end"].append(_setup_gauss_optimizer)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:

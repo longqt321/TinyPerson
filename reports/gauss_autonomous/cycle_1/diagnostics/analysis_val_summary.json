@@ -1,0 +1,1141 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "implementation_version": "tinydet-error-analysis-v1",
+    "created_at": "2026-11-01T23:02:46.056862+00:00",
+    "git_commit": "unknown",
+    "git_dirty": true,
+    "run": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/gauss_cycle_1/20261101-215526-6fceb3b-seed42",
+    "run_metadata": {
+      "experiment": "gauss_cycle_1",
+      "run_id": "20261101-215526-6fceb3b-seed42",
+      "seed": 42,
+      "git_commit": "6fceb3b",
+      "git_dirty": true,
+      "python": "3.12.10",
+      "torch": "2.11.0+cu128",
+      "torchvision": "0.26.0+cu128",
+      "ultralytics": "8.4.164",
+      "cuda": "12.8",
+      "gpu": "NVIDIA A10",
+      "dataset": "/mnt/data/tinyperson_official_v1/data.yaml",
+      "model_config_sha256": "a995045305c338955e5ae87e13c31addf7f13f9d74b94504ed19757fc1673041",
+      "started_at": "2026-11-01T21:55:26.237668+00:00",
+      "status": "RUNNING",
+      "dataset_preflight": {
+        "report_path": "/mnt/runs/preflight/dataset-audit-c102d38dd4d1.json",
+        "source_signature": "c8312213dd1c36424c05cfb15c853afbf8ddcf9878de35e1381e36ac3d80f98b",
+        "imgsz": 1280,
+        "images_total": 746,
+        "severe_resolution_loss": false
+      }
+    },
+    "checkpoint": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/gauss_cycle_1/20261101-215526-6fceb3b-seed42/training/weights/best.pt",
+    "checkpoint_sha256": "0cc0abcb9eeeaffa86e84afd59bf7fd021c80da5cda337ab16a8bf5ce019b86b",
+    "annotations_sha256": "a33a2bcca802d2efac0d7b766c85c044f2421e8eea6c3ce469919c2c66119b67",
+    "manifest_sha256": "688e90348151d9801be2f96362865290c8dd83edd59f8d781696eda6fd09e718",
+    "predictions_sha256": "ba619d8c99418737f9d18c4382dfd994fd5cd1b8d7d5bd29b41a47bfa38d8838",
+    "predictions_metadata": null,
+    "split": "val",
+    "analysis_config_sha256": "1d2dabb5dfba11a76f01b94a29c9dcc5e6df67099cc2d596924027ebf019d5b8",
+    "analysis_config": {
+      "iou_thresholds": [
+        0.25,
+        0.5,
+        0.75
+      ],
+      "primary_iou": 0.5,
+      "localization_iou": 0.1,
+      "score_threshold": 0.001,
+      "max_detections": 200,
+      "boundary_fraction": 0.02,
+      "diagnostic_size_bins_sqrt_area_px": {
+        "tiny1": [
+          1.0,
+          8.0
+        ],
+        "tiny2": [
+          8.0,
+          12.0
+        ],
+        "tiny3": [
+          12.0,
+          20.0
+        ],
+        "small": [
+          20.0,
+          32.0
+        ],
+        "reasonable": [
+          32.0,
+          null
+        ]
+      },
+      "density_bins_positive_objects": {
+        "single": [
+          1,
+          1
+        ],
+        "sparse": [
+          2,
+          10
+        ],
+        "crowded": [
+          11,
+          50
+        ],
+        "very_crowded": [
+          51,
+          null
+        ]
+      }
+    }
+  },
+  "dataset": {
+    "split": "val",
+    "annotations": "/tmp/tinydet-datasets/tinyperson_official_v1/annotations/tiny_set_train.json",
+    "manifest": "/tmp/tinydet-datasets/tinyperson_official_v1/manifest.json",
+    "expected_images": 84,
+    "analyzed_images": 84,
+    "dense_images_excluded": 0,
+    "predictions_source": "/__modal/volumes/vo-1mSI8DTRRmOJaOvJIUm2al/gauss_cycle_1/20261101-215526-6fceb3b-seed42/analysis-val/predictions.json"
+  },
+  "config": {
+    "iou_thresholds": [
+      0.25,
+      0.5,
+      0.75
+    ],
+    "primary_iou": 0.5,
+    "localization_iou": 0.1,
+    "score_threshold": 0.001,
+    "max_detections": 200,
+    "boundary_fraction": 0.02,
+    "diagnostic_size_bins_sqrt_area_px": {
+      "tiny1": [
+        1.0,
+        8.0
+      ],
+      "tiny2": [
+        8.0,
+        12.0
+      ],
+      "tiny3": [
+        12.0,
+        20.0
+      ],
+      "small": [
+        20.0,
+        32.0
+      ],
+      "reasonable": [
+        32.0,
+        null
+      ]
+    },
+    "density_bins_positive_objects": {
+      "single": [
+        1,
+        1
+      ],
+      "sparse": [
+        2,
+        10
+      ],
+      "crowded": [
+        11,
+        50
+      ],
+      "very_crowded": [
+        51,
+        null
+      ]
+    }
+  },
+  "integrity": {
+    "valid": true,
+    "issues": [
+      {
+        "code": "duplicate_annotation",
+        "message": "Image bb_V0031_I0000520.jpg: duplicate label 0 box [670.975451, 634.407596, 677.91498, 650.517216]",
+        "image_id": 329,
+        "count": 2
+      },
+      {
+        "code": "duplicate_annotation",
+        "message": "Image bb_V0031_I0000520.jpg: duplicate label 0 box [687.223861, 640.110284, 693.674318, 651.319274]",
+        "image_id": 329,
+        "count": 2
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image baidu_P000_14.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "baidu_P000_14.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image baidu_P000_16.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "baidu_P000_16.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image baidu_P000_4.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "baidu_P000_4.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0000000.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0000000.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0000120.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0000120.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0000240.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0000240.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0000480.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0000480.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0000600.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0000600.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0000720.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0000720.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0001080.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0001080.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0001320.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0001320.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0001720.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0001720.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0001840.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0001840.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0001960.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0001960.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0002160.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0002160.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0002240.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0002240.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0002480.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0002480.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0002600.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0002600.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0002840.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0002840.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0002880.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0002880.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0003560.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0003560.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0003680.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0003680.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0004280.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0004280.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0004320.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0004320.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0004920.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0004920.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0005160.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0005160.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0005280.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0005280.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0005520.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0005520.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0005640.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0005640.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0005880.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0005880.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0006000.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0006000.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0014_I0006040.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0014_I0006040.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0000760.jpg: 209 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0000760.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0000960.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0000960.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0002200.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0002200.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0002280.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0002280.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0002320.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0002320.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0002360.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0002360.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0003200.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0003200.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0005520.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0005520.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0005640.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0005640.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0007080.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0007080.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0007240.jpg: 257 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0007240.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bb_V0022_I0007880.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bb_V0022_I0007880.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bing000_2009040913572766058.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bing000_2009040913572766058.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bing000_48.jpg: 231 predictions exceed max_detections; keeping 200",
+        "image": "bing000_48.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bing_P000_2008512103913872_2.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bing_P000_2008512103913872_2.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bing_P000_367362_174157147172_2.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bing_P000_367362_174157147172_2.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bing_P000_5518b70991785.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bing_P000_5518b70991785.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bing_P000_c5171330911.jpg: 293 predictions exceed max_detections; keeping 200",
+        "image": "bing_P000_c5171330911.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image bing_P000_timg (2).jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "bing_P000_timg (2).jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0005_I0001280.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0005_I0001280.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0005_I0001480.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0005_I0001480.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0005_I0001720.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0005_I0001720.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0005_I0002200.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0005_I0002200.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0005_I0003120.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0005_I0003120.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0000000.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0000000.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0000680.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0000680.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0001960.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0001960.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0002300.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0002300.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0002500.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0002500.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0003000.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0003000.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0003160.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0003160.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0004160.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0004160.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0004200.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0004200.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image chitube_V0008_I0004840.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "chitube_V0008_I0004840.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image google_P000_10.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "google_P000_10.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image google_P000_2.jpg: 239 predictions exceed max_detections; keeping 200",
+        "image": "google_P000_2.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image google_P000_ItyC7NXlLRVZwM.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "google_P000_ItyC7NXlLRVZwM.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image google_P000_m4P9p77NH6rGQM.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "google_P000_m4P9p77NH6rGQM.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image movie_V0000_I1.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "movie_V0000_I1.jpg"
+      },
+      {
+        "code": "predictions_truncated",
+        "message": "Image movie_V0000_I5.jpg: 300 predictions exceed max_detections; keeping 200",
+        "image": "movie_V0000_I5.jpg"
+      }
+    ],
+    "invariants": {
+      "ground_truth_partition": true,
+      "prediction_partition": true,
+      "false_positive_partition": true,
+      "records_reconcile": true
+    }
+  },
+  "counts": {
+    "true_positives": 1640,
+    "false_positives": 14318,
+    "duplicates": 1573,
+    "localization_errors": 4078,
+    "background_false_positives": 8667,
+    "misses": 1968,
+    "neutral_predictions": 0,
+    "predictions": 15958
+  },
+  "positive_ground_truths": 3608,
+  "rates": {
+    "recall": 0.45454545454545453,
+    "precision": 0.10276977064795087,
+    "miss_rate": 0.5454545454545454,
+    "duplicate_share_of_false_positives": 0.10986171252968292,
+    "localization_share_of_false_positives": 0.28481631512781114,
+    "background_share_of_false_positives": 0.605321972342506
+  },
+  "diagnostic_ap": {
+    "all": {
+      "AP@0.25": 0.37232924738111806,
+      "AP@0.50": 0.23363287488627854,
+      "AP@0.75": 0.0227865483843271,
+      "positive_ground_truths": 3608,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.20958289021724122
+    },
+    "tiny": {
+      "AP@0.25": 0.3792879215863626,
+      "AP@0.50": 0.2337863521930781,
+      "AP@0.75": 0.0128103123765429,
+      "positive_ground_truths": 2827,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.20862819538532787
+    },
+    "tiny1": {
+      "AP@0.25": 0.32709527992023363,
+      "AP@0.50": 0.14910380512690172,
+      "AP@0.75": 0.0021775064455149197,
+      "positive_ground_truths": 805,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.15945886383088342
+    },
+    "tiny2": {
+      "AP@0.25": 0.44431714111277676,
+      "AP@0.50": 0.29366740854783163,
+      "AP@0.75": 0.01730310023446412,
+      "positive_ground_truths": 916,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.2517625499650242
+    },
+    "tiny3": {
+      "AP@0.25": 0.3729432495219072,
+      "AP@0.50": 0.25655490769798656,
+      "AP@0.75": 0.023329528978820447,
+      "positive_ground_truths": 1106,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.21760922873290475
+    },
+    "small": {
+      "AP@0.25": 0.32944129868608363,
+      "AP@0.50": 0.20219289415688685,
+      "AP@0.75": 0.015959274180809124,
+      "positive_ground_truths": 553,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.18253115567459322
+    },
+    "reasonable": {
+      "AP@0.25": 0.4469821652828321,
+      "AP@0.50": 0.31706618778516016,
+      "AP@0.75": 0.06497870354731572,
+      "positive_ground_truths": 228,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.27634235220510267
+    }
+  },
+  "metric_crosscheck": {
+    "available": true,
+    "status": "mismatch",
+    "comparisons": {
+      "all:AP@0.25": {
+        "diagnostic": 0.37232924738111806,
+        "reference": 0.37215384615056923,
+        "abs_diff": 0.00017540123054882173
+      },
+      "all:AP@0.50": {
+        "diagnostic": 0.23363287488627854,
+        "reference": 0.23348394740636033,
+        "abs_diff": 0.00014892747991820943
+      },
+      "all:AP@0.75": {
+        "diagnostic": 0.0227865483843271,
+        "reference": 0.022770962884993064,
+        "abs_diff": 1.558549933403791e-05
+      },
+      "tiny:AP@0.25": {
+        "diagnostic": 0.3792879215863626,
+        "reference": 0.37898030103530117,
+        "abs_diff": 0.00030762055106142716
+      },
+      "tiny:AP@0.50": {
+        "diagnostic": 0.2337863521930781,
+        "reference": 0.2338196490004118,
+        "abs_diff": 3.3296807333688117e-05
+      },
+      "tiny:AP@0.75": {
+        "diagnostic": 0.0128103123765429,
+        "reference": 0.01280546962428108,
+        "abs_diff": 4.842752261820238e-06
+      },
+      "tiny1:AP@0.25": {
+        "diagnostic": 0.32709527992023363,
+        "reference": 0.3269266842259836,
+        "abs_diff": 0.00016859569425003995
+      },
+      "tiny1:AP@0.50": {
+        "diagnostic": 0.14910380512690172,
+        "reference": 0.14912162310706645,
+        "abs_diff": 1.7817980164730463e-05
+      },
+      "tiny1:AP@0.75": {
+        "diagnostic": 0.0021775064455149197,
+        "reference": 0.002175905281927048,
+        "abs_diff": 1.6011635878719274e-06
+      },
+      "tiny2:AP@0.25": {
+        "diagnostic": 0.44431714111277676,
+        "reference": 0.4441454385504786,
+        "abs_diff": 0.0001717025622981483
+      },
+      "tiny2:AP@0.50": {
+        "diagnostic": 0.29366740854783163,
+        "reference": 0.29343872876052973,
+        "abs_diff": 0.00022867978730189975
+      },
+      "tiny2:AP@0.75": {
+        "diagnostic": 0.01730310023446412,
+        "reference": 0.017280459770065665,
+        "abs_diff": 2.2640464398454574e-05
+      },
+      "tiny3:AP@0.25": {
+        "diagnostic": 0.3729432495219072,
+        "reference": 0.372750628722183,
+        "abs_diff": 0.00019262079972420798
+      },
+      "tiny3:AP@0.50": {
+        "diagnostic": 0.25655490769798656,
+        "reference": 0.2562412766761007,
+        "abs_diff": 0.0003136310218858629
+      },
+      "tiny3:AP@0.75": {
+        "diagnostic": 0.023329528978820447,
+        "reference": 0.023359708021695968,
+        "abs_diff": 3.0179042875520812e-05
+      },
+      "small:AP@0.25": {
+        "diagnostic": 0.32944129868608363,
+        "reference": 0.3296476191104473,
+        "abs_diff": 0.0002063204243636929
+      },
+      "small:AP@0.50": {
+        "diagnostic": 0.20219289415688685,
+        "reference": 0.20237647585143748,
+        "abs_diff": 0.00018358169455062745
+      },
+      "small:AP@0.75": {
+        "diagnostic": 0.015959274180809124,
+        "reference": 0.016017209520478647,
+        "abs_diff": 5.793533966952369e-05
+      },
+      "reasonable:AP@0.25": {
+        "diagnostic": 0.4469821652828321,
+        "reference": 0.44711716851972905,
+        "abs_diff": 0.00013500323689696891
+      },
+      "reasonable:AP@0.50": {
+        "diagnostic": 0.31706618778516016,
+        "reference": 0.3169720225059659,
+        "abs_diff": 9.416527919425821e-05
+      },
+      "reasonable:AP@0.75": {
+        "diagnostic": 0.06497870354731572,
+        "reference": 0.06504552304109987,
+        "abs_diff": 6.68194937841482e-05
+      }
+    },
+    "reference_protocol": {
+      "name": "TinyPerson documented protocol; standalone implementation",
+      "annotation_file": "/tmp/tinydet-error-crosscheck-fqdgiqcp/annotations.json",
+      "predictions_file": "/tmp/tinydet-error-crosscheck-fqdgiqcp/predictions.json",
+      "source_images": 84,
+      "dense_images_excluded": 0,
+      "images_evaluated": 84,
+      "max_detections_per_image": 200,
+      "iou_thresholds": [
+        0.25,
+        0.5,
+        0.75
+      ],
+      "size_ranges_sqrt_area_px_inclusive": {
+        "all": [
+          1.0,
+          100000.0
+        ],
+        "tiny": [
+          1.0,
+          20.0
+        ],
+        "tiny1": [
+          1.0,
+          8.0
+        ],
+        "tiny2": [
+          8.0,
+          12.0
+        ],
+        "tiny3": [
+          12.0,
+          20.0
+        ],
+        "small": [
+          20.0,
+          32.0
+        ],
+        "reasonable": [
+          32.0,
+          100000.0
+        ]
+      },
+      "ignored_annotations": {},
+      "matching": {
+        "normal_positive": "IoU",
+        "ignore_uncertain": "IoU match or intersection over detection (IoD)",
+        "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored"
+      },
+      "ap_interpolation": "101-point precision envelope",
+      "warning": "Validate this standalone evaluator against the pinned TinyBenchmark reference before using its scores as publication results."
+    }
+  },
+  "aggregation": {
+    "record_source": "samples.jsonl",
+    "error_source": "errors.jsonl",
+    "counts": {
+      "true_positives": 1640,
+      "false_positives": 14318,
+      "duplicates": 1573,
+      "localization_errors": 4078,
+      "background_false_positives": 8667,
+      "misses": 1968,
+      "neutral_predictions": 0,
+      "predictions": 15958
+    },
+    "positive_ground_truths": 3608,
+    "by_size_bin": {
+      "tiny3": {
+        "positive_ground_truths": 1106,
+        "matched": 525,
+        "misses": 581,
+        "recall": 0.47468354430379744,
+        "miss_rate": 0.5253164556962026
+      },
+      "tiny2": {
+        "positive_ground_truths": 916,
+        "matched": 493,
+        "misses": 423,
+        "recall": 0.5382096069868996,
+        "miss_rate": 0.46179039301310043
+      },
+      "tiny1": {
+        "positive_ground_truths": 805,
+        "matched": 267,
+        "misses": 538,
+        "recall": 0.3316770186335404,
+        "miss_rate": 0.6683229813664596
+      },
+      "small": {
+        "positive_ground_truths": 553,
+        "matched": 229,
+        "misses": 324,
+        "recall": 0.4141048824593128,
+        "miss_rate": 0.5858951175406871
+      },
+      "reasonable": {
+        "positive_ground_truths": 228,
+        "matched": 126,
+        "misses": 102,
+        "recall": 0.5526315789473685,
+        "miss_rate": 0.4473684210526316
+      }
+    },
+    "by_density": {
+      "very_crowded": {
+        "images": 29,
+        "positive_ground_truths": 2989,
+        "matched": 1245,
+        "misses": 1744,
+        "false_positives": 4555,
+        "duplicates": 937,
+        "localization_errors": 2283,
+        "background_false_positives": 1335,
+        "recall": 0.4165272666443627,
+        "false_positives_per_image": 157.06896551724137
+      },
+      "sparse": {
+        "images": 22,
+        "positive_ground_truths": 116,
+        "matched": 69,
+        "misses": 47,
+        "false_positives": 3829,
+        "duplicates": 159,
+        "localization_errors": 725,
+        "background_false_positives": 2945,
+        "recall": 0.5948275862068966,
+        "false_positives_per_image": 174.04545454545453
+      },
+      "single": {
+        "images": 7,
+        "positive_ground_truths": 7,
+        "matched": 4,
+        "misses": 3,
+        "false_positives": 1336,
+        "duplicates": 8,
+        "localization_errors": 36,
+        "background_false_positives": 1292,
+        "recall": 0.5714285714285714,
+        "false_positives_per_image": 190.85714285714286
+      },
+      "crowded": {
+        "images": 21,
+        "positive_ground_truths": 496,
+        "matched": 322,
+        "misses": 174,
+        "false_positives": 3878,
+        "duplicates": 469,
+        "localization_errors": 1034,
+        "background_false_positives": 2375,
+        "recall": 0.6491935483870968,
+        "false_positives_per_image": 184.66666666666666
+      },
+      "none": {
+        "images": 5,
+        "positive_ground_truths": 0,
+        "matched": 0,
+        "misses": 0,
+        "false_positives": 720,
+        "duplicates": 0,
+        "localization_errors": 0,
+        "background_false_positives": 720,
+        "recall": null,
+        "false_positives_per_image": 144.0
+      }
+    },
+    "by_boundary": {
+      "interior": {
+        "positive_ground_truths": 3463,
+        "matched": 1578,
+        "misses": 1885,
+        "recall": 0.4556742708634132
+      },
+      "border": {
+        "positive_ground_truths": 145,
+        "matched": 62,
+        "misses": 83,
+        "recall": 0.42758620689655175
+      }
+    },
+    "by_confidence": {
+      "[0.00,0.01)": {
+        "false_positive": 6934,
+        "subtype:background": 6028,
+        "subtype:localization": 780,
+        "subtype:duplicate": 126,
+        "true_positive": 26,
+        "subtype:matched": 26,
+        "predictions": 6960,
+        "precision": 0.003735632183908046
+      },
+      "[0.01,0.05)": {
+        "false_positive": 7632,
+        "subtype:localization": 1584,
+        "subtype:duplicate": 438,
+        "subtype:background": 5610,
+        "true_positive": 114,
+        "subtype:matched": 114,
+        "predictions": 7746,
+        "precision": 0.01471727343144849
+      },
+      "[0.05,0.10)": {
+        "true_positive": 214,
+        "subtype:matched": 214,
+        "false_positive": 4644,
+        "subtype:duplicate": 508,
+        "subtype:localization": 1518,
+        "subtype:background": 2618,
+        "predictions": 4858,
+        "precision": 0.04405104981473858
+      },
+      "[0.10,0.25)": {
+        "true_positive": 1034,
+        "subtype:matched": 1034,
+        "false_positive": 6956,
+        "subtype:localization": 3056,
+        "subtype:duplicate": 1484,
+        "subtype:background": 2416,
+        "predictions": 7990,
+        "precision": 0.12941176470588237
+      },
+      "[0.25,0.50)": {
+        "true_positive": 1526,
+        "subtype:matched": 1526,
+        "false_positive": 2368,
+        "subtype:localization": 1150,
+        "subtype:background": 642,
+        "subtype:duplicate": 576,
+        "predictions": 3894,
+        "precision": 0.39188495120698513
+      },
+      "[0.50,1.00]": {
+        "false_positive": 102,
+        "subtype:localization": 68,
+        "true_positive": 366,
+        "subtype:matched": 366,
+        "subtype:duplicate": 14,
+        "subtype:background": 20,
+        "predictions": 468,
+        "precision": 0.782051282051282
+      }
+    },
+    "by_class": {
+      "0": {
+        "positive_ground_truths": 3608,
+        "matched": 1640,
+        "misses": 1968,
+        "recall": 0.45454545454545453
+      }
+    },
+    "confidence_operating_points": [
+      {
+        "score_threshold": 0.001,
+        "predictions": 15958,
+        "true_positives": 1640,
+        "false_positives": 14318,
+        "recall": 0.45454545454545453,
+        "precision": 0.10276977064795087
+      },
+      {
+        "score_threshold": 0.005,
+        "predictions": 13848,
+        "true_positives": 1635,
+        "false_positives": 12213,
+        "recall": 0.453159645232816,
+        "precision": 0.11806759098786829
+      },
+      {
+        "score_threshold": 0.01,
+        "predictions": 12478,
+        "true_positives": 1627,
+        "false_positives": 10851,
+        "recall": 0.4509423503325942,
+        "precision": 0.13038948549447027
+      },
+      {
+        "score_threshold": 0.02,
+        "predictions": 10806,
+        "true_positives": 1605,
+        "false_positives": 9201,
+        "recall": 0.44484478935698446,
+        "precision": 0.14852859522487508
+      },
+      {
+        "score_threshold": 0.05,
+        "predictions": 8605,
+        "true_positives": 1570,
+        "false_positives": 7035,
+        "recall": 0.4351441241685144,
+        "precision": 0.18245206275421266
+      },
+      {
+        "score_threshold": 0.1,
+        "predictions": 6176,
+        "true_positives": 1463,
+        "false_positives": 4713,
+        "recall": 0.4054878048780488,
+        "precision": 0.23688471502590674
+      },
+      {
+        "score_threshold": 0.2,
+        "predictions": 3176,
+        "true_positives": 1126,
+        "false_positives": 2050,
+        "recall": 0.3120842572062084,
+        "precision": 0.3545340050377834
+      },
+      {
+        "score_threshold": 0.5,
+        "predictions": 234,
+        "true_positives": 183,
+        "false_positives": 51,
+        "recall": 0.05072062084257206,
+        "precision": 0.782051282051282
+      }
+    ],
+    "priorities": [
+      {
+        "category": "false_positive",
+        "group": "background",
+        "count": 8667,
+        "denominator": 14318,
+        "rate": 0.605321972342506,
+        "metric_impact": "precision"
+      },
+      {
+        "category": "false_positive",
+        "group": "localization",
+        "count": 4078,
+        "denominator": 14318,
+        "rate": 0.28481631512781114,
+        "metric_impact": "precision"
+      },
+      {
+        "category": "miss",
+        "group": "density:very_crowded",
+        "count": 1744,
+        "denominator": 2989,
+        "rate": 0.5834727333556373,
+        "metric_impact": "recall"
+      },
+      {
+        "category": "false_positive",
+        "group": "duplicate",
+        "count": 1573,
+        "denominator": 14318,
+        "rate": 0.10986171252968292,
+        "metric_impact": "precision"
+      },
+      {
+        "category": "miss",
+        "group": "size_bin:tiny3",
+        "count": 581,
+        "denominator": 1106,
+        "rate": 0.5253164556962026,
+        "metric_impact": "recall"
+      },
+      {
+        "category": "miss",
+        "group": "size_bin:tiny1",
+        "count": 538,
+        "denominator": 805,
+        "rate": 0.6683229813664596,
+        "metric_impact": "recall"
+      },
+      {
+        "category": "miss",
+        "group": "size_bin:tiny2",
+        "count": 423,
+        "denominator": 916,
+        "rate": 0.46179039301310043,
+        "metric_impact": "recall"
+      },
+      {
+        "category": "miss",
+        "group": "size_bin:small",
+        "count": 324,
+        "denominator": 553,
+        "rate": 0.5858951175406871,
+        "metric_impact": "recall"
+      },
+      {
+        "category": "miss",
+        "group": "density:crowded",
+        "count": 174,
+        "denominator": 496,
+        "rate": 0.35080645161290325,
+        "metric_impact": "recall"
+      },
+      {
+        "category": "miss",
+        "group": "size_bin:reasonable",
+        "count": 102,
+        "denominator": 228,
+        "rate": 0.4473684210526316,
+        "metric_impact": "recall"
+      },
+      {
+        "category": "miss",
+        "group": "density:sparse",
+        "count": 47,
+        "denominator": 116,
+        "rate": 0.4051724137931034,
+        "metric_impact": "recall"
+      },
+      {
+        "category": "miss",
+        "group": "density:single",
+        "count": 3,
+        "denominator": 7,
+        "rate": 0.4285714285714286,
+        "metric_impact": "recall"
+      }
+    ]
+  },
+  "comparison": null,
+  "limitations": [
+    "Diagnostic AP is derived from sample records; the repository TinyPerson evaluator remains the metric source of truth.",
+    "The derivative validation split is not the official test set.",
+    "The TinyPerson evaluator is a repository implementation, not a vendored reference evaluator; miss rate still requires the reference evaluator.",
+    "Associations in this report are descriptive, not causal.",
+    "The prediction artifact carries no inference settings; imgsz, confidence, batch, and device are not independently verified."
+  ]
+}

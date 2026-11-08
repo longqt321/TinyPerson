@@ -1,7 +1,7 @@
 # BÁO CÁO KẾT QUẢ THỰC NGHIỆM
 
 > [!NOTE]
-> **Hồ sơ lịch sử.** Tài liệu này tổng hợp các hướng nghiên cứu đã dừng (A0–A3, MSR, BTRM, SADR, QAC v1–v3, oracle AP75). Kết quả hiện hành của dự án là GauSS/DCAF v2.1, xem [`gauss_final_report.md`](gauss_final_report.md).
+> **Hồ sơ lịch sử.** Tài liệu này tổng hợp các hướng nghiên cứu đã dừng (A0–A3, MSR, BTRM, SADR, QAC v1–v3, oracle AP75). Kết quả hiện hành của dự án là GauSS v2.1, xem [`gauss_final_report.md`](gauss_final_report.md).
 
 ## Phát hiện người tí hon trên TinyPerson với YOLO26n-P2 và các cơ chế hiệu chuẩn chất lượng
 

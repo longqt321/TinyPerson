@@ -1,5 +1,5 @@
 id,section,sentence,claim_type,evidence_ref,source_verified,strength,action,note
-C401,4.2,"Tập huấn luyện 746 ảnh (662 train, 84 val); test 786 ảnh sau khi loại 30 dense",SELF,"DCAF_FINAL_REPORT mục dữ liệu",Y,ABSOLUTE,KEEP,"Protocol TinyBenchmark"
+C401,4.2,"Tập huấn luyện 746 ảnh (662 train, 84 val); test 786 ảnh sau khi loại 30 dense",SELF,"GauSS_FINAL_REPORT mục dữ liệu",Y,ABSOLUTE,KEEP,"Protocol TinyBenchmark"
 C402,4.2,"13.687 GT dương, 1.989 ignore, 2.832 uncertain",SELF,"evaluator logs",Y,ABSOLUTE,KEEP,"Số liệu nguồn báo cáo kết quả"
 C403,4.2,"Tiled 640x512 overlap 100, global NMS IoU 0,50, nms_pre 2000",SELF,"eval config",Y,ABSOLUTE,KEEP,"max_per_img 1000"
 C404,4.3,"Baseline 2.516.240 tham số; GauSS 2.550.906 (+34.666, +1,38%)",SELF,"model info logs",Y,ABSOLUTE,KEEP,"Khớp hai nguồn: model info và bảng chi phí"

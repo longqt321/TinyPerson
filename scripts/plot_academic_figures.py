@@ -58,7 +58,7 @@ def plot_ap50_by_size_bin():
     pooled bar chart hides both the maritime gain and the terrestrial
     regression. Panel (a) is the maritime category GauSS targets; panel (b) is
     the terrestrial category where the scale-space prior does not apply.
-    Values come from reports/eval/{dcaf,baseline}_tiled_per_class.json.
+    Values come from reports/eval/{gauss,baseline}_tiled_per_class.json.
     """
     categories = [
         "tiny1\n(2-8 px)",

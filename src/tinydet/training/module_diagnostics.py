@@ -1,6 +1,6 @@
 """Per-epoch diagnostics for P2Refine modules attached to an Ultralytics trainer.
 
-DCAF ran 21 trainings without its diagnostics ever being logged; this callback
+GauSS ran 21 trainings without its diagnostics ever being logged; this callback
 ensures P2Refine does not repeat that.
 
 Ultralytics re-creates ``DetectionModel`` inside the trainer, so hooks must attach

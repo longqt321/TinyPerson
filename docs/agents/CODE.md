@@ -4,7 +4,7 @@ Audience: AI coding agents.
 
 ## Project shape
 
-Code lives under `src/tinydet`: model construction, the GauSS/DCAF module, training,
+Code lives under `src/tinydet`: model construction, the GauSS module, training,
 diagnostics, evaluation, analysis, and research result aggregation. Files in `scripts/` are thin CLI
 entrypoints; put reusable logic in the package.
 
@@ -12,12 +12,12 @@ The model is configured through Ultralytics YAML under `configs/model/`.
 Experiment settings under `configs/experiment/` define seed, data, training,
 and the model list for comparisons.
 
-## GauSS / DCAF invariants
+## GauSS invariants
 
-- DCAF sits on P2 in the nano graph and must preserve `[B, 32, H, W]`.
+- GauSS sits on P2 in the nano graph and must preserve `[B, 32, H, W]`.
 - P2 is the stride-4 neck output; P3/P4/P5 and Detect order must stay unchanged
   in controlled comparisons.
-- `src/tinydet/modules/dcaf.py` reads ablation flags from the `TINYDET_ABLATION`
+- `src/tinydet/modules/gauss.py` reads ablation flags from the `TINYDET_ABLATION`
   environment variable at construction time. Flags only disable contributions in
   `forward()`; parameter count and checkpoint layout stay identical.
 - Diagnostics are optional and must never break training. Collector or sink
@@ -40,7 +40,7 @@ For model or config changes:
 ```bash
 uv run --extra cpu python scripts/validate_tiny_ablation.py \
   configs/model/yolo26n_tiny_A2_p2.yaml --imgsz 640
-uv run --extra cpu python -c "import tinydet.modules.dcaf"
+uv run --extra cpu python -c "import tinydet.modules.gauss"
 ```
 
 Then run the lint checks in the root `AGENTS.md`. CI runs only a CPU lint

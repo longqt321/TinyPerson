@@ -18,13 +18,13 @@ app = modal_app_module.app
 def main():
     configs = [
         "configs/experiment/baseline_tinyperson_wacv.yaml",
-        "configs/experiment/dcaf_v2_1_tinyperson_wacv.yaml",
+        "configs/experiment/gauss_v3_tinyperson_wacv.yaml",
     ]
 
     print("=" * 70, flush=True)
     print("PHASE 1: STARTING 100-EPOCH PARALLEL TRAINING ON MODAL (NVIDIA A10)", flush=True)
     print("Run 1: Baseline YOLO26n-P2 (100 epochs)", flush=True)
-    print("Run 2: DCAF v2.1 YOLO26n-P2 (100 epochs)", flush=True)
+    print("Run 2: GauSS v3 YOLO26n-P2 (100 epochs)", flush=True)
     print("=" * 70, flush=True)
 
     # Preflight audit
@@ -75,7 +75,7 @@ def main():
 
     tiled_targets = [
         ("baseline_tinyperson_100e_tiled", b_ckpt),
-        ("dcaf_v2_1_tinyperson_100e_tiled", d_ckpt),
+        ("gauss_v2_1_tinyperson_100e_tiled", d_ckpt),
     ]
 
     tiled_handles = []
@@ -102,7 +102,7 @@ def main():
 
     full_targets = [
         ("baseline_tinyperson_100e_full", b_ckpt),
-        ("dcaf_v2_1_tinyperson_100e_full", d_ckpt),
+        ("gauss_v2_1_tinyperson_100e_full", d_ckpt),
     ]
 
     full_handles = []

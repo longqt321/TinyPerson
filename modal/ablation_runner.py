@@ -5,7 +5,7 @@ seed 42, trained in PARALLEL on separate Modal A10 GPUs. No baseline runs and no
 multi-seed runs are trained, even if budget remains.
 
 The full-GauSS reference at seed 42 is NOT retrained: the paper run
-`dcaf_v2_1_tinyperson_wacv` (seed 42) already exists on the runs volume and its
+`gauss_v2_1_tinyperson_wacv` (seed 42) already exists on the runs volume and its
 config is byte-identical to the ablation configs apart from `name`/`seed`. Its
 frozen TOV tiled evaluation is reused as the comparison point.
 
@@ -67,9 +67,9 @@ PLAN: list[dict] = [
 # Full-GauSS seed-42 reference: trained by the paper pipeline, evaluated with the
 # same frozen TOV tiled protocol. Reused instead of retrained.
 REFERENCE = {
-    "name": "dcaf_v2_1_tinyperson_wacv",
-    "run_dir": f"{RUN_ROOT}/dcaf_v2_1_tinyperson_wacv/20261102-092728-c626816-seed42",
-    "eval_file": "reports/eval/dcaf_v2_1_tinyperson_150e_tiled.json",
+    "name": "gauss_v2_1_tinyperson_wacv",
+    "run_dir": f"{RUN_ROOT}/gauss_v2_1_tinyperson_wacv/20261102-092728-c626816-seed42",
+    "eval_file": "reports/eval/gauss_v2_1_tinyperson_150e_tiled.json",
 }
 
 # Measured on one Modal A10 with the real configs (5-epoch GauSS pilot):

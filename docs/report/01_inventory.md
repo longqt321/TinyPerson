@@ -1,23 +1,23 @@
-# Inventory DCAF v2.1
+# Inventory GauSS v2.1
 
 ## Scope and protocol
 
-Target: DCAF v2.1 against YOLO26n-P2 baseline only. This inventory excludes QAC-specific sources and prior `report-bundle/` manuscript. Existing DCAF report is an index to claims, not sufficient provenance by itself.
+Target: GauSS v2.1 against YOLO26n-P2 baseline only. This inventory excludes QAC-specific sources and prior `report-bundle/` manuscript. Existing GauSS report is an index to claims, not sufficient provenance by itself.
 
 | Result | Method | Dataset/split | Metric | Seed/runs | Source | Exact location |
 |---|---|---|---|---|---|---|
 | 150-epoch tiled benchmark | Baseline | TinyPerson official test, 786 images, 13,687 positives | AP/MR at IoU .25/.50/.75, size bins | seed42, one run | `reports/eval/baseline_tinyperson_150e_tiled.json` | `checkpoint`, `summary.benchmark`, `summary.protocol` |
-| 150-epoch tiled benchmark | DCAF v2.1 | Same declared protocol | Same metrics | seed42, one run | `reports/eval/dcaf_v2_1_tinyperson_150e_tiled.json` | `checkpoint`, `summary.benchmark`, `summary.protocol` |
+| 150-epoch tiled benchmark | GauSS v2.1 | Same declared protocol | Same metrics | seed42, one run | `reports/eval/gauss_v2_1_tinyperson_150e_tiled.json` | `checkpoint`, `summary.benchmark`, `summary.protocol` |
 | 150-epoch full-frame benchmark | Baseline | TinyPerson official test | AP/MR, size bins | seed42 implied by paired run; verify metadata | `reports/eval/baseline_tinyperson_150e_full.json` | Pending extraction |
-| 150-epoch full-frame benchmark | DCAF v2.1 | TinyPerson official test | AP/MR, size bins | seed42 implied by paired run; verify metadata | `reports/eval/dcaf_v2_1_tinyperson_150e_full.json` | Pending extraction |
-| 50-epoch and validation results | DCAF and baseline | TinyPerson | AP/MR | Verify per artifact | `reports/eval/*.json`, `reports/dcaf_autonomous/cycle_*/` | Pending; not yet treated as primary result |
-| Geometry diagnostics | DCAF cycles 1/2 | TinyPerson validation | Geometry/error/size summaries | Runs named with `seed42` | `reports/geometry/dcaf_cycle_*/*` | CSV and report JSON; diagnostic, not benchmark headline |
+| 150-epoch full-frame benchmark | GauSS v2.1 | TinyPerson official test | AP/MR, size bins | seed42 implied by paired run; verify metadata | `reports/eval/gauss_v2_1_tinyperson_150e_full.json` | Pending extraction |
+| 50-epoch and validation results | GauSS and baseline | TinyPerson | AP/MR | Verify per artifact | `reports/eval/*.json`, `reports/gauss_autonomous/cycle_*/` | Pending; not yet treated as primary result |
+| Geometry diagnostics | GauSS cycles 1/2 | TinyPerson validation | Geometry/error/size summaries | Runs named with `seed42` | `reports/geometry/gauss_cycle_*/*` | CSV and report JSON; diagnostic, not benchmark headline |
 
 ## Primary 150e tiled raw values
 
 Values below read from JSON and shown as percentages to two decimal places for readability; raw fractional values remain in source.
 
-| Metric | Baseline | DCAF v2.1 | Delta (DCAF − baseline) |
+| Metric | Baseline | GauSS v2.1 | Delta (GauSS − baseline) |
 |---|---:|---:|---:|
 | all AP@0.25 | 21.28% | 20.68% | −0.61 pp |
 | all AP@0.50 | 11.95% | 12.94% | +0.98 pp |
@@ -30,7 +30,7 @@ Values below read from JSON and shown as percentages to two decimal places for r
 | small AP@0.50 | 17.43% | 19.23% | +1.80 pp |
 | reasonable AP@0.50 | 20.49% | 21.20% | +0.72 pp |
 
-Sources: baseline JSON keys `summary.benchmark.{all,tiny,tiny1,tiny2,tiny3,small,reasonable}` lines 8–75; DCAF JSON same keys, lines 8–75. Delta calculated from raw fractions, rounded to two decimal percentage points. Results are single-seed; no inferential statistics supported.
+Sources: baseline JSON keys `summary.benchmark.{all,tiny,tiny1,tiny2,tiny3,small,reasonable}` lines 8–75; GauSS JSON same keys, lines 8–75. Delta calculated from raw fractions, rounded to two decimal percentage points. Results are single-seed; no inferential statistics supported.
 
 ## Provenance and unresolved consistency issues
 
@@ -39,7 +39,7 @@ Sources: baseline JSON keys `summary.benchmark.{all,tiny,tiny1,tiny2,tiny3,small
 - `reports/gauss_final_report.md` states 150e tiled values matching AP@0.50 broadly, but some values/deltas differ from raw JSON (including AP@0.25 and MR@0.25). Raw JSON are primary evidence; discrepancy needs full audit before final manuscript.
 - Report claims “TOV Protocol” and zero dense images excluded, while WACV protocol description reportedly excludes dense images. Do not call it official benchmark protocol until implementation/protocol difference resolved.
 - Model size and latency claims in report are not yet independently verified against raw profiling artifacts.
-- Baseline and DCAF appear matched by run timestamp and seed in checkpoint paths; confirm configs and metadata before declaring controlled comparison.
+- Baseline and GauSS appear matched by run timestamp and seed in checkpoint paths; confirm configs and metadata before declaring controlled comparison.
 - Hardware, training parameters, and exact evaluation command require metadata/config verification.
 
 ## Baseline provenance

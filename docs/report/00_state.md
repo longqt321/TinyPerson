@@ -1,18 +1,18 @@
-# Trạng thái báo cáo DCAF
+# Trạng thái báo cáo GauSS
 
 ## Phạm vi
-- Handoff dossier DCAF v2.1 và baseline YOLO26n-P2 cho model bên ngoài viết báo cáo.
+- Handoff dossier GauSS v2.1 và baseline YOLO26n-P2 cho model bên ngoài viết báo cáo.
 - Tiếng Việt; không viết thêm báo cáo nghiên cứu.
 - Không mở hoặc trích xuất nội dung QAC hay `report-bundle/`.
 
 ## Tiến độ
-- Giai đoạn 0: hoàn tất; phạm vi DCAF-only, tiếng Việt, technical report Markdown.
-- Giai đoạn 1: inventory tại `01_inventory.md`; kết quả ưu tiên lấy từ JSON DCAF và baseline paired.
-- Giai đoạn 2: phân tích DCAF-only tại `03_analysis.md`; một seed, kết luận mô tả.
+- Giai đoạn 0: hoàn tất; phạm vi GauSS-only, tiếng Việt, technical report Markdown.
+- Giai đoạn 1: inventory tại `01_inventory.md`; kết quả ưu tiên lấy từ JSON GauSS và baseline paired.
+- Giai đoạn 2: phân tích GauSS-only tại `03_analysis.md`; một seed, kết luận mô tả.
 - Giai đoạn 3: chưa tìm nguồn ngoài để tránh citation chưa kiểm chứng; related work trong draft là khung chủ đề, chưa phải tổng quan hoàn chỉnh.
 - Giai đoạn 4: outline tại `04_outline.md`.
 - Giai đoạn 5: bảng kết quả trong draft đối chiếu thủ công với JSON; chưa có script sinh tự động hoặc hình.
-- Giai đoạn 6: draft tiếng Việt tại `draft/dcaf_report.md`.
+- Giai đoạn 6: draft tiếng Việt tại `draft/gauss_report.md`.
 - Giai đoạn 7: review ghi tại `99_review.md`; chưa biên dịch định dạng submission.
 
 ## Cảnh báo provenance
@@ -23,7 +23,7 @@
 
 ## Ghi chú dọn dẹp 2026-11-06
 - Tài liệu QAC/QAR riêng lẻ đã xóa; hồ sơ lịch sử A0–A3/MSR/BTRM/SADR/QAC còn lại duy nhất ở `reports/experiment_results_report.md`.
-- Báo cáo trùng lặp đã xóa: `DCAF_FINAL_REPORT.md` và `TONG_HOP_KET_QUA_DCAF_VA_BASELINE.md` (byte-identical với bản GauSS).
+- Báo cáo trùng lặp đã xóa: `GauSS_FINAL_REPORT.md` và `TONG_HOP_KET_QUA_GauSS_VA_BASELINE.md` (byte-identical với bản GauSS).
 - Tên file tài liệu đã chuyển sang tiếng Anh snake_case; link trong `docs/` và `reports/` đã cập nhật theo.
 - Đã xóa thêm: `.superpowers/sdd/jaunty-painting-iverson/progress.md` (ledger của phiên trước), `.history/` (backup của VS Code extension, untracked), và `reports/geometry/tiny_A2_p2_qac_v2*/` (artifact hình học của QAC v2).
 
@@ -41,7 +41,7 @@
   `sea_person` GauSS 29.63 vs Base 27.52 (+2.11 pp), tiny2 23.05 vs 17.68 (+5.37 pp);
   `earth_person` GauSS 31.65 vs Base 34.03 (−2.38 pp), tiny2 28.69 vs 31.73 (−3.04 pp);
   class-agnostic 29.97 vs 31.18 (−1.21 pp).
-- Lưu tại `reports/eval/{dcaf,baseline}_{tiled,full}_per_class.json`.
+- Lưu tại `reports/eval/{gauss,baseline}_{tiled,full}_per_class.json`.
 
 ### Ablation
 

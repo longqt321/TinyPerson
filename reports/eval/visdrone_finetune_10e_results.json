@@ -43,9 +43,9 @@
     "precision": 0.31006936077716746,
     "recall": 0.25563411544928616
   },
-  "dcaf_v2_1_visdrone_val": {
-    "checkpoint": "/mnt/runs/dcaf_v2_1_visdrone_finetune/20261103-103649-c626816-seed42/training/weights/best.pt",
-    "name": "dcaf_v2_1_visdrone_val",
+  "gauss_v2_1_visdrone_val": {
+    "checkpoint": "/mnt/runs/gauss_v2_1_visdrone_finetune/20261103-103649-c626816-seed42/training/weights/best.pt",
+    "name": "gauss_v2_1_visdrone_val",
     "split": "val",
     "map50_95": 0.13699650050143228,
     "map50": 0.2530853506928216,
@@ -65,9 +65,9 @@
     "precision": 0.34153687693162427,
     "recall": 0.3079789284363583
   },
-  "dcaf_v2_1_visdrone_test": {
-    "checkpoint": "/mnt/runs/dcaf_v2_1_visdrone_finetune/20261103-103649-c626816-seed42/training/weights/best.pt",
-    "name": "dcaf_v2_1_visdrone_test",
+  "gauss_v2_1_visdrone_test": {
+    "checkpoint": "/mnt/runs/gauss_v2_1_visdrone_finetune/20261103-103649-c626816-seed42/training/weights/best.pt",
+    "name": "gauss_v2_1_visdrone_test",
     "split": "test",
     "map50_95": 0.10779512208677883,
     "map50": 0.2032866491123783,

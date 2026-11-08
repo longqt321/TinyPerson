@@ -4,13 +4,13 @@ Protocol: frozen TOV tiled evaluation (tile 640x512, overlap 100, global NMS IoU
 
 Seed: 42 for every run, including the reference. Single seed only: no variance estimate is available.
 
-Reference: `dcaf_v2_1_tinyperson_wacv` (full GauSS, seed 42), trained by the paper pipeline with a config identical to the ablation configs apart from `name`/`seed`.
+Reference: `gauss_v2_1_tinyperson_wacv` (full GauSS, seed 42), trained by the paper pipeline with a config identical to the ablation configs apart from `name`/`seed`.
 
 ## Absolute metrics (AP/MR in %)
 
 | Run | Ablation | AP50_all | AP50_tiny1 | AP50_tiny2 | AP50_tiny3 | AP50_small | MR50_tiny2 | AP75_all |
 |---|---|---|---|---|---|---|---|---|
-| dcaf_v2_1_tinyperson_wacv | none (full GauSS, paper run) | 12.94 | 5.18 | 9.50 | 13.37 | 19.23 | 93.52 | 1.40 |
+| gauss_v2_1_tinyperson_wacv | none (full GauSS, paper run) | 12.94 | 5.18 | 9.50 | 13.37 | 19.23 | 93.52 | 1.40 |
 | abl_gauss_no_high_band_seed42 | no_high_band | - | - | - | - | - | - | - |
 | abl_gauss_no_mid_band_seed42 | no_mid_band | - | - | - | - | - | - | - |
 | abl_gauss_no_low_band_seed42 | no_low_band | - | - | - | - | - | - | - |

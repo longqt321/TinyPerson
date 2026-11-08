@@ -1,8 +1,8 @@
 """P2Refine: stride-4 identity-initialised refinement for YOLO26n-P2.
 
-Replaces DCAF v2.1 as the P2 producer. Identity at step 0 (ReZero-style):
+Replaces GauSS v2.1 as the P2 producer. Identity at step 0 (ReZero-style):
 ``out`` conv is zero-initialised with no BN after it, so ``y == x0`` bit-exact
-at init, eliminating the cls-head desync measured for DCAF at step 0.
+at init, eliminating the cls-head desync measured for GauSS at step 0.
 
 Provenance: authored against a numpy reference (verify_numpy.py); the PyTorch
 implementation self-test passed in-repo on CPU (params=6000, train/eval both

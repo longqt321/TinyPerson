@@ -41,4 +41,4 @@ output:
   wandb_project: tiny-person-research
 name: abl_gauss_no_router_seed42
 model:
-  config: configs/model/yolo26n_tiny_A2_p2_dcaf_tinyperson.yaml
+  config: configs/model/yolo26n_tiny_A2_p2_gauss_tinyperson.yaml

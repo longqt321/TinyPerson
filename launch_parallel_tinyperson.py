@@ -18,13 +18,13 @@ app = modal_app_module.app
 def main():
     configs = [
         "configs/experiment/baseline_tinyperson_wacv.yaml",
-        "configs/experiment/dcaf_v2_1_tinyperson_wacv.yaml",
+        "configs/experiment/gauss_v3_tinyperson_wacv.yaml",
     ]
 
     print("=" * 70, flush=True)
     print("STARTING PARALLEL TRAINING RUNS ON MODAL (NVIDIA A10)", flush=True)
     print("Run 1: Baseline YOLO26n-P2 (TinyPerson WACV)", flush=True)
-    print("Run 2: DCAF v2.1 YOLO26n-P2 (TinyPerson WACV)", flush=True)
+    print("Run 2: GauSS v3 YOLO26n-P2 (TinyPerson WACV)", flush=True)
     print("=" * 70, flush=True)
 
     # 1. Preflight audit

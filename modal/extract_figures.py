@@ -36,7 +36,7 @@ mounts = {str(RUN_ROOT): runs, str(DATA_ROOT): data}
     timeout=3600,
 )
 def extract_all_qualitative_artifacts(
-    gauss_checkpoint_path: str = "dcaf_v2_1_tinyperson_wacv/20261102-092728-c626816-seed42/training/weights/last.pt",
+    gauss_checkpoint_path: str = "gauss_v2_1_tinyperson_wacv/20261102-092728-c626816-seed42/training/weights/last.pt",
     baseline_checkpoint_path: str = "baseline_tinyperson_wacv/20261102-092728-c626816-seed42/training/weights/last.pt",
     output_dir_relative: str = "eval/qualitative_export",
 ):
@@ -49,7 +49,7 @@ def extract_all_qualitative_artifacts(
     from ultralytics import YOLO
 
     from tinydet.models.ultralytics import register_ultralytics_modules
-    from tinydet.modules.dcaf import DCAF
+    from tinydet.modules.gauss import GauSS
 
     register_ultralytics_modules()
     runs.reload()
@@ -253,15 +253,15 @@ def extract_all_qualitative_artifacts(
         gauss_p2_feats.append(o)
 
     # Find the layer outputting Stride 4 (P2)
-    # In GauSS model, find DCAF layer
-    dcaf_module = None
+    # In GauSS model, find GauSS layer
+    gauss_module = None
     for mod in gauss_model.model.modules():
-        if isinstance(mod, DCAF):
-            dcaf_module = mod
+        if isinstance(mod, GauSS):
+            gauss_module = mod
             break
 
-    if dcaf_module is not None:
-        h_g = dcaf_module.register_forward_hook(hook_gauss)
+    if gauss_module is not None:
+        h_g = gauss_module.register_forward_hook(hook_gauss)
         with torch.no_grad():
             _ = gauss_model.model(torch_img)
         h_g.remove()
@@ -314,23 +314,23 @@ def extract_all_qualitative_artifacts(
     # FIGURE 4: Gaussian Scale-Space Band Decomposition (B_high, B_mid, B_low)
     # =========================================================================
     print("Generating Figure 4: Gaussian Band Decomposition...", flush=True)
-    if dcaf_module is not None:
-        # Hook actual input to DCAF module during forward pass
-        dcaf_inputs = []
-        def hook_dcaf_in(m, i, o):
-            dcaf_inputs.append(i[0])  # tuple of inputs: [c2, p3, p4]
+    if gauss_module is not None:
+        # Hook actual input to GauSS module during forward pass
+        gauss_inputs = []
+        def hook_gauss_in(m, i, o):
+            gauss_inputs.append(i[0])  # tuple of inputs: [c2, p3, p4]
 
-        h_in = dcaf_module.register_forward_hook(hook_dcaf_in)
+        h_in = gauss_module.register_forward_hook(hook_gauss_in)
         with torch.no_grad():
             _ = gauss_model.model(torch_img)
         h_in.remove()
 
-        if dcaf_inputs and isinstance(dcaf_inputs[0], (list, tuple)):
-            c2_feat = dcaf_inputs[0][0]  # c2 tensor has 64 channels!
+        if gauss_inputs and isinstance(gauss_inputs[0], (list, tuple)):
+            c2_feat = gauss_inputs[0][0]  # c2 tensor has 64 channels!
             with torch.no_grad():
-                c2_proj = dcaf_module.proj_c2(c2_feat)
-                c2_bn = dcaf_module.bn2(c2_proj)
-                L1, L2, sigmas = dcaf_module.gaussian(c2_bn)
+                c2_proj = gauss_module.proj_c2(c2_feat)
+                c2_bn = gauss_module.bn2(c2_proj)
+                L1, L2, sigmas = gauss_module.gaussian(c2_bn)
                 B_high = c2_bn - L1
                 B_mid = L1 - L2
                 B_low = L2

@@ -2,7 +2,8 @@
 nc: 10
 end2end: True
 reg_max: 1
-tal_beta: 6.0
+tal_beta: 4.0
+tal_tiny_floor: 0.5
 scale: n
 scales:
   n: [0.50, 0.25, 1024]

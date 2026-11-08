@@ -15,8 +15,8 @@ def main():
             "checkpoint": "baseline_tinyperson_wacv/20261102-073649-c626816-seed42/training/weights/last.pt",
         },
         {
-            "name": "dcaf_v2_1_tinyperson_wacv",
-            "checkpoint": "dcaf_v2_1_tinyperson_wacv/20261102-073650-c626816-seed42/training/weights/last.pt",
+            "name": "gauss_v2_1_tinyperson_wacv",
+            "checkpoint": "gauss_v2_1_tinyperson_wacv/20261102-073650-c626816-seed42/training/weights/last.pt",
         },
     ]
 

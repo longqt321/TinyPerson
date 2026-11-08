@@ -100,7 +100,7 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Phát hiện:** 2026-11-06
 - **Hiện trạng:** không `metadata.json`, `config.yaml` hay `environment.txt` nào
   của 5 run ablation ghi lại giá trị `TINYDET_ABLATION` lúc train. Cờ chỉ được
-  pickle vào checkpoint (`DCAF.ablation_flags`), nên chỉ đọc được khi load model.
+  pickle vào checkpoint (`GauSS.ablation_flags`), nên chỉ đọc được khi load model.
 - **Bằng chứng cờ có hiệu lực:** trọng số EMA khác nhau giữa 5 run
   (`gamma_h_raw` = −0.4055, −0.2607, −0.2739, −0.4915, −0.2030), nên các run
   thực sự phân kỳ chứ không phải cùng một model.
@@ -142,24 +142,24 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Đề xuất:** coi erase là nguồn canonical (khuyến nghị chính thức của tác giả), ghi rõ
   trong paper; giữ parquet làm nguồn phụ có ghi chú.
 
-## BL-012: `compute_dcaf_analytical_macs` chưa có phiên bản chuẩn hóa cho P2Refine
+## BL-012: `compute_gauss_analytical_macs` chưa có phiên bản chuẩn hóa cho P2Refine
 
 - **Phát hiện:** 2026-11-08
-- **Hiện trạng:** Trong `src/tinydet/modules/dcaf.py` có hàm giải tích tính MACs cho DCAF.
+- **Hiện trạng:** Trong `src/tinydet/modules/gauss.py` có hàm giải tích tính MACs cho GauSS.
   Đối với `P2Refine`, MACs hiện được đo thực nghiệm độc lập bằng script `measure_p2refine.py`.
 - **Ảnh hưởng:** Các script báo cáo hoặc profile tự động cần một hàm giải tích thống nhất
   để xuất bảng thống kê FLOPs chi tiết cho từng block mà không cần instantiate tensor.
 - **Đề xuất:** Thêm hàm `compute_p2refine_analytical_macs` vào `src/tinydet/modules/p2_refine.py`
   và re-export trong `tinydet.modules`.
 
-## BL-013: DCAF diagnostics chưa từng được lưu trong 21 lượt train trước
+## BL-013: GauSS diagnostics chưa từng được lưu trong 21 lượt train trước
 
 - **Phát hiện:** 2026-11-08
 - **Hiện trạng:** 21 thư mục run cũ trên Modal volume (`metadata.json`) không có bất kỳ log
   nào về router gate, band weight hay dynamic scale-space.
 - **Đã xử lý:** Đã triển khai `P2RefineDiagnosticsCallback` gắn tự động qua trainer lifecycle
   để ghi lại `rho_mean`, `rho_max`, `cos_x0_delta`, `w_out_norm` cho P2Refine.
-- **Chưa xử lý:** Không thể phục hồi dữ liệu động học (training dynamics) của 21 run DCAF cũ
+- **Chưa xử lý:** Không thể phục hồi dữ liệu động học (training dynamics) của 21 run GauSS cũ
   ngoại trừ các checkpoint `best.pt`/`last.pt` còn lưu.
 
 ## BL-014: `wandb` thiếu khỏi `pyproject.toml` nên `uv sync` không cài
@@ -211,3 +211,55 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
   khi chạy thật.
 - **Đề xuất:** thêm `tests/test_train_cli.py` kiểm tra `--dry-run` exit 0 và không có
   `--dry-run` exit 1 trên CPU. Cần thêm `pytest` vào `[dependency-groups].dev` trước.
+
+## BL-018: Checkpoint cũ được pickle với class `DCAF` không thể load sau khi đổi tên
+
+- **Phát hiện:** 2026-11-09
+- **Hiện trạng:** Toàn bộ mã nguồn đã thống nhất dùng tên `GauSS` (class `DCAF` bị xóa khỏi
+  `tinydet.modules.gauss`). Các checkpoint cũ (v2/v2.1/v3) được lưu bằng pickle chứa tham chiếu
+  class `tinydet.modules.gauss.DCAF`, nên `torch.load` sẽ lỗi `AttributeError` khi unpickle.
+- **Ảnh hưởng:** không chặn train mới (v3.1 train từ đầu), nhưng không thể resume/eval trực tiếp
+  trên checkpoint cũ.
+- **Đề xuất:** nếu cần dùng lại checkpoint cũ, extract state-dict rồi chuyển bằng
+  `remap_v3_to_v31_state_dict()` (hoặc shim tạm `tinydet.modules.gauss.DCAF = GauSS` chỉ trong
+  script load). Chưa làm vì các run sắp tới đều train mới với v3.1.
+
+## BL-019: Thư mục run trên Modal volume vẫn mang tên `dcaf_v2_1_*`
+
+- **Phát hiện:** 2026-11-09
+- **Hiện trạng:** các thư mục run cũ trên Modal volume (`/mnt/runs/dcaf_v2_1_tinyperson_wacv/...`)
+  và các artifact cục bộ (`backups/ablation_seed42/.../args.yaml`, `local_eval/*.json`) vẫn chứa
+  chuỗi `dcaf`. Repo không kiểm soát được tên thư mục trên volume; các file này là artifact lịch sử.
+- **Ảnh hưởng:** các script eval cũ (`launch_eval_tinyperson.py`, `launch_tiled_eval.py`,
+  `configs/experiment/gauss_v3_visdrone_finetune.yaml` với `pretrained`) giờ trỏ tới tên mới
+  `gauss_*` trên volume, nên sẽ không tìm thấy thư mục cũ cho đến khi run mới với tên `gauss_*`
+  được tạo ra.
+- **Đề xuất:** sau khi train v3.1 xong, cập nhật `pretrained` trong config finetune sang run mới;
+  không đổi tên thư mục cũ trên volume (giữ provenance).
+
+## BL-020: Config finetune VisDrone trỏ `pretrained` tới checkpoint cũ, đã chết sau đổi tên
+
+- **Phát hiện:** 2026-11-09
+- **Hiện trạng:** `configs/experiment/gauss_v3_visdrone_finetune.yaml` trỏ
+  `pretrained: /mnt/runs/gauss_v2_1_tinyperson_wacv/...` và
+  `baseline_visdrone_finetune.yaml` trỏ `/mnt/runs/baseline_tinyperson_wacv/...`.
+  Thư mục thật trên volume vẫn tên `dcaf_v2_1_*` (BL-019), nên đường dẫn mới không tồn tại.
+  Ngay cả khi trỏ đúng, checkpoint cũ là kiến trúc GauSS v2.1 — load kiểu "intersect" của
+  Ultralytics sẽ bỏ qua ngầm các tham số mới của v3.1 (`router_corr.*`, `dy_up*.offset.*`,
+  `gamma_in/out_raw`), tạo partial-load không kiểm soát.
+- **Ảnh hưởng:** track finetune VisDrone không thể chạy đúng cho tới khi có checkpoint v3.1 mới.
+- **Đề xuất:** sau khi run TinyPerson v3.1 (60e) hoàn tất, cập nhật `pretrained` của cả hai
+  config finetune sang `best.pt` của run mới tương ứng (baseline → baseline, gauss → gauss),
+  cùng kiến trúc, cùng protocol. Không sửa tạm bằng shim.
+
+## BL-021: Cấm dùng `VisDrone.yaml` tích hợp sẵn của Ultralytics trong Modal
+
+- **Phát hiện:** 2026-11-09
+- **Hiện trạng:** Ultralytics có sẵn `ultralytics/cfg/datasets/VisDrone.yaml` tự download
+  dataset lúc runtime về thư mục cục bộ của container. Bản này khác cấu trúc với derivative
+  `/mnt/data/visdrone-yolo` trên volume và không có signature SHA-256 cho preflight.
+- **Ảnh hưởng:** nếu dùng, dữ liệu train không reproducible, preflight audit bị bỏ qua,
+  vi phạm ADR-009 và `docs/agents/DATA_EVALUATION.md`.
+- **Đề xuất:** mọi config VisDrone chỉ được trỏ `/mnt/data/visdrone-yolo/data.yaml`
+  (derivative chuẩn trên volume, 6471/548/1610 ảnh train/val/test, 10 lớp). Đã kiểm tra
+  volume ngày 2026-11-09.

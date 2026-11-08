@@ -17,7 +17,7 @@
     },
     "gpu": "NVIDIA A10G"
   },
-  "dcaf_v2_1": {
+  "gauss_v2_1": {
     "params": 2550906,
     "flops_1280_gflops": 33.99,
     "flops_640_gflops": 8.13,

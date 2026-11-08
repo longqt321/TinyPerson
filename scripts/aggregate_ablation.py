@@ -7,7 +7,7 @@ produced because only one seed was trained.
 Inputs
     reports/eval/ablation/{run}.json        eval payload (frozen TOV tiled protocol)
     reports/eval/ablation/{run}.train.json  run metadata written by the runner
-    reports/eval/dcaf_v2_1_tinyperson_150e_tiled.json
+    reports/eval/gauss_v2_1_tinyperson_150e_tiled.json
                                             full-GauSS seed-42 reference evaluation
 
 Outputs
@@ -37,8 +37,8 @@ ABLATIONS = (
 )
 
 # Full-GauSS seed-42 reference, trained and evaluated by the paper pipeline.
-REFERENCE_NAME = "dcaf_v2_1_tinyperson_wacv"
-REFERENCE_EVAL = Path("reports/eval/dcaf_v2_1_tinyperson_150e_tiled.json")
+REFERENCE_NAME = "gauss_v2_1_tinyperson_wacv"
+REFERENCE_EVAL = Path("reports/eval/gauss_v2_1_tinyperson_150e_tiled.json")
 
 METRIC_ROWS = (
     ("AP50_all", "all", "AP@0.50"),

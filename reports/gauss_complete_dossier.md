@@ -1,4 +1,4 @@
-# HỒ SƠ KỸ THUẬT VÀ PHÂN TÍCH TOÀN DIỆN MÔ HÌNH GauSS (DCAF v2.1)
+# HỒ SƠ KỸ THUẬT VÀ PHÂN TÍCH TOÀN DIỆN MÔ HÌNH GauSS (GauSS v2.1)
 **Định dạng**: Technical Dossier & Architecture Specification  
 **Đối tượng sử dụng**: Chuyên gia Thị giác máy tính / Học sâu (Computer Vision & Deep Learning Researchers)  
 **Ngày cập nhật**: 07/11/2026  
@@ -23,9 +23,9 @@ Thiết kế một module xử lý đặc trưng siêu nhẹ tích hợp tại t
 
 ---
 
-## 2. KIẾN TRÚC CHI TIẾT CỦA MODULE GauSS (DCAF v2.1)
+## 2. KIẾN TRÚC CHI TIẾT CỦA MODULE GauSS (GauSS v2.1)
 
-Tên mã kỹ thuật trong source code: `DCAF` (tại `src/tinydet/modules/dcaf.py`).  
+Tên mã kỹ thuật trong source code: `GauSS` (tại `src/tinydet/modules/gauss.py`).  
 Module can thiệp vào điểm hợp nhất tầng $P_2$ của Feature Pyramid Network (FPN/PAN).
 
 ### 2.1. Hợp đồng kỹ thuật (Implementation Contract)
@@ -156,7 +156,7 @@ Module can thiệp vào điểm hợp nhất tầng $P_2$ của Feature Pyramid 
 
 ### 3.2. Kết quả đối đầu chính: Baseline vs GauSS (150 Epochs, Tiled Inference)
 
-Dữ liệu nguồn đối soát từ `reports/eval/baseline_tiled_per_class.json` và `reports/eval/dcaf_tiled_per_class.json`:
+Dữ liệu nguồn đối soát từ `reports/eval/baseline_tiled_per_class.json` và `reports/eval/gauss_tiled_per_class.json`:
 
 | Chỉ số / Phân lớp | Kích thước | Baseline 150e | GauSS 150e | Độ lệch ($\Delta$) | Ý nghĩa thực nghiệm |
 | :--- | :--- | :---: | :---: | :---: | :--- |
@@ -221,7 +221,7 @@ Khi chuyển giao tài liệu này cho chuyên gia phân tích độc lập, c�
 ---
 
 ### Tham chiếu mã nguồn
-- Định nghĩa module: [`src/tinydet/modules/dcaf.py`](file:///home/longtran/Projects/thigiacmaytinh/src/tinydet/modules/dcaf.py)
-- Model YAML: [`configs/model/yolo26n_tiny_A2_p2_dcaf_tinyperson.yaml`](file:///home/longtran/Projects/thigiacmaytinh/configs/model/yolo26n_tiny_A2_p2_dcaf_tinyperson.yaml)
-- Benchmark JSON: [`reports/eval/dcaf_tiled_per_class.json`](file:///home/longtran/Projects/thigiacmaytinh/reports/eval/dcaf_tiled_per_class.json)
+- Định nghĩa module: [`src/tinydet/modules/gauss.py`](file:///home/longtran/Projects/thigiacmaytinh/src/tinydet/modules/gauss.py)
+- Model YAML: [`configs/model/yolo26n_tiny_A2_p2_gauss_tinyperson.yaml`](file:///home/longtran/Projects/thigiacmaytinh/configs/model/yolo26n_tiny_A2_p2_gauss_tinyperson.yaml)
+- Benchmark JSON: [`reports/eval/gauss_tiled_per_class.json`](file:///home/longtran/Projects/thigiacmaytinh/reports/eval/gauss_tiled_per_class.json)
 - Ablation Bootstrap: [`reports/eval/ablation/bootstrap_ablation_allcells.json`](file:///home/longtran/Projects/thigiacmaytinh/reports/eval/ablation/bootstrap_ablation_allcells.json)
