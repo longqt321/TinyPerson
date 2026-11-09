@@ -294,3 +294,26 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
   MR^-2 (chuẩn Caltech/TinyPerson literature) chưa được implement ở đâu trong repo.
 - **Đề xuất:** thêm vào `tinyperson_benchmark.py` (post-train, không per-epoch) nếu bảng
   so sánh với literature trong paper cần số này.
+
+## BL-025: `InterpreterPoolExecutor` (Python 3.14) bị chặn bởi numpy/torch/PIL
+
+- **Phát hiện:** 2026-11-09, đo trực tiếp trên Python 3.14.9 của repo.
+- **Hiện trạng:** `concurrent.futures.InterpreterPoolExecutor` chạy tốt với pure-Python
+  (0.31 s so với 1.23 s của ThreadPoolExecutor cho 8×3M vòng lặp, ngang `ProcessPoolExecutor`
+  fork 0.30 s), nhưng **import numpy 2.5.4, torch 2.14.0, PIL 13 đều thất bại** trong
+  subinterpreter (`ImportError: ... does not support loading in subinterpreters`). Upstream
+  numpy xác nhận chưa hỗ trợ và không nằm trong roadmap gần (cần chuyển sang multi-phase init
+  + heap types). Vì mọi đường CPU-heavy của repo (IoU matrix, AP/MR, decode ảnh) đều dựa trên
+  numpy/PIL/torch, không thể thay `ProcessPoolExecutor(fork)` bằng interpreter pool.
+- **Đề xuất:** giữ nguyên fork-based `ProcessPoolExecutor` trong evaluator (đã đo 3.36x ở 84
+  ảnh). Chỉ xem lại khi numpy công bố hỗ trợ subinterpreter; khi đó benchmark lại trước khi đổi.
+
+## BL-026: `compression.zstd` cho artifact lớn (prediction JSONL / eval dump)
+
+- **Phát hiện:** 2026-11-09.
+- **Hiện trạng:** Python 3.14 có `compression.zstd`; đo trên JSON 9.53 MB: zstd level 3 nén
+  3 ms → 0.03 MB, gzip level 6 nén 19 ms → 0.07 MB (nhanh ~6x, nhỏ hơn ~2x). Hiện repo ghi
+  prediction/eval dạng JSON/JSONL thuần (tới ~41 MB cho 2000 ảnh) và các script đọc trực tiếp.
+- **Đề xuất:** chỉ áp dụng khi cần lưu trữ dài hạn hoặc truyền artifact qua Volume; phải cập
+  nhật đồng thời writer + mọi reader (`evaluate_coco_small.py`, `fetch`, error analysis) và
+  ghi format version. Không làm trước campaign 60e vì sẽ phá tương thích file hiện có.
