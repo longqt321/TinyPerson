@@ -372,3 +372,15 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Đề xuất:** đo `psutil.Process().memory_info().rss` mỗi epoch và ghi vào
   `system_metrics.csv` (hiện chỉ có VRAM) để có bằng chứng; sau đó mới quyết định free
   object trong callback hay giảm tần suất log media. Không sửa trước campaign 150e.
+
+## BL-029: `launch_campaign.py::fetch` lỗi `reload()` ngoài container
+
+- **Phát hiện:** 2026-11-10, sau campaign 150e. `modal run launch_campaign.py::fetch` →
+  `RuntimeError: reload() can only be called from within a running function`
+  (`modal/volume.py:935`). Nguyên nhân: `runs_volume.reload()` gọi từ local entrypoint
+  (không phải trong container).
+- **Workaround đã dùng:** `modal volume get tiny-person-runs eval/<name>/summary.json reports/eval/<name>.json`
+  cho từng dir — hoạt động tốt, chỉ thủ công.
+- **Đề xuất:** bỏ `reload()` (Volume API `listdir`/`read_file_into_fileobj` từ client đã đọc
+  trạng thái mới nhất), hoặc chuyển `fetch` thành một `@app.function` rồi `.remote()`.
+  Cần kiểm tra lại với Modal 1.6.3 trước khi sửa.
