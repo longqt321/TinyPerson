@@ -344,3 +344,20 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Đề xuất:** chỉ áp dụng khi cần lưu trữ dài hạn hoặc truyền artifact qua Volume; phải cập
   nhật đồng thời writer + mọi reader (`evaluate_coco_small.py`, `fetch`, error analysis) và
   ghi format version. Không làm trước campaign 60e vì sẽ phá tương thích file hiện có.
+
+## BL-027: Cap zoom của `RandomSizedBBoxSafeCrop` trong preset `tinyperson_b`
+
+- **Phát hiện:** 2026-11-09, trong rà soát tiền-campaign 150e (ADR-019).
+- **Hiện trạng:** preset B dùng `A.RandomSizedBBoxSafeCrop(1280, 1280, erosion_rate=0.0, p=0.20)`.
+  Đo thực nghiệm bằng hook resize trên toàn bộ 609/662 ảnh train có bbox (53 ảnh background):
+  zoom factor = 1280 / max(crop_h, crop_w) → median 1.26, mean 1.74, p90 3.10, p95 4.52,
+  **max 20.3x**; 22.8% số lần crop zoom >2x, 6.7% >4x, 1.6% >8x. Với p=0.20 tức
+  ~1.3% sample mỗi epoch bị zoom >4x (người tí hon phóng to tới 20x, texture gần như mất).
+  `erosion_rate` **không** phải sàn kích thước crop: source `BBoxSafeRandomCrop.get_params_dependent_on_data`
+  cho thấy nó erosion (thu nhỏ) union bbox, tức tăng erosion_rate làm zoom cực đoan hơn.
+  Không có knob cap zoom thuần thư viện trong transform này.
+- **Quyết định (user, 2026-11-09):** giữ nguyên p=0.20 cho vòng 150e; zoom-in crop vốn có lợi
+  cho tiny object và exposure cực đoan rất nhỏ. Không churn preset trước campaign.
+- **Đề xuất:** ablation vòng sau — (a) p=0.10, (b) thay bằng `A.Affine` zoom-in có kiểm soát
+  (scale ≤2x), hoặc (c) bỏ crop; đo AP theo size-stratified (tiny1/tiny2) để xem zoom-in crop
+  giúp hay hại. Cần đổi preset trong `src/tinydet/augment/albumentations_stack.py` và cập nhật ADR-018.

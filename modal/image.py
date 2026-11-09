@@ -14,6 +14,7 @@ base_image = (
         "ultralytics==8.4.208", "numpy>=2.5,<3", "pandas>=3.1,<4", "PyYAML>=6,<7",
         "Pillow>=13,<14", "opencv-python-headless>=4.10,<5", "matplotlib>=3.11,<4",
         "wandb>=0.31,<1", "scikit-learn>=1.9,<2", "polars>=2.1,<3",
+        "albumentations>=2.0.8,<3",
     )
 )
 
