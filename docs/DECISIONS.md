@@ -251,3 +251,51 @@
   `ruff check src/ configs/` sạch.
 - **Chưa xác minh**: chưa có run VisDrone thật với assigner mới; ảnh hưởng của floor 0.5 lên
   10 lớp VisDrone (nhiều lớp trung bình/lớn) chưa được đo.
+
+## ADR-015: Khai báo `polars` là direct dependency (2026-11-09)
+
+- **Bối cảnh**: `scripts/convert_parquet_to_yolo.py` import trực tiếp `polars` để đọc parquet
+  Hugging Face và ghi YOLO labels, nhưng `pyproject.toml` không khai báo. `uv tree` xác nhận
+  `polars 1.44.2` chỉ tồn tại trong lock nhờ là dependency bậc ba của `ultralytics`. Nếu
+  ultralytics bỏ polars ở bản sau, script vỡ mà không có cảnh báo nào.
+- **Quyết định**: khai báo `polars>=1.44,<2` trong `[project].dependencies`.
+- **Phương án đã xem**: (1) chuyển script về pandas (đã khai báo) — mất engine Rust đa nhân,
+  chậm hơn trên parquet lớn và không cần thiết; (2) giữ import ngầm qua ultralytics — phụ thuộc
+  bậc ba không được bảo đảm; (3) khai báo tường minh (chọn).
+- **Hệ quả**: thêm một direct dependency nhưng **không tăng kích thước cài đặt** vì polars đã
+  có sẵn trong lock/environment. Không thay đổi bất kỳ số liệu nào.
+- **Kiểm chứng**: `uv tree` cho thấy polars 1.44.2 nằm dưới ultralytics; `uv add polars` cập nhật
+  `pyproject.toml` + lockfile bằng công cụ (không sửa tay); `python -c "import polars"` OK.
+- **Chưa xác minh**: chưa chạy lại `convert_parquet_to_yolo.py` trên parquet thật sau khi khai báo
+  (hành vi import không đổi).
+
+## ADR-016: Nâng cấp dependency lên phiên bản mới nhất (2026-11-09)
+
+- **Bối cảnh**: audit phiên bản cho thấy Modal image dùng index `cu128` chỉ có torch tới
+  **2.11.0** (lệch 3 minor so với local 2.14.0), và một số constraint chặn phiên bản mới:
+  `pandas<3` (chặn 3.1.1), `polars<2` (chặn 2.1.0), `Pillow<13` (chặn 13.0.0),
+  `mypy<2` (chặn 2.4.1), `ultralytics==8.4.164` (mới nhất 8.4.208).
+- **Quyết định**:
+  - Local (CPU): giữ `torch 2.14.0+cpu + torchvision 0.29.0+cpu` — đã xác minh
+    `torchvision 0.29.0+cpu` **pin chặt `torch==2.14.0`** và torch 2.15 chưa có bản
+    torchvision `+cpu`, nên đây là cặp mới nhất khả dĩ trên index pytorch-cpu.
+  - Modal (GPU): đổi index `cu128` → **`cu132`** (Modal host driver 610.57.04, CUDA driver
+    API 13.3; A10 = Ampere sm_86 vẫn được CUDA 13 hỗ trợ) → resolve **torch 2.15.0+cu132 +
+    torchvision 0.29.2+cu132** (uv resolver xác minh tương thích). Pin `ultralytics==8.4.208`,
+    numpy>=2.5, pandas>=3.1, Pillow>=13, polars>=2.1, thêm `polars` vào image (script
+    convert được mount vào container).
+  - Local: nâng ultralytics 8.4.208, numpy 2.5.4, pandas 3.1.1, polars 2.1.0, modal 1.6.3,
+    pillow 13.0.0, ruff 0.17.4, mypy 2.4.1.
+  - **Giữ opencv-python-headless 4.14** (không lên 5.0): cv2 5.0 rất mới, ultralytics chỉ yêu
+    cầu >=4.7 nhưng chưa được upstream kiểm chứng với cv2 5; lợi ích không đáng rủi ro.
+- **Phương án đã xem**: (1) giữ cu128 — torch cũ 3 minor, lệch local; (2) cu130 — torch
+  2.14.1, gần local nhưng vẫn không phải mới nhất; (3) cu132 (chọn) — khớp torch 2.15 mới nhất.
+- **Hệ quả**: lần build image Modal tiếp theo sẽ cài bộ mới; các checkpoint cũ vẫn load được
+  vì ultralytics giữ API trainer/validator/callbacks (đã grep surface). Local torch không đổi
+  nên checkpoint local không bị ảnh hưởng.
+- **Kiểm chứng**: sau nâng cấp — forward YOLO26n-P2+GauSS PASS; ruff sạch; gauss self-test
+  PASS; toàn bộ 7 stress suite + 4 equivalence test PASS; benchmark eval không đổi (12.65 s
+  vs 12.52 s, trong nhiễu); pandas 3 + seaborn plot PASS; polars 2 parquet PASS; pillow 13
+  exif PASS; mypy 2.4.1 trên 3 module mới sạch; `modal profile current` OK.
+- **Chưa xác minh**: chưa build/run image Modal mới thật (cần `modal run` thật); chưa train
+  trên torch 2.15 GPU (AMP/BN hành vi có thể khác nhẹ — theo dõi epoch đầu).

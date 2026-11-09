@@ -263,3 +263,34 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Đề xuất:** mọi config VisDrone chỉ được trỏ `/mnt/data/visdrone-yolo/data.yaml`
   (derivative chuẩn trên volume, 6471/548/1610 ảnh train/val/test, 10 lớp). Đã kiểm tra
   volume ngày 2026-11-09.
+
+## BL-022: Cache key của preflight audit không bao gồm nội dung images/labels
+
+- **Phát hiện:** 2026-11-09
+- **Hiện trạng:** `_audit_original_dataset` trong `modal/app.py` tạo cache key từ
+  `sha256(dataset_yaml_path + imgsz + bytes(data.yaml))[:16]`. Nếu nội dung
+  `images/` hoặc `labels/` trên volume thay đổi mà `data.yaml` không đổi (ví dụ upload lại
+  derivative đã sửa), audit trả về kết quả stale từ cache mà không hề hay biết.
+- **Ảnh hưởng:** signature SHA-256 ghi vào metadata run vẫn đúng (nó hash file stats), nhưng
+  quyết định "passed" có thể dựa trên dữ liệu cũ.
+- **Đề xuất:** đưa `manifest.json` (có sẵn trong derivative, chứa sha256 nguồn) vào cache key,
+  hoặc hash danh sách `(basename, size, mtime)` của images/labels khi tạo key. Chưa làm vì
+  cần cân nhắc chi phí hash ~1.5k file mỗi lần audit.
+
+## BL-023: Size-conditioned routing metrics (M8 trong METRICS_EXPANSION_SPEC)
+
+- **Phát hiện:** 2026-11-09
+- **Hiện trạng:** để đo band weight `a_h/a_m/a_l` bên trong GT box (kiểm chứng giả thuyết
+  "router chọn high-band cho vật thể tiny"), cần thêm buffer band-weight map vào
+  `GauSS.forward` (flag `TINYDET_SAVE_BAND_MAP`, off mặc định). Đây là mục duy nhất trong
+  spec metrics phải đụng forward của module, nên đã defer chờ review riêng.
+- **Đề xuất:** khi có nhu cầu cho paper, thêm buffer + callback crop theo GT box stride-8,
+  test so sánh memory overhead trước/sau.
+
+## BL-024: MR^-2 (log-average miss rate over FPPI) chưa có trong evaluator
+
+- **Phát hiện:** 2026-11-09
+- **Hiện trạng:** TinyPerson protocol hiện chỉ tính AP và MR@IoU cố định (0.25/0.50/0.75).
+  MR^-2 (chuẩn Caltech/TinyPerson literature) chưa được implement ở đâu trong repo.
+- **Đề xuất:** thêm vào `tinyperson_benchmark.py` (post-train, không per-epoch) nếu bảng
+  so sánh với literature trong paper cần số này.
