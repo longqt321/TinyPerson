@@ -6,6 +6,7 @@ from time import monotonic
 
 import torch
 
+from tinydet.augment import resolve_augmentations
 from tinydet.models.registry import build_model
 from tinydet.modules.gauss import configure_gauss_control_param_group
 from tinydet.training.epoch_metrics import register_epoch_metrics, register_size_stratified_metrics
@@ -122,6 +123,13 @@ def train(
     stage2_cfg = config.stage2 or config.train.get("stage2") or config.train.get("two_stage") or {}
     is_two_stage = bool(stage2_cfg.get("enabled", False))
     train_args_s1 = {k: v for k, v in config.train.items() if k not in ("stage2", "two_stage")}
+    # Expand the augmentation preset into the `augmentations` hyperparameter that
+    # Ultralytics' Albumentations hook consumes (see build_transforms). The preset
+    # key itself must not leak into model.train(), which rejects unknown args.
+    preset = train_args_s1.pop("augmentations_preset", None)
+    augmentations = resolve_augmentations(preset)
+    if augmentations is not None:
+        train_args_s1["augmentations"] = augmentations
 
     training_done_flag = run / "training" / "completed.flag"
     training_best_pt = run / "training" / "weights" / "best.pt"

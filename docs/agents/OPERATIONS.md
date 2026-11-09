@@ -17,19 +17,22 @@ modal run --detach modal/app.py::compare \
 
 Use `--smoke` only to check the pipeline. Five-epoch metrics do not rank models.
 
-### 60-epoch campaign (detached by default)
+### Training campaign (detached by default)
 
 ```bash
-modal run -d launch_train_and_eval_60e.py          # audit -> 2x train -> finalize -> tiled + full eval
+modal run -d launch_campaign.py::main              # default: the 150e TinyPerson round
+modal run -d launch_campaign.py::main --configs configs/experiment/a.yaml,configs/experiment/b.yaml
 modal app logs <app-id>                            # monitor
-modal run launch_train_and_eval_60e.py::fetch      # pull eval + orchestration summaries into reports/
+modal run launch_campaign.py::fetch                # pull eval + orchestration summaries into reports/
 ```
 
-The whole chain runs inside `modal/app.py::_orchestrate_60e`, so a dropped local
+The whole chain runs inside `modal/app.py::_orchestrate_campaign`, so a dropped local
 connection cannot kill the campaign. The `-d` flag is still required: without it
 Modal stops the app when the local process exits. `_train` commits the runs
 Volume at the end of every epoch, so `results.csv`, `weights/last.pt` and the
-`metrics/*.csv` files survive any disconnect.
+`metrics/*.csv` files survive any disconnect. The orchestrator derives the
+epoch tag and eval names from each config's `train.epochs` — nothing is
+hardcoded per campaign.
 
 Per-epoch metric files written under `<run>/metrics/`:
 
@@ -54,7 +57,7 @@ training-sized resources:
 | `CPU_LIMIT` / `MEMORY_LIMIT_MB` | (4, 8) | (12288, 24576) | `_train`, `_evaluate`, `_benchmark`, `_analyze_geometry`, `_run_comparison_report`, `_run_checkpoint_evaluation`, `_run_tiled_checkpoint_evaluation`, `_run_visdrone_val` |
 | `AUDIT_CPU` / `AUDIT_MEMORY_MB` | (4, 8) | (8192, 16384) | `_audit_original_dataset` (24 decode threads) |
 | `POSTPROCESS_CPU` / `POSTPROCESS_MEMORY_MB` | (2, 4) | (4096, 8192) | `_finish_evaluation` (loads prediction artifacts, computes AP on CPU) |
-| `LIGHT_CPU` / `LIGHT_MEMORY_MB` | (1, 2) | (1024, 2048) | `_finalize`, `_orchestrate_60e`, `run_comparison`, `_preflight` |
+| `LIGHT_CPU` / `LIGHT_MEMORY_MB` | (1, 2) | (1024, 2048) | `_finalize`, `_orchestrate_campaign`, `run_comparison`, `_preflight` |
 
 Billing follows actual usage, so the request value is what matters most: a
 `LIGHT` container costs roughly a quarter of the CPU and a twelfth of the RAM

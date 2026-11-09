@@ -7,44 +7,55 @@ import app as modal_app_module  # modal/ is not a package; path added above
 
 app = modal_app_module.app
 
-CONFIGS = [
-    "configs/experiment/baseline_tinyperson_wacv.yaml",
-    "configs/experiment/gauss_v3_tinyperson_wacv.yaml",
+# Default campaign: the 150-epoch TinyPerson round (ADR-019). Override on the
+# command line with `--configs a.yaml,b.yaml`; nothing is hardcoded downstream.
+DEFAULT_CONFIGS = [
+    "configs/experiment/baseline_tinyperson_wacv_150e.yaml",
+    "configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml",
 ]
 
 
+def _parse_configs(configs: str) -> list[str]:
+    """Split a comma-separated config list, falling back to the default campaign."""
+    selected = [item.strip() for item in configs.split(",") if item.strip()]
+    return selected or list(DEFAULT_CONFIGS)
+
+
 @app.local_entrypoint()
-def main(detach: bool = True, wait: bool = False):
-    """Launch the 60-epoch campaign detached by default.
+def main(configs: str = "", detach: bool = True, wait: bool = False):
+    """Launch a training campaign detached by default.
 
     The whole chain (audit -> parallel training -> finalize -> tiled + full
-    eval) runs INSIDE Modal via `_orchestrate_60e`, so a dropped local
+    eval) runs INSIDE Modal via `_orchestrate_campaign`, so a dropped local
     connection cannot kill training. Checkpoints, metrics and logs are
     committed to the runs Volume every epoch by `_train`.
 
     IMPORTANT: run with the `-d` flag so the app survives the local process
     exiting:
 
-        modal run -d launch_train_and_eval_60e.py
+        modal run -d launch_campaign.py::main
+        modal run -d launch_campaign.py::main --configs a.yaml,b.yaml
 
     Then monitor with:
         modal app logs <app-id>
     and fetch results with:
-        modal run launch_train_and_eval_60e.py::fetch
+        modal run launch_campaign.py::fetch
     """
     from tinydet.utils.experiment import git_info
 
+    selected = _parse_configs(configs)
+    print(f"Campaign configs: {selected}", flush=True)
     commit, dirty = git_info()
     if dirty:
         print("[WARN] Working tree is dirty; commit/dirty will be recorded in run metadata.", flush=True)
 
     if detach and not wait:
-        handle = modal_app_module._orchestrate_60e.spawn(CONFIGS, commit, dirty)
+        handle = modal_app_module._orchestrate_campaign.spawn(selected, commit, dirty)
         print("=" * 70, flush=True)
         print("DETACHED LAUNCH — the campaign now runs inside Modal.", flush=True)
         print(f"  Call ID : {handle.object_id}", flush=True)
         print("  Monitor : modal app logs   (app id shown above / `modal app list`)", flush=True)
-        print("  Fetch   : modal run launch_train_and_eval_60e.py::fetch", flush=True)
+        print("  Fetch   : modal run launch_campaign.py::fetch", flush=True)
         print("  NOTE    : this run used `modal run -d`; without -d the app stops", flush=True)
         print("            when this local process exits.", flush=True)
         print("=" * 70, flush=True)
@@ -52,7 +63,7 @@ def main(detach: bool = True, wait: bool = False):
 
     # Attached mode: still executes remotely; a local drop only loses the
     # final printout, never the training itself.
-    summary = modal_app_module._orchestrate_60e.remote(CONFIGS, commit, dirty)
+    summary = modal_app_module._orchestrate_campaign.remote(selected, commit, dirty)
     print(json.dumps(summary, indent=2), flush=True)
 
 

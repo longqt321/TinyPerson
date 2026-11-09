@@ -1,0 +1,49 @@
+# 150-epoch TinyPerson campaign (ADR-019). Tuned after reviewing the internal
+# 60e seed42 run (20261109-123602-4d5bf2f): val losses were still decreasing at
+# e60 (val_box min at e55), so the schedule is extended rather than the LR raised.
+# The 60e round is internal-only and is NOT a reported result.
+seed: 42
+data:
+  config: /mnt/data/tinyperson-yolo-v2/data.yaml
+train:
+  epochs: 150
+  patience: 40
+  val: true
+  imgsz: 1280
+  batch: 16
+  workers: 8
+  optimizer: AdamW
+  lr0: 0.002
+  lrf: 0.1
+  cos_lr: true
+  warmup_epochs: 3.0
+  amp: true
+  deterministic: false
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  augmentations_preset: tinyperson_b
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: A10
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+name: baseline_tinyperson_wacv_150e
+model:
+  config: configs/model/yolo26n_tiny_A2_p2_tinyperson.yaml

@@ -26,7 +26,7 @@ mounts = {str(DATA_ROOT): data, str(MODEL_ROOT): models, str(RUN_ROOT): runs}
 CPU_LIMIT = (4.0, 8.0)
 MEMORY_LIMIT_MB = (12288, 24576)
 # CPU-only orchestration/plumbing containers (finalize, preflight, W&B tagging,
-# report assembly, the 60e orchestrator). They only copy files and await
+# report assembly, the campaign orchestrator). They only copy files and await
 # handles, so 1 CPU / 1 GB is enough; the ceiling absorbs a transient spike.
 LIGHT_CPU = (1.0, 2.0)
 LIGHT_MEMORY_MB = (1024, 2048)
@@ -264,7 +264,7 @@ def _collect(handle_map: dict, label: str) -> dict:
     timeout=43200,
     secrets=[wandb_secret],
 )
-def _orchestrate_60e(configs: list[str], commit: str, dirty: bool):
+def _orchestrate_campaign(configs: list[str], commit: str, dirty: bool):
     """Detached orchestrator: the full train -> finalize -> eval chain runs
     inside Modal, so a dropped local connection cannot kill the campaign.
 
@@ -277,7 +277,7 @@ def _orchestrate_60e(configs: list[str], commit: str, dirty: bool):
     from tinydet.utils.config import load_config
 
     print("=" * 70, flush=True)
-    print("ORCHESTRATOR: 60-EPOCH PARALLEL TRAINING + EVALUATION (NVIDIA A10)", flush=True)
+    print("ORCHESTRATOR: PARALLEL TRAINING + EVALUATION (NVIDIA A10)", flush=True)
     print(f"Configs: {configs}", flush=True)
     print("=" * 70, flush=True)
 
@@ -311,7 +311,7 @@ def _orchestrate_60e(configs: list[str], commit: str, dirty: bool):
         options = {"gpu": gpu}
         if exp.output.get("wandb_project"):
             options["secrets"] = [wandb_secret]
-        print(f"--> Spawning 60e training for: {cfg_path}...", flush=True)
+        print(f"--> Spawning {exp.train['epochs']}e training for: {cfg_path}...", flush=True)
         try:
             handle = _train.with_options(**options).spawn(
                 cfg_path, commit, dirty, config_text=config_text, dataset_audit=audit
@@ -345,7 +345,7 @@ def _orchestrate_60e(configs: list[str], commit: str, dirty: bool):
     tiled_handles = {}
     for rel_run in run_paths.values():
         run_name = rel_run.split("/")[0]
-        name = f"{run_name}_60e_tiled"
+        name = f"{run_name}_tiled"
         ckpt = f"{rel_run}/training/weights/best.pt"
         print(f"--> Spawning tiled evaluation for {name} ({ckpt})...", flush=True)
         try:
@@ -361,7 +361,7 @@ def _orchestrate_60e(configs: list[str], commit: str, dirty: bool):
     full_handles = {}
     for rel_run in run_paths.values():
         run_name = rel_run.split("/")[0]
-        name = f"{run_name}_60e_full"
+        name = f"{run_name}_full"
         ckpt = f"{rel_run}/training/weights/best.pt"
         print(f"--> Spawning full-frame evaluation for {name} ({ckpt})...", flush=True)
         try:

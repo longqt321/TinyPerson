@@ -329,3 +329,94 @@
   scalar 28.08 s (5.3x).
 - **Chưa xác minh**: chưa build/run image Modal với Python 3.14 thật (cần `modal run`);
   chưa train GPU trên 3.14; chưa chạy CI GitHub với 3.14.
+
+## ADR-018: Thêm albumentations 2.0.8 + preset augmentation `tinyperson_b` (2026-11-09)
+
+- **Bối cảnh**: run 60e seed42 cho thấy MR50 ~94% (recall là nút thắt chính) và recipe
+  augmentation gần như trống (mosaic/mixup/copy_paste/multi_scale = 0). Cần tăng đa dạng
+  dữ liệu mà không phá scale tiny object.
+- **Phương án đã xem**:
+  1. `CopyPaste` của Ultralytics — loại: paste bằng `cv2.drawContours(instances2.segments)`
+     (data/augment.py:2049); dataset chỉ có box → segments rỗng → no-op âm thầm.
+  2. `A.CopyAndPaste` của Albumentations — loại: KHÔNG tồn tại trong release 2.0.8
+     (chỉ ở master; `dir(A)` filter copy/paste = [], đã chạy thật). Thông tin web về
+     bbox-only donor là docs bản chưa phát hành.
+  3. `A.OverlayElements` — loại: `NotImplementedError: BBoxes not implemented` (test thật).
+  4. `A.Mosaic` — loại: phá scale tiny (mosaic đã chủ động tắt từ trước).
+  5. ✅ **Albumentations 2.0.8 với preset transform tự chọn** — mọi transform đã test
+     với bbox format yolo + đo tốc độ tại 1280×1280.
+- **Kích thước / license**: albumentations 2.0.8 wheel 369 KB (Apache-2.0), kéo thêm
+  `simsimd` + `stringzilla` (cùng Apache-2.0); `opencv-python 5.0.0.93` đã có sẵn trong
+  lock (giới hạn `opencv-python-headless>=4.10,<5` của ta không đổi, headless vẫn 4.14).
+- **Quyết định**:
+  - Thêm `albumentations>=2.0.8,<3` vào `pyproject.toml`.
+  - Module mới `src/tinydet/augment/albumentations_stack.py` với preset
+    `tinyperson_b`: Downscale 0.25 (scale_range 0.4–0.7), MotionBlur 0.15,
+    ImageCompression 0.10 (q 30–70), RandomBrightnessContrast 0.20, CLAHE 0.10,
+    RandomSizedBBoxSafeCrop 0.20 (1280×1280, erosion 0), CoarseDropout 0.10.
+  - Trainer mở rộng `train.augmentations_preset` → `augmentations` trước khi gọi
+    `model.train()` (key preset bị pop, không rò vào Ultralytics cfg).
+  - Bật cho **cả baseline và GauSS** (cùng recipe để so sánh công bằng, không confound).
+  - Không làm ablation "không augment" (quyết định của user, 09/11/2026).
+- **Tại sao các transform này**: mô phỏng đúng domain thu nhận TinyPerson (mất độ phân
+  giải, rung camera, nén JPEG, chiếu sáng) + crop-safe zoom tăng hiệu dụng kích thước
+  object 2–8px + occlusion. Tổng overhead ~19 ms/ảnh @1280 CPU (đo thật), không đáng kể
+  so với ~25 s/epoch GPU.
+- **Lưu ý tích hợp đã xác minh trong source**:
+  - Hook chính thức: `build_transforms` → `Albumentations(p=1.0, transforms=getattr(hyp,
+    "augmentations", None))` (ultralytics/data/augment.py:2911); spatial transforms được
+    wrap với `BboxParams(format="yolo", label_fields=["class_labels","idx"])`.
+  - Vị trí: sau RandomPerspective(1280), trước RandomHSV/RandomFlip → bbox tự cập nhật;
+    LetterBox KHÔNG nằm trong pipeline train (dataset.py:342) nên crop phải giữ shape —
+    vì vậy dùng `RandomSizedBBoxSafeCrop(1280,1280)` (giữ 1280×1280, đã test) thay vì
+    `BBoxSafeRandomCrop` (thay đổi shape → vỡ batch, đã test thấy 1077×1014).
+  - Serialize: `A.from_dict` yêu cầu `__class_fullname__` KHÔNG có tiền tố `A.` và
+    tuple viết dạng list (dict {min,max} bị pydantic từ chối) — đã test từng transform.
+- **Kiểm chứng**: preset `from_dict` 7/7 OK; Compose chạy với bbox yolo giữ shape 1280;
+  smoke test dataloader thật (`test_aug_dataloader.py`, CPU): YOLODataset 662 ảnh train +
+  `hyp.augmentations` → pipeline chứa Albumentations với 7 transform, `contains_spatial=True`,
+  3 sample đều giữ shape (3,1280,1280), labels còn nguyên, ảnh finite;
+  `load_config` cả 2 YAML → preset resolve 7 transform; `ruff check` sạch.
+- **Chưa xác minh**: tác động thực lên AP/MR (chưa train); hành vi trên GPU dataloader
+  8 workers; tương tác với `mosaic=0` + `RandomPerspective` chưa được chạy qua 1 epoch thật.
+
+## ADR-019: Campaign 150e (config mới) + tune siêu tham số sau rà soát 60e (2026-11-09)
+
+- **Bối cảnh**: run 60e seed42 (`20261109-123602-4d5bf2f`) là **nội bộ**, KHÔNG đưa vào
+  báo cáo khoa học cuối; chỉ kết quả nổi bật của vòng chính thức mới được báo cáo. Cần
+  vòng train mới với config riêng, không sửa config 60e đã đóng băng, và không hardcode
+  danh sách config trong script launch.
+- **Rà soát 60e (số thật từ `metrics/` của cả 2 run)**:
+  - `val/box_loss` đạt min ở e55 (baseline) và e54 (GauSS); `val/cls_loss` min ở e44/e57 →
+    **chưa hội tụ**, kéo dài schedule là hợp lý hơn tăng LR.
+  - `optim/amp_scale` = 256 không đổi suốt 60e, không NaN → AMP ổn định, không cần hạ lr0.
+  - `optim/grad_norm` median 154–158 (max 660) nhưng loss hữu hạn → không có dấu hiệu nổ.
+  - `system/vram_peak_gb` 10.08 (baseline) / 10.81 (GauSS) trên A10 24 GB → còn dư lớn.
+  - `system/epoch_time_s` median 22.5 s (baseline) / 28.1 s (GauSS).
+  - AP50(all) tốt nhất ở e56 (baseline 0.2069) / e58 (GauSS 0.2101) → dao động ±0.005
+    giữa các epoch cuối ⇒ patience 15 quá ngắn cho schedule dài.
+- **Quyết định**:
+  1. Tạo config mới `configs/experiment/{baseline_tinyperson_wacv_150e,gauss_v3_tinyperson_wacv_150e}.yaml`;
+     config 60e giữ nguyên (đóng băng).
+  2. Tune (chỉ những gì có bằng chứng từ trên):
+     - `epochs` 60 → **150** (val loss còn giảm).
+     - `patience` 15 → **40** (dao động cuối schedule ±0.005 AP).
+     - `batch` 8 → **16** (VRAM peak 10.8/24 GB; batch lớn cho assigner nhiều positive hơn
+       với tiny object). Giữ `lr0 = 0.002` — không áp linear scaling để tránh bất ổn,
+       vì AMP/grad_norm đang ổn định.
+     - `warmup_epochs` 2.0 → **3.0** (schedule dài hơn).
+     - Giữ nguyên: `imgsz 1280`, `AdamW`, `lrf 0.1`, `cos_lr`, `scale 0.15`,
+       `translate 0.05`, `mosaic/mixup/cutmix/copy_paste = 0`, `multi_scale 0`.
+  3. `augmentations_preset: tinyperson_b` (ADR-018) cho **cả hai** config.
+  4. Bỏ hardcode: `launch_train_and_eval_60e.py` → **`launch_campaign.py`**, nhận
+     `--configs a.yaml,b.yaml` (mặc định là cặp 150e); `_orchestrate_60e` →
+     `_orchestrate_campaign`, tên eval suy ra từ config (`<run>_tiled`, `<run>_full`),
+     tag epoch in ra lấy từ `train.epochs`.
+- **Hệ quả**: run dir mới `*_150e/2026...-seed42`; eval dir `/eval/<run>_tiled|_full`
+  (không còn hậu tố `_60e`). Số 60e chỉ dùng nội bộ để chọn siêu tham số.
+- **Kiểm chứng**: `load_config` cả 2 config mới OK (epochs 150, batch 16, patience 40,
+  preset tinyperson_b); `ruff check launch_campaign.py modal/app.py src/tinydet/augment
+  src/tinydet/training/trainer.py` → All checks passed.
+- **Chưa xác minh**: VRAM thực tế ở batch 16 (ước tính ~18–20 GB từ 10.8 GB @ batch 8);
+  thời gian/epoch ở batch 16; tác động của batch 16 + augmentation mới lên AP; chưa chạy
+  campaign 150e thật.
