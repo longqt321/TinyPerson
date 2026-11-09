@@ -97,3 +97,25 @@ Bài học rút ra từ lỗi đã xảy ra. Mỗi mục có mã `L-###` để t
 - **Bổ sung 2026-11-09 (chia chunk):** với file JSONL có dòng rất lớn (`samples.jsonl`:
   786 dòng × ~59 KB), chia theo **số dòng** sẽ tạo 1 chunk duy nhất và mất hoàn toàn song song
   (đo được chỉ 1.5x thay vì 3.9x). Phải chia theo **byte** rồi nới tới ranh giới dòng.
+
+## L-008: Patch đường loss phải được smoke-test bằng criterion thật trước khi launch campaign
+
+- **Ngày:** 2026-11-09.
+- **Bối cảnh:** patch tiny-floor trong `src/tinydet/models/ultralytics.py` (thêm ở commit
+  `72f6fc4`) viết `is_tiny = (sqrt_area < 8.0) & fg_mask.unsqueeze(-1)`. `fg_mask` của
+  TaskAlignedAssigner có shape `(b, h*w)` — giống hệt `sqrt_area` — nên unsqueeze tạo
+  `(b, h*w, 1)` và broadcast với `(b, h*w)` lỗi
+  `size of tensor a (8) must match the size of tensor b (136000)` ngay batch đầu tiên.
+  Cả 2 config của campaign 60e chết sau ~20 s GPU, phải launch lại.
+- **Nguyên nhân gốc:** patch mới trên đường loss **chưa từng được chạy qua criterion thật**
+  trước khi launch. Test forward module (`gauss self-test`) không đi qua assigner.
+- **Quy tắc:** trước khi launch campaign, chạy smoke test CPU:
+  build model từ YAML thật → `model.init_criterion()` → xác nhận patch installed →
+  `model.model.loss(batch)` với batch tổng hợp (b=2, imgsz nhỏ, có box tiny + lớn) →
+  assert loss finite. Lưu ý: gọi `DetectionModel.loss` (qua `wrapper.model`), KHÔNG gọi
+  `YOLO.loss` trên wrapper — method đó khởi động cả trainer (100 epoch trên coco8 mặc định).
+  Test mẫu: `/tmp/deepbench/test_model_loss_cpu.py` (cần chuyển thành test chính thức nếu
+  muốn giữ lâu dài).
+- **Sửa:** `make_tiny_floor_forward` giờ broadcast `fg_mask` trực tiếp với `sqrt_area`
+  rồi mới unsqueeze `is_tiny` lên chiều class; thêm `**kwargs` passthrough để wrapper sống
+  sót khi assigner tương lai nhận thêm tham số (ví dụ `anc_strides`).

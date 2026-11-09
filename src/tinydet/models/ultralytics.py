@@ -3,6 +3,39 @@
 import torch
 
 
+def make_tiny_floor_forward(orig_fn, floor_val):
+    """Wrap a TAL assigner forward so tiny ground truths keep a score floor.
+
+    ``orig_fn`` returns ``(target_labels, target_bboxes, target_scores, fg_mask,
+    target_gt_idx)`` where ``target_bboxes`` is ``(b, h*w, 4)`` in pixel units
+    and ``fg_mask`` is ``(b, h*w)``. Anchors whose assigned box has a
+    sqrt-area below 8 px get ``target_scores`` clamped to ``floor_val`` so they
+    are not drowned out by the background.
+    """
+
+    def patched_forward(pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs):
+        # **kwargs keeps this wrapper compatible with assigner variants that take
+        # extra arguments (e.g. anc_strides) instead of raising TypeError.
+        target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx = orig_fn(
+            pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs
+        )
+        if fg_mask.any():
+            bw = (target_bboxes[..., 2] - target_bboxes[..., 0]).clamp(min=0)
+            bh = (target_bboxes[..., 3] - target_bboxes[..., 1]).clamp(min=0)
+            sqrt_area = torch.sqrt(bw * bh + 1e-6)  # (b, h*w)
+            # fg_mask is (b, h*w); broadcast it against sqrt_area first, then
+            # lift to the class dimension of target_scores.
+            is_tiny = (sqrt_area < 8.0) & fg_mask
+            target_scores = torch.where(
+                is_tiny.unsqueeze(-1),
+                target_scores.clamp(min=floor_val),
+                target_scores,
+            )
+        return target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx
+
+    return patched_forward
+
+
 def _install_hooks() -> None:
     """Apply model YAML hooks once after Ultralytics constructs a detector."""
     from ultralytics.nn.tasks import DetectionModel
@@ -22,31 +55,7 @@ def _install_hooks() -> None:
                 assigner = loss.assigner
                 assigner.beta = beta
                 if tiny_floor > 0.0 and not getattr(assigner, "_tiny_floor_patched", False):
-                    orig_forward = assigner.forward
-
-                    def make_patched_forward(orig_fn, floor_val):
-                        def patched_forward(
-                            pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt
-                        ):
-                            target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx = orig_fn(
-                                pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt
-                            )
-                            # gt_bboxes are xyxy normalized or absolute. Compute width/height in pixels
-                            # If gt_size < 8px, clamp target_scores for foreground anchors
-                            if fg_mask.any():
-                                # target_bboxes is (b, max_anchors, 4) in xyxy
-                                bw = (target_bboxes[..., 2] - target_bboxes[..., 0]).clamp(min=0)
-                                bh = (target_bboxes[..., 3] - target_bboxes[..., 1]).clamp(min=0)
-                                sqrt_area = torch.sqrt(bw * bh + 1e-6)
-                                is_tiny = (sqrt_area < 8.0) & fg_mask.unsqueeze(-1)
-                                target_scores = torch.where(
-                                    is_tiny, target_scores.clamp(min=floor_val), target_scores
-                                )
-                            return target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx
-
-                        return patched_forward
-
-                    assigner.forward = make_patched_forward(orig_forward, tiny_floor)
+                    assigner.forward = make_tiny_floor_forward(assigner.forward, tiny_floor)
                     assigner._tiny_floor_patched = True
         return criterion
 
