@@ -1,6 +1,7 @@
-import csv
-
 from tinydet.evaluation.iou_metrics import ap_by_iou
+from tinydet.utils.csv_log import append_epoch_csv_row
+
+_CSV_STATE: dict = {}
 
 
 def log_ap_by_iou(trainer, wandb_enabled: bool = False) -> None:
@@ -8,12 +9,8 @@ def log_ap_by_iou(trainer, wandb_enabled: bool = False) -> None:
     values = ap_by_iou(trainer.validator.metrics.box)
     epoch = trainer.epoch + 1
     path = trainer.save_dir.parent / "metrics" / "ap_iou.csv"
-    path.parent.mkdir(exist_ok=True)
-    with path.open("a", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=["epoch", *values])
-        if file.tell() == 0:
-            writer.writeheader()
-        writer.writerow({"epoch": epoch, **values})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    append_epoch_csv_row(path, epoch, values, _CSV_STATE)
     if wandb_enabled:
         import wandb
 

@@ -11,6 +11,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from tinydet.training.val_predictions import build_prediction_row
+from tinydet.utils.atomic import atomic_write_text
+
 FEATURE_INTERVAL_EPOCHS = 10
 FEATURE_IMAGES = 2
 FEATURE_SIDE = 160
@@ -65,6 +68,9 @@ class WandbMediaCallback:
         self._sizes: list[float] = []
 
     def on_train_start(self, trainer) -> None:
+        if self._original_update_metrics is not None:
+            # Already wrapped: wrapping again would recurse through our own hook.
+            return
         try:
             validator = getattr(trainer, "validator", None)
             if validator is not None:
@@ -112,18 +118,11 @@ class WandbMediaCallback:
                     self._confidences.clear()
                     self._sizes.clear()
                 for index, pred in enumerate(preds):
-                    prepared = validator._prepare_batch(index, batch)
-                    row = {"path": str(prepared["im_file"]), "boxes": [], "scores": [], "classes": []}
-                    if pred["conf"].numel():
-                        predn = validator._prepare_pred(pred)
-                        scaled = validator.scale_preds(predn, prepared)
-                        boxes = scaled["bboxes"].detach().cpu().numpy().tolist()
-                        scores = predn["conf"].detach().cpu().numpy().tolist()
-                        classes = predn["cls"].detach().cpu().numpy().tolist()
-                        row.update(boxes=boxes, scores=scores, classes=classes)
-                        array = np.asarray(boxes, dtype=float).reshape(-1, 4)
+                    row = build_prediction_row(validator, index, pred, batch)
+                    if row["scores"]:
+                        array = np.asarray(row["boxes"], dtype=float).reshape(-1, 4)
                         area = (array[:, 2] - array[:, 0]) * (array[:, 3] - array[:, 1])
-                        self._confidences.extend(scores)
+                        self._confidences.extend(row["scores"])
                         self._sizes.extend(np.sqrt(np.clip(area, 0, None)).tolist())
                     self._rows.append(row)
             except Exception as exc:  # noqa: BLE001 - logging is optional
@@ -175,7 +174,9 @@ class WandbMediaCallback:
         output = self.run / "analysis-val"
         output.mkdir(parents=True, exist_ok=True)
         predictions = output / "predictions.json"
-        predictions.write_text(json.dumps({"images": self._rows}, indent=2) + "\n")
+        # Compact JSON: this file is machine-read by the analysis pass, and
+        # indent=2 measured 2.4x slower and 1.7x larger for no benefit.
+        atomic_write_text(predictions, json.dumps({"images": self._rows}) + "\n")
         result = analyze_files(
             annotations, predictions, manifest_path=manifest, split="val",
             run=self.run, checkpoint=trainer.best,

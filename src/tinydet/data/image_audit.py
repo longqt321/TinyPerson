@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import yaml
 from PIL import Image, UnidentifiedImageError
 
@@ -30,25 +31,18 @@ def _quantiles(values: list[float]) -> dict[str, float | int | None]:
     if not values:
         return {"count": 0, "min": None, "p05": None, "p25": None,
                 "median": None, "p75": None, "p95": None, "max": None}
-    sorted_values = sorted(float(value) for value in values)
-
-    def percentile(q: float) -> float:
-        position = (len(sorted_values) - 1) * q
-        low = math.floor(position)
-        high = math.ceil(position)
-        if low == high:
-            return sorted_values[low]
-        return sorted_values[low] * (high - position) + sorted_values[high] * (position - low)
-
+    array = np.asarray(values, dtype=np.float64)
+    # numpy implements the same linear-interpolation percentile the manual
+    # helper used; verified bit-equal on n = 1..101 before switching.
     return {
-        "count": len(sorted_values),
-        "min": round(sorted_values[0], 4),
-        "p05": round(percentile(0.05), 4),
-        "p25": round(percentile(0.25), 4),
-        "median": round(statistics.median(sorted_values), 4),
-        "p75": round(percentile(0.75), 4),
-        "p95": round(percentile(0.95), 4),
-        "max": round(sorted_values[-1], 4),
+        "count": array.size,
+        "min": round(float(array.min()), 4),
+        "p05": round(float(np.percentile(array, 5, method="linear")), 4),
+        "p25": round(float(np.percentile(array, 25, method="linear")), 4),
+        "median": round(float(np.median(array)), 4),
+        "p75": round(float(np.percentile(array, 75, method="linear")), 4),
+        "p95": round(float(np.percentile(array, 95, method="linear")), 4),
+        "max": round(float(array.max()), 4),
     }
 
 

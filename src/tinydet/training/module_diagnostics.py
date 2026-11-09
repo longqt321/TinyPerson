@@ -11,12 +11,12 @@ At ``on_fit_epoch_end``, statistics and ``w_out_norm`` are written to
 (same convention as ``log_ap_by_iou``).
 """
 
-import csv
 from pathlib import Path
 
 import torch
 
 from tinydet.modules.p2_refine import P2Refine
+from tinydet.utils.csv_log import append_epoch_csv_row
 
 
 class P2RefineDiagnosticsCallback:
@@ -24,6 +24,7 @@ class P2RefineDiagnosticsCallback:
 
     def __init__(self, wandb_enabled: bool = False) -> None:
         self.wandb_enabled = wandb_enabled
+        self._csv_state: dict = {}
         self.refines: list[tuple[str, P2Refine]] = []
         self._handles: list[torch.utils.hooks.RemovableHandle] = []
         self._needs_update = True
@@ -73,12 +74,7 @@ class P2RefineDiagnosticsCallback:
         epoch = trainer.epoch + 1
         path = Path(trainer.save_dir).parent / "metrics" / "p2refine_diagnostics.csv"
         path.parent.mkdir(parents=True, exist_ok=True)
-        fieldnames = ["epoch", *sorted(rows)]
-        with path.open("a", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=fieldnames)
-            if file.tell() == 0:
-                writer.writeheader()
-            writer.writerow({"epoch": epoch, **rows})
+        append_epoch_csv_row(path, epoch, rows, self._csv_state)
 
         if self.wandb_enabled:
             import wandb

@@ -6,16 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
-
-
-def _iou(first: list[float], second: list[float]) -> float:
-    left, top = max(first[0], second[0]), max(first[1], second[1])
-    right, bottom = min(first[2], second[2]), min(first[3], second[3])
-    intersection = max(right - left, 0.0) * max(bottom - top, 0.0)
-    first_area = max(first[2] - first[0], 0.0) * max(first[3] - first[1], 0.0)
-    second_area = max(second[2] - second[0], 0.0) * max(second[3] - second[1], 0.0)
-    return intersection / (first_area + second_area - intersection) if intersection else 0.0
+from tinydet.utils.geometry import best_first_max, iou
 
 
 def _variant_predictions(
@@ -43,17 +37,17 @@ def _variant_predictions(
         order = sorted(range(len(boxes)), key=lambda index: scores[index], reverse=True)
         assignments: dict[int, int] = {}
         for detection_index in order:
-            overlaps = [
-                (index, _iou(boxes[detection_index], box))
-                for index, box in enumerate(gt)
-            ]
-            candidates = [
-                (index, overlap) for index, overlap in overlaps
-                if overlap >= 0.75 and index not in assignments
-            ]
-            if candidates:
-                gt_index, _ = max(candidates, key=lambda pair: pair[1])
-                assignments[detection_index] = gt_index
+            overlaps = iou(boxes[detection_index], gt)
+            if overlaps.size:
+                available = np.array(
+                    [index not in assignments.values() for index in range(len(gt))],
+                    dtype=bool,
+                )
+                candidates = np.flatnonzero((overlaps >= 0.75) & available)
+            else:
+                candidates = np.empty(0, dtype=np.intp)
+            if candidates.size:
+                assignments[detection_index] = best_first_max(overlaps, candidates)
 
         matched_gt += len(set(assignments.values()))
         matched_detections += len(assignments)
@@ -62,9 +56,8 @@ def _variant_predictions(
             if variant in {"box", "both"} and detection_index in assignments:
                 box = gt[assignments[detection_index]]
             if variant in {"score", "both"}:
-                score = max(
-                    (_iou(box, candidate) for candidate in gt), default=0.0
-                )
+                overlaps = iou(box, gt)
+                score = float(overlaps.max()) if overlaps.size else 0.0
                 if variant == "both":
                     score = 1.0 if detection_index in assignments else 0.0
             output_boxes.append(box)

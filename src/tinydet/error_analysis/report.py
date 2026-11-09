@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from tinydet.error_analysis.core import AnalysisResult
+from tinydet.utils.atomic import atomic_write_jsonl, atomic_write_text
 
 
 def _json(value: Any) -> str:
@@ -276,12 +277,10 @@ def _plots(result: AnalysisResult, output: Path) -> list[str]:
 def write_outputs(result: AnalysisResult, output: str | Path, *, plots: bool = False) -> dict[str, Any]:
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    (output / "summary.json").write_text(json.dumps(result.summary, indent=2) + "\n")
-    (output / "samples.jsonl").write_text(
-        "".join(json.dumps(record) + "\n" for record in result.samples))
-    (output / "errors.jsonl").write_text(
-        "".join(json.dumps(record) + "\n" for record in result.errors))
-    (output / "report.md").write_text(render_report(result))
+    atomic_write_text(output / "summary.json", json.dumps(result.summary, indent=2) + "\n")
+    atomic_write_jsonl(output / "samples.jsonl", result.samples)
+    atomic_write_jsonl(output / "errors.jsonl", result.errors)
+    atomic_write_text(output / "report.md", render_report(result))
     paths = {
         "summary": str(output / "summary.json"),
         "samples": str(output / "samples.jsonl"),

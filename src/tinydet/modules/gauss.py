@@ -303,6 +303,7 @@ class DySampleUp(nn.Module):
         self.offset = nn.Conv2d(channels, groups * 2 * scale * scale, kernel_size=1, bias=True)
         nn.init.zeros_(self.offset.weight)
         nn.init.zeros_(self.offset.bias)
+        self.last_diag: dict[str, float] = {}
 
     def forward(self, x: Tensor) -> Tensor:
         b, c, h, w = x.shape
@@ -313,6 +314,11 @@ class DySampleUp(nn.Module):
         off = self.offset(x)                      # (B, g*2*s^2, H, W)
         off = F.pixel_shuffle(off, s)             # (B, 2g, sH, sW)
         off = off.reshape(b, g, 2, s * h, s * w)  # [:, :, 0]=dy, [:, :, 1]=dx
+
+        # Detached diagnostics: offset magnitude relative to the bilinear
+        # baseline grid. Zero-init offsets -> 0.0 (pure bilinear).
+        with torch.no_grad():
+            self.last_diag = {"offset_rms": float(off.float().square().mean().sqrt().item())}
 
         # Base sampling grid in input-pixel units, align_corners=False convention:
         # output pixel J samples input at (J + 0.5)/s - 0.5. Computed in
@@ -770,21 +776,32 @@ class GauSS(nn.Module):
             m_f = m_gate.detach().float()
             rms_res = (alpha * z).detach().float().square().mean().sqrt()
             rms_in = x0.detach().float().square().mean().sqrt().clamp_min(1e-12)
+            rms_out = y_p2.detach().float().square().mean().sqrt().clamp_min(1e-12)
+            rms_anchor = (gamma_out * b_h_eff).detach().float().square().mean().sqrt()
+            a_f = a.detach().float()
+            # torch.special.entr: -x*ln(x) per element, 0 at x==0 (no clamping bias).
+            entropy = torch.special.entr(a_f).sum(dim=1).mean()
+            energy_sum = (e_h.mean() + e_m.mean() + e_l.mean()).clamp_min(1e-12)
 
-            self.last_diag = {
+            diag = {
                 "routing/mixing_mean": float(m_f.mean().item()),
                 "routing/mixing_std": float(m_f.std(unbiased=False).item()),
                 "routing/high_band_mean": float(a_h.detach().float().mean().item()),
                 "routing/mid_band_mean": float(a_m.detach().float().mean().item()),
                 "routing/low_band_mean": float(a_l.detach().float().mean().item()),
+                "routing/entropy_mean": float(entropy.item()),
                 "routing/energy_high_mean": float(e_h.mean().item()),
                 "routing/energy_mid_mean": float(e_m.mean().item()),
                 "routing/energy_low_mean": float(e_l.mean().item()),
+                "routing/high_band_share": float((e_h.mean() / energy_sum).item()),
                 "routing/z_loss": float(self._z_loss.item()),
                 "context/dilation_1_mean": float(pi1.detach().float().mean().item()),
                 "context/dilation_2_mean": float(pi2.detach().float().mean().item()),
                 "context/dilation_3_mean": float(pi3.detach().float().mean().item()),
                 "refinement/residual_ratio": float((rms_res / rms_in).item()),
+                "contribution/alpha_z_share": float((rms_res / rms_out).item()),
+                "contribution/anchor_share": float((rms_anchor / rms_out).item()),
+                "contribution/identity_share": float((rms_in / rms_out).item()),
                 "gates/alpha": float(self.compute_alpha().item()),
                 "gates/gamma_in": float(self.compute_gamma_in().item()),
                 "gates/gamma_out": float(self.compute_gamma_out().item()),
@@ -793,6 +810,12 @@ class GauSS(nn.Module):
                 "gaussian/sigma1_std": float(sigma1.std(unbiased=False).item()),
                 "gaussian/sigma2_std": float(sigma2.std(unbiased=False).item()),
             }
+            # Merge DySample offset diagnostics (0.0 == pure bilinear at init).
+            for dy_name in ("dy_up3", "dy_up4"):
+                dy_diag = getattr(getattr(self, dy_name, None), "last_diag", None)
+                if dy_diag:
+                    diag.update({f"dysample/{dy_name}/{k}": v for k, v in dy_diag.items()})
+            self.last_diag = diag
 
         return y_p2
 

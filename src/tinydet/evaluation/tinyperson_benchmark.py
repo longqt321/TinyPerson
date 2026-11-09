@@ -33,6 +33,14 @@ from typing import Any
 
 import numpy as np
 
+from tinydet.utils.geometry import (
+    best_first_max,
+    iod_matrix,
+    iod_scalar,
+    iou_matrix,
+    iou_scalar,
+)
+
 IOU_THRESHOLDS = (0.25, 0.50, 0.75)
 MAX_DETECTIONS = 200
 CLASS_MODES = ("per_class", "merge", "primary")
@@ -59,19 +67,52 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
     bin_gt: dict[int, dict[str, Any]] = {}
     positive_count = 0
     positive_count_by_cat: dict[int, int] = defaultdict(int)
+    inside_columns: dict[int, dict[int, np.ndarray]] = {}
+    outside_columns: dict[int, dict[int, np.ndarray]] = {}
     for image_id in eval_ids:
         positives = gt_by_image[image_id]["positive"]
         inside: dict[int, list[list[float]]] = {}
         outside: dict[int, list[list[float]]] = {}
+        inside_columns[image_id] = {}
+        outside_columns[image_id] = {}
         for category, boxes in positives.items():
-            inside[category] = [b for b in boxes if _in_range(b, size_spec)]
-            outside[category] = [b for b in boxes if not _in_range(b, size_spec)]
+            flags = np.asarray([_in_range(b, size_spec) for b in boxes], dtype=bool)
+            inside_idx = np.flatnonzero(flags)
+            inside[category] = [boxes[i] for i in inside_idx]
+            outside[category] = [boxes[i] for i in np.flatnonzero(~flags)]
+            inside_columns[image_id][category] = inside_idx
+            outside_columns[image_id][category] = np.flatnonzero(~flags)
             positive_count += len(inside[category])
             positive_count_by_cat[category] += len(inside[category])
         bin_gt[image_id] = {
             "positive": inside, "outside": outside,
             "ignored": gt_by_image[image_id]["ignored"],
         }
+
+    # IoU never depends on the size bin or threshold, so compute each image's
+    # detection x ground-truth matrices once and let the greedy loops below
+    # index into them. This removes hundreds of thousands of scalar helper
+    # calls per evaluation (measured 34.6 s -> seconds on the val profile).
+    rows_of_image: dict[int, list[int]] = defaultdict(list)
+    for row, (_, image_id, _, _) in enumerate(scored):
+        rows_of_image[image_id].append(row)
+    local_of_row = np.empty(len(scored), dtype=np.intp)
+    positive_iou: dict[int, dict[int, np.ndarray]] = {}
+    ignored_iou: dict[int, np.ndarray] = {}
+    ignored_iod: dict[int, np.ndarray] = {}
+    for image_id in eval_ids:
+        rows = rows_of_image.get(image_id, [])
+        local_of_row[rows] = np.arange(len(rows), dtype=np.intp)
+        detections = np.asarray(
+            [scored[row][2] for row in rows], dtype=np.float64
+        ).reshape(-1, 4)
+        positive_iou[image_id] = {
+            category: iou_matrix(detections, boxes)
+            for category, boxes in gt_by_image[image_id]["positive"].items()
+        }
+        ignored_boxes = gt_by_image[image_id]["ignored"]
+        ignored_iou[image_id] = iou_matrix(detections, ignored_boxes)
+        ignored_iod[image_id] = iod_matrix(detections, ignored_boxes)
 
     metrics: dict[str, Any] = {}
     per_category: dict[int, dict[str, Any]] = defaultdict(dict)
@@ -83,14 +124,19 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
         tp, fp = [], []
         tp_by_cat: dict[int, list[int]] = defaultdict(list)
         fp_by_cat: dict[int, list[int]] = defaultdict(list)
-        for _, image_id, box, category in scored:
-            target = bin_gt[image_id]["positive"].get(category, [])
+        for row, (_, image_id, box, category) in enumerate(scored):
+            local = int(local_of_row[row])
             key = (image_id, category)
-            overlaps = [_iou(box, candidate) for candidate in target]
-            candidates = [i for i, overlap in enumerate(overlaps)
-                          if overlap >= threshold and i not in matched[key]]
-            if candidates:
-                best = max(candidates, key=lambda i: overlaps[i])
+            columns = inside_columns[image_id].get(category)
+            if columns is not None and columns.size:
+                overlaps = positive_iou[image_id][category][local][columns]
+                available = np.ones(overlaps.size, dtype=bool)
+                available[list(matched[key])] = False
+                candidates = np.flatnonzero((overlaps >= threshold) & available)
+            else:
+                candidates = np.empty(0, dtype=np.intp)
+            if candidates.size:
+                best = best_first_max(overlaps, candidates)
                 matched[key].add(best)
                 tp.append(1)
                 fp.append(0)
@@ -98,26 +144,34 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
                 fp_by_cat[category].append(0)
                 continue
 
-            outside = bin_gt[image_id]["outside"].get(category, [])
-            outside_overlaps = [_iou(box, candidate) for candidate in outside]
-            outside_candidates = [
-                i for i, overlap in enumerate(outside_overlaps)
-                if overlap >= threshold and i not in matched_outside[key]
-            ]
-            if outside_candidates:
-                best = max(outside_candidates, key=lambda i: outside_overlaps[i])
+            outside_columns_cat = outside_columns[image_id].get(category)
+            if outside_columns_cat is not None and outside_columns_cat.size:
+                outside_overlaps = positive_iou[image_id][category][local][outside_columns_cat]
+                available = np.ones(outside_overlaps.size, dtype=bool)
+                available[list(matched_outside[key])] = False
+                outside_candidates = np.flatnonzero(
+                    (outside_overlaps >= threshold) & available
+                )
+            else:
+                outside_candidates = np.empty(0, dtype=np.intp)
+            if outside_candidates.size:
+                best = best_first_max(outside_overlaps, outside_candidates)
                 matched_outside[key].add(best)
                 continue
 
-            ignored = bin_gt[image_id]["ignored"]
-            ignored_iou = [
-                i for i, other in enumerate(ignored)
-                if _iou(box, other) >= threshold and i not in matched_ignored_iou[image_id]
-            ]
-            if ignored_iou:
-                matched_ignored_iou[image_id].add(ignored_iou[0])
+            ignored_row = ignored_iou[image_id][local]
+            if ignored_row.size:
+                available = np.ones(ignored_row.size, dtype=bool)
+                available[list(matched_ignored_iou[image_id])] = False
+                ignored_hits = np.flatnonzero((ignored_row >= threshold) & available)
+            else:
+                ignored_hits = np.empty(0, dtype=np.intp)
+            if ignored_hits.size:
+                matched_ignored_iou[image_id].add(int(ignored_hits[0]))
                 continue
-            neutral_iod = any(_iod(box, other) >= threshold for other in ignored)
+            neutral_iod = bool(
+                np.any(ignored_iod[image_id][local] >= threshold)
+            ) if ignored_row.size else False
             if neutral_iod or not _in_range(box, size_spec):
                 continue
             tp.append(0)
@@ -168,23 +222,10 @@ def _in_range(box: list[float], size_spec: tuple[float, float, bool, bool]) -> b
     return left_ok and right_ok
 
 
-def _iou(a: list[float], b: list[float]) -> float:
-    left, top = max(a[0], b[0]), max(a[1], b[1])
-    right, bottom = min(a[2], b[2]), min(a[3], b[3])
-    inter = max(right-left, 0.0) * max(bottom-top, 0.0)
-    area_a = max(a[2]-a[0], 0.0) * max(a[3]-a[1], 0.0)
-    area_b = max(b[2]-b[0], 0.0) * max(b[3]-b[1], 0.0)
-    union = area_a + area_b - inter
-    return inter / union if union > 0 else 0.0
-
-
-def _iod(detection: list[float], ignored: list[float]) -> float:
-    """Intersection divided by detection area; used for ignore/uncertain boxes."""
-    left, top = max(detection[0], ignored[0]), max(detection[1], ignored[1])
-    right, bottom = min(detection[2], ignored[2]), min(detection[3], ignored[3])
-    inter = max(right-left, 0.0) * max(bottom-top, 0.0)
-    area = max(detection[2]-detection[0], 0.0) * max(detection[3]-detection[1], 0.0)
-    return inter / area if area > 0 else 0.0
+# Kept as module-level aliases: error analysis and report scripts import these
+# names. The matching loops use the vectorised `iou`/`iod` helpers instead.
+_iou = iou_scalar
+_iod = iod_scalar
 
 
 def _ap(tp: list[int], fp: list[int], positive_count: int) -> float | None:
@@ -198,10 +239,13 @@ def _ap(tp: list[int], fp: list[int], positive_count: int) -> float | None:
     precision = tp_cum / np.maximum(tp_cum + fp_cum, 1.0)
     precision = np.maximum.accumulate(precision[::-1])[::-1]
     points = np.linspace(0.0, 1.0, 101)
-    return float(np.mean([
-        precision[recall >= point].max() if np.any(recall >= point) else 0.0
-        for point in points
-    ]))
+    # Recall is non-decreasing, so the first index reaching each point is a
+    # binary search instead of 101 boolean scans over the whole curve.
+    index = np.searchsorted(recall, points, side="left")
+    valid = index < recall.size
+    sampled = np.zeros(points.size)
+    sampled[valid] = precision[index[valid]]
+    return float(sampled.mean())
 
 
 def _mr(tp: list[int], fp: list[int], positive_count: int, num_images: int) -> float | None:
@@ -217,14 +261,50 @@ def _mr(tp: list[int], fp: list[int], positive_count: int, num_images: int) -> f
     miss_rate = 1.0 - rec
 
     fppi_targets = np.logspace(-2, 0, 9)
-    mr_at_fppi = []
-    for target in fppi_targets:
-        valid = miss_rate[fppi <= target]
-        if len(valid) > 0:
-            mr_at_fppi.append(valid[-1])
-        else:
-            mr_at_fppi.append(1.0)
-    return float(np.mean(mr_at_fppi))
+    # FPPI is non-decreasing: the last operating point at or below each target
+    # is a binary search instead of 9 boolean scans.
+    index = np.searchsorted(fppi, fppi_targets, side="right") - 1
+    valid = index >= 0
+    sampled = np.ones(fppi_targets.size)
+    sampled[valid] = miss_rate[index[valid]]
+    return float(sampled.mean())
+
+
+def subset_annotations_to_split(
+    annotation_source: str | Path, data_yaml: str | Path, split: str, destination: str | Path
+) -> Path:
+    """Restrict an official COCO JSON to the images of one YOLO split.
+
+    The TinyPerson evaluator refuses partial predictions, so an official JSON
+    covering more images than the split (e.g. the 746-image train JSON against
+    an 84-image validation split) cannot be scored directly. Filtering the
+    annotations is the only way to keep the ignore/uncertain/dense metadata
+    intact on a subset.
+
+    Raises ValueError when any split image has no annotation entry.
+    """
+    from tinydet.utils.dataset import dataset_images
+
+    annotation_source, data_yaml, destination = Path(annotation_source), Path(data_yaml), Path(destination)
+    wanted = {path.name for path in dataset_images(data_yaml, split)}
+    if not wanted:
+        raise ValueError(f"No images for split {split!r} in {data_yaml}")
+    payload = json.loads(annotation_source.read_text())
+    keep_ids = {int(row["id"]) for row in payload["images"] if Path(row["file_name"]).name in wanted}
+    images = [row for row in payload["images"] if int(row["id"]) in keep_ids]
+    annotations = [row for row in payload["annotations"] if int(row["image_id"]) in keep_ids]
+    covered = {Path(row["file_name"]).name for row in images}
+    missing = wanted - covered
+    if missing:
+        raise ValueError(
+            f"{len(missing)} {split} image(s) have no annotation in {annotation_source}; "
+            f"examples={sorted(missing)[:5]}"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps({**payload, "images": images, "annotations": annotations}, indent=2) + "\n"
+    )
+    return destination
 
 
 def _load_gt(path: Path) -> dict[str, Any]:

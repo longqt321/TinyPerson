@@ -8,9 +8,11 @@ import torch
 
 from tinydet.models.registry import build_model
 from tinydet.modules.gauss import configure_gauss_control_param_group
+from tinydet.training.epoch_metrics import register_epoch_metrics, register_size_stratified_metrics
 from tinydet.training.iou_logging import log_ap_by_iou
 from tinydet.training.module_diagnostics import register_p2refine_callbacks
 from tinydet.training.wandb_media import WandbMediaCallback
+from tinydet.utils.atomic import atomic_write_text
 from tinydet.utils.config import load_config
 from tinydet.utils.dataset import resolve_dataset_yaml
 from tinydet.utils.experiment import create_run, metadata, update_status, write_json
@@ -80,6 +82,9 @@ def train(
         )
     config = load_config(config_path)
     effective_dataset_config = resolve_dataset_yaml(dataset_config or config.data["config"])
+    # Official TinyPerson annotations for size-stratified per-epoch metrics.
+    # Absent for other datasets (e.g. VisDrone); the callback then disables itself.
+    val_annotation_source = Path(effective_dataset_config).parent / "annotations" / "tiny_set_train.json"
     if config.model.get("pretrained"):
         pretrained_path = Path(config.model["pretrained"])
         if not pretrained_path.is_file():
@@ -172,6 +177,11 @@ def train(
                     0, partial(log_ap_by_iou, wandb_enabled=bool(project))
                 )
                 register_p2refine_callbacks(model, wandb_enabled=bool(project))
+                register_epoch_metrics(model, wandb_enabled=bool(project))
+                register_size_stratified_metrics(
+                    model, effective_dataset_config, val_annotation_source, split="val",
+                    wandb_enabled=bool(project),
+                )
                 model.callbacks["on_train_start"].insert(0, _log_active_head)
                 model.callbacks["on_pretrain_routine_end"].append(_setup_gauss_optimizer)
                 if on_epoch_end_callback is not None:
@@ -212,7 +222,7 @@ def train(
                     s1_metrics["source"] = "stage1_best"
                     write_json(run / "metrics" / "val_stage1.json", s1_metrics)
 
-                (run / "stage1" / "completed.flag").write_text("done\n")
+                atomic_write_text(run / "stage1" / "completed.flag", "done\n")
                 if on_epoch_end_callback is not None:
                     on_epoch_end_callback()
 
@@ -270,6 +280,11 @@ def train(
                 0, partial(log_ap_by_iou, wandb_enabled=bool(project))
             )
             register_p2refine_callbacks(model, wandb_enabled=bool(project))
+            register_epoch_metrics(model, wandb_enabled=bool(project))
+            register_size_stratified_metrics(
+                model, effective_dataset_config, val_annotation_source, split="val",
+                wandb_enabled=bool(project),
+            )
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(_setup_gauss_optimizer)
             if on_epoch_end_callback is not None:
@@ -316,6 +331,11 @@ def train(
                 0, partial(log_ap_by_iou, wandb_enabled=bool(project))
             )
             register_p2refine_callbacks(model, wandb_enabled=bool(project))
+            register_epoch_metrics(model, wandb_enabled=bool(project))
+            register_size_stratified_metrics(
+                model, effective_dataset_config, val_annotation_source, split="val",
+                wandb_enabled=bool(project),
+            )
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(_setup_gauss_optimizer)
             if on_epoch_end_callback is not None:
@@ -342,7 +362,7 @@ def train(
                 **{**train_args_s1, "plots": bool(project)},
             )
 
-        (run / "training" / "completed.flag").write_text("done\n")
+        atomic_write_text(run / "training" / "completed.flag", "done\n")
         if on_epoch_end_callback is not None:
             on_epoch_end_callback()
 

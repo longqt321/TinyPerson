@@ -17,16 +17,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from tinydet.evaluation.tinyperson_benchmark import (
     IOU_THRESHOLDS,
     MAX_DETECTIONS,
     SIZE_RANGES,
     _ap,
     _in_range,
-    _iod,
-    _iou,
 )
 from tinydet.utils.experiment import git_info
+from tinydet.utils.geometry import best_first_max, best_last_max, iod, iou
 
 SCHEMA_VERSION = 1
 IMPLEMENTATION_VERSION = "tinydet-error-analysis-v1"
@@ -455,30 +456,41 @@ def _match_image(
     outcomes: dict[int, dict[str, Any]] = {}
     for detection in detections:
         same_label = [(index, gt) for index, gt in positives if gt.label == detection.label]
-        overlaps = [_iou(list(detection.box), list(gt.box)) for _, gt in same_label]
-        candidates = [
-            position for position, overlap in enumerate(overlaps)
-            if overlap >= threshold and same_label[position][0] not in matched
-        ]
-        if candidates:
-            best = max(candidates, key=lambda position: overlaps[position])
-            gt_index = same_label[best][0]
+        gt_indices = [index for index, _ in same_label]
+        overlaps = iou(detection.box, [gt.box for _, gt in same_label])
+        if overlaps.size:
+            available = np.array([index not in matched for index in gt_indices], dtype=bool)
+            candidates = np.flatnonzero((overlaps >= threshold) & available)
+        else:
+            candidates = np.empty(0, dtype=np.intp)
+        if candidates.size:
+            best = best_first_max(overlaps, candidates)
+            gt_index = gt_indices[best]
             matched.add(gt_index)
             outcomes[detection.source_index] = {
                 "status": "true_positive",
                 "subtype": "matched",
                 "gt_index": gt_index,
                 "gt_id": ground_truths[gt_index].id,
-                "iou": round(overlaps[best], 6),
+                "iou": round(float(overlaps[best]), 6),
             }
             continue
 
-        outside_overlaps = [(_iou(list(detection.box), list(gt.box)), index)
-                            for index, gt in outside]
-        outside_candidates = [item for item in outside_overlaps
-                              if item[0] >= threshold and item[1] not in matched_outside]
-        if outside_candidates:
-            overlap, gt_index = max(outside_candidates)
+        outside_gt = [index for index, _ in outside]
+        outside_overlaps = iou(detection.box, [gt.box for _, gt in outside])
+        if outside_overlaps.size:
+            available = np.array(
+                [index not in matched_outside for index in outside_gt], dtype=bool
+            )
+            outside_candidates = np.flatnonzero(
+                (outside_overlaps >= threshold) & available
+            )
+        else:
+            outside_candidates = np.empty(0, dtype=np.intp)
+        if outside_candidates.size:
+            best = best_last_max(outside_overlaps, outside_candidates)
+            gt_index = outside_gt[best]
+            overlap = float(outside_overlaps[best])
             matched_outside.add(gt_index)
             outcomes[detection.source_index] = {
                 "status": "neutral",
@@ -489,12 +501,19 @@ def _match_image(
             }
             continue
 
-        ignored_iou = [(index, _iou(list(detection.box), list(gt.box)))
-                       for index, gt in enumerate(ignored)]
-        ignored_candidates = [item for item in ignored_iou
-                              if item[1] >= threshold and item[0] not in matched_ignored]
-        if ignored_candidates:
-            gt_index, overlap = max(ignored_candidates, key=lambda item: item[1])
+        ignored_boxes = [gt.box for gt in ignored]
+        ignored_iou = iou(detection.box, ignored_boxes)
+        if ignored_iou.size:
+            available = np.array(
+                [index not in matched_ignored for index in range(len(ignored))], dtype=bool
+            )
+            ignored_candidates = np.flatnonzero((ignored_iou >= threshold) & available)
+        else:
+            ignored_candidates = np.empty(0, dtype=np.intp)
+        if ignored_candidates.size:
+            best = best_first_max(ignored_iou, ignored_candidates)
+            gt_index = int(best)
+            overlap = float(ignored_iou[best])
             matched_ignored.add(gt_index)
             outcomes[detection.source_index] = {
                 "status": "neutral",
@@ -503,7 +522,8 @@ def _match_image(
                 "iou": round(overlap, 6),
             }
             continue
-        if any(_iod(list(detection.box), list(gt.box)) >= threshold for gt in ignored):
+        neutral_iod = bool(np.any(iod(detection.box, ignored_boxes) >= threshold)) if ignored else False
+        if neutral_iod:
             outcomes[detection.source_index] = {
                 "status": "neutral",
                 "subtype": "ignored_annotation",
@@ -540,11 +560,10 @@ def _match_image(
         if (index, gt) in outside:
             gt_outcomes[index] = {"status": "outside_size_range", "iou": 0.0}
             continue
-        best_iou = max(
-            (_iou(list(detection.box), list(gt.box)) for detection in detections
-             if detection.label == gt.label),
-            default=0.0,
-        )
+        same_label_boxes = [
+            detection.box for detection in detections if detection.label == gt.label
+        ]
+        best_iou = float(iou(gt.box, same_label_boxes).max()) if same_label_boxes else 0.0
         gt_outcomes[index] = {
             "status": "matched" if index in matched else "missed",
             "iou": round(best_iou, 6),

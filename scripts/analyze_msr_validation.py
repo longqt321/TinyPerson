@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw
 from ultralytics import YOLO
 
 from tinydet.models.ultralytics import register_ultralytics_modules
+from tinydet.utils.geometry import iou
 
 register_ultralytics_modules()
 
@@ -40,19 +41,10 @@ def read_labels(path: Path, width: int, height: int) -> list[list[float]]:
 
 
 def iou_matrix(predictions: list[dict], targets: list[list[float]]) -> list[list[float]]:
-    matrix = []
-    for prediction in predictions:
-        px1, py1, px2, py2 = prediction["box"]
-        row = []
-        for gx1, gy1, gx2, gy2 in targets:
-            ix1, iy1 = max(px1, gx1), max(py1, gy1)
-            ix2, iy2 = min(px2, gx2), min(py2, gy2)
-            intersection = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-            p_area = max(0, px2 - px1) * max(0, py2 - py1)
-            g_area = max(0, gx2 - gx1) * max(0, gy2 - gy1)
-            row.append(intersection / (p_area + g_area - intersection + 1e-9))
-        matrix.append(row)
-    return matrix
+    """IoU of every prediction against every target box (vectorised per row)."""
+    if not targets:
+        return [[] for _ in predictions]
+    return [iou(prediction["box"], targets).tolist() for prediction in predictions]
 
 
 def size_bin(box: list[float], width: int, height: int, imgsz: int) -> tuple[str, float]:

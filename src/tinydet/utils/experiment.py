@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 import yaml
 
+from tinydet.utils.atomic import atomic_write_text
 from tinydet.utils.config import ExperimentConfig
 
 
@@ -23,8 +24,7 @@ def git_info() -> tuple[str, bool]:
 
 
 def write_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, default=str) + "\n")
+    atomic_write_text(path, json.dumps(value, indent=2, default=str) + "\n")
 
 
 def metadata(run: Path) -> dict:
