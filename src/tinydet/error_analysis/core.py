@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 
+from tinydet.error_analysis.baseline_summary import load_baseline_summaries
 from tinydet.evaluation.tinyperson_benchmark import (
     IOU_THRESHOLDS,
     MAX_DETECTIONS,
@@ -700,26 +701,24 @@ def _compare_samples(
     current: list[dict[str, Any]], baseline_path: str | Path,
     dataset_key: dict[str, Any],
 ) -> dict[str, Any]:
-    baseline = [json.loads(line) for line in
-                Path(baseline_path).read_text().splitlines() if line.strip()]
-    baseline_by_image = {record["image"]["basename"]: record for record in baseline}
+    keys_uniform, baseline_key, baseline_by_image = load_baseline_summaries(baseline_path)
     current_by_image = {record["image"]["basename"]: record for record in current}
-    if not all(record.get("dataset_key") == dataset_key for record in baseline):
+    if not keys_uniform or baseline_key != dataset_key:
         return {"available": False, "reason": "baseline dataset provenance differs"}
     shared = sorted(set(current_by_image) & set(baseline_by_image))
     corrected, regressed = [], []
     deltas = Counter()
     for basename in shared:
-        before = baseline_by_image[basename]["summary"]
+        misses_before, fps_before = baseline_by_image[basename]
         after = current_by_image[basename]["summary"]
-        error_before = before["misses"] + before["false_positives"]
+        error_before = misses_before + fps_before
         error_after = after["misses"] + after["false_positives"]
         if error_before > 0 and error_after == 0:
             corrected.append(basename)
         if error_before == 0 and error_after > 0:
             regressed.append(basename)
-        deltas["misses"] += after["misses"] - before["misses"]
-        deltas["false_positives"] += after["false_positives"] - before["false_positives"]
+        deltas["misses"] += after["misses"] - misses_before
+        deltas["false_positives"] += after["false_positives"] - fps_before
     return {
         "available": True,
         "baseline_samples": str(Path(baseline_path).resolve()),

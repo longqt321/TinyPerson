@@ -87,3 +87,13 @@ Bài học rút ra từ lỗi đã xảy ra. Mỗi mục có mã `L-###` để t
   `import` mọi dependency bên trong thân hàm hoặc ở module-level của module đó, (c) nhận/trả
   chỉ các kiểu shareable (str/bytes/int/float/tuple của các kiểu này) — dict/list lớn sẽ bị
   pickle qua lại và ăn mất toàn bộ lợi thế song song (đo thấy 2.76x → 0.99x khi trả full dict).
+- **Bổ sung 2026-11-09 (cơ chế chính xác):** hàm worker được chia sẻ **by value** (code object),
+  KHÔNG re-import module. Hệ quả: **mọi tham chiếu tới tên module-level — kể cả một hằng số
+  `int` — đều gây `NotShareableError: args not shareable`**. Đã kiểm chứng bằng 3 biến thể:
+  hàm chỉ dùng tham số → OK; hàm đọc `GLOBAL_NP`/`CHUNK_LINES` → fail; hàm `import numpy`
+  trong thân → `ImportError` (numpy không load được trong subinterpreter). Vì vậy worker phải
+  **hoàn toàn tự thân**: chỉ biến local + import stdlib bên trong thân hàm. Xem
+  `src/tinydet/error_analysis/baseline_summary.py` làm mẫu.
+- **Bổ sung 2026-11-09 (chia chunk):** với file JSONL có dòng rất lớn (`samples.jsonl`:
+  786 dòng × ~59 KB), chia theo **số dòng** sẽ tạo 1 chunk duy nhất và mất hoàn toàn song song
+  (đo được chỉ 1.5x thay vì 3.9x). Phải chia theo **byte** rồi nới tới ranh giới dòng.

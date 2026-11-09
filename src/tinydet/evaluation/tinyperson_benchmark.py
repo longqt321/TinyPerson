@@ -36,9 +36,7 @@ import numpy as np
 from tinydet.utils.geometry import (
     best_first_max,
     iod_matrix,
-    iod_scalar,
     iou_matrix,
-    iou_scalar,
 )
 
 IOU_THRESHOLDS = (0.25, 0.50, 0.75)
@@ -220,12 +218,6 @@ def _in_range(box: list[float], size_spec: tuple[float, float, bool, bool]) -> b
     left_ok = (size >= low) if left_closed else (size > low)
     right_ok = (size <= high) if right_closed else (size < high)
     return left_ok and right_ok
-
-
-# Kept as module-level aliases: error analysis and report scripts import these
-# names. The matching loops use the vectorised `iou`/`iod` helpers instead.
-_iou = iou_scalar
-_iod = iod_scalar
 
 
 def _ap(tp: list[int], fp: list[int], positive_count: int) -> float | None:

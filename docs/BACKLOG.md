@@ -323,6 +323,16 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
     `samples.jsonl` (45 MB) để lấy summary theo image — đúng dạng aggregate, tiết kiệm ~0.6 s
     mỗi lần chạy error analysis. Chưa làm vì lợi ích tuyệt đối nhỏ so với tổng thời gian script
     và cần thêm một nhánh code song song; xem lại nếu error analysis chạy thường xuyên.
+- **Trạng thái: ĐÃ LÀM (2026-11-09).** Tạo `src/tinydet/error_analysis/baseline_summary.py`
+  (stdlib-only) với worker `summarize_chunk` + driver `load_baseline_summaries`;
+  `_compare_samples` giờ dùng nó. Thiết kế: chia theo **byte** (1 MB, cắt tại ranh giới dòng —
+  `samples.jsonl` chỉ có 786 dòng × ~59 KB nên chia theo số dòng sẽ thành 1 chunk), ngưỡng
+  5 MB, 4 workers, worker tự aggregate và chỉ trả `{basename: (misses, fps)}`.
+  Đo trên dữ liệu thật (46.5 MB, 786 dòng): old 762 ms → new 200–254 ms, **3.0–4.0x**,
+  output `equal=True` với implementation cũ, provenance mismatch vẫn detect đúng.
+  Phát hiện thêm (L-007): worker bị chia sẻ by value — **mọi tham chiếu global, kể cả hằng số
+  module-level, đều gây `NotShareableError`**; worker phải chỉ dùng biến local + import bên
+  trong thân hàm.
 
 
 ## BL-026: `compression.zstd` cho artifact lớn (prediction JSONL / eval dump)
