@@ -307,6 +307,23 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
   numpy/PIL/torch, không thể thay `ProcessPoolExecutor(fork)` bằng interpreter pool.
 - **Đề xuất:** giữ nguyên fork-based `ProcessPoolExecutor` trong evaluator (đã đo 3.36x ở 84
   ảnh). Chỉ xem lại khi numpy công bố hỗ trợ subinterpreter; khi đó benchmark lại trước khi đổi.
+- **Cập nhật 2026-11-09 (đào sâu):** đã xác định được **một pattern dùng được**: parse JSONL
+  song song khi worker tự aggregate và chỉ trả kết quả nhỏ. Đo trên file thật
+  `outputs/error_analysis/tiny_A2_p2-test/errors.jsonl` (56.5 MB, 140k dòng):
+  - sequential full parse: 844 ms
+  - interpreter(4) parse + aggregate trong worker (trả `Counter` nhỏ): **303 ms (2.79x)**
+  - interpreter(4) parse rồi trả full list dict về main: **803 ms (0.99x — mất hết lợi thế)**
+  - interpreter(4) chỉ parse, trả `int`: 287 ms (2.76x)
+  - payload 0.83 MB (84 ảnh × 200 dets, mức per-epoch): 51 ms vs 23 ms → **chậm gấp 2.2x**
+  - ngưỡng có lợi: ~5 MB (1.42x), 15 MB (1.97x), 25 MB (2.38x)
+  - Module load được trong subinterpreter: json, csv, re, hashlib, zlib, lzma, sqlite3, pickle,
+    decimal, yaml, **polars**. Không load được: numpy, scipy, sklearn, matplotlib, seaborn, cv2,
+    torch, PIL.
+  - Ứng viên trong repo: `_compare_samples` (`src/tinydet/error_analysis/core.py:703`) parse
+    `samples.jsonl` (45 MB) để lấy summary theo image — đúng dạng aggregate, tiết kiệm ~0.6 s
+    mỗi lần chạy error analysis. Chưa làm vì lợi ích tuyệt đối nhỏ so với tổng thời gian script
+    và cần thêm một nhánh code song song; xem lại nếu error analysis chạy thường xuyên.
+
 
 ## BL-026: `compression.zstd` cho artifact lớn (prediction JSONL / eval dump)
 

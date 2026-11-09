@@ -70,3 +70,20 @@ Bài học rút ra từ lỗi đã xảy ra. Mỗi mục có mã `L-###` để t
   `if self._original_update_metrics is not None: return` (đã áp dụng cho
   `SizeStratifiedValCallback` và `WandbMediaCallback`; `SystemMetricsCallback` đã có guard tương
   tự qua `_system_metrics_grad_hook`).
+
+## L-007: Worker của `InterpreterPoolExecutor` phải là hàm module-level và tự import dependency
+
+- **Ngày:** 2026-11-09 (khi đánh giá Python 3.14 features).
+- **Bối cảnh:** viết benchmark cho `InterpreterPoolExecutor` (3.14). Ba lỗi gặp phải lần lượt:
+  (1) worker là closure bên trong hàm → `NotShareableError: <function> does not support
+  cross-interpreter data`; (2) worker định nghĩa qua `python -c` cũng fail tương tự; (3) worker
+  module-level nhưng dùng `json` import ở đầu file `__main__` → `NameError: name 'json' is not
+  defined` trong subinterpreter.
+- **Nguyên nhân:** subinterpreter khởi động với `__main__` rỗng — không kế thừa import của
+  tiến trình cha; hàm được truyền bằng tham chiếu `(module, qualname)` nên phải nằm ở
+  module-level của một module import được.
+- **Quy tắc:** worker của `InterpreterPoolExecutor` phải (a) là hàm module-level trong một
+  module import được (không phải `__main__`, không phải closure/lambda), (b) tự
+  `import` mọi dependency bên trong thân hàm hoặc ở module-level của module đó, (c) nhận/trả
+  chỉ các kiểu shareable (str/bytes/int/float/tuple của các kiểu này) — dict/list lớn sẽ bị
+  pickle qua lại và ăn mất toàn bộ lợi thế song song (đo thấy 2.76x → 0.99x khi trả full dict).
