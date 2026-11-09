@@ -1,137 +1,97 @@
 import json
 import sys
-import uuid
-from dataclasses import asdict
 from pathlib import Path
 
-import yaml
-
-sys.path.insert(0, str(Path("modal").resolve()))
-import app as modal_app_module
-
-from tinydet.utils.config import load_config
-from tinydet.utils.experiment import git_info
+sys.path.insert(0, str(Path(__file__).parent.resolve() / "modal"))
+import app as modal_app_module  # modal/ is not a package; path added above
 
 app = modal_app_module.app
 
+CONFIGS = [
+    "configs/experiment/baseline_tinyperson_wacv.yaml",
+    "configs/experiment/gauss_v3_tinyperson_wacv.yaml",
+]
+
 
 @app.local_entrypoint()
-def main():
-    configs = [
-        "configs/experiment/baseline_tinyperson_wacv.yaml",
-        "configs/experiment/gauss_v3_tinyperson_wacv.yaml",
-    ]
+def main(detach: bool = True, wait: bool = False):
+    """Launch the 60-epoch campaign detached by default.
 
-    print("=" * 70, flush=True)
-    print("PHASE 1: STARTING 60-EPOCH FAST PARALLEL TRAINING ON MODAL (NVIDIA A10)", flush=True)
-    print("Run 1: Baseline YOLO26n-P2 (60 epochs, fast-decay, tal_beta=4.0, floor=0.5)", flush=True)
-    print("Run 2: GauSS v3.1 YOLO26n-P2 (60 epochs, hybrid-routing, tal_beta=4.0, floor=0.5)", flush=True)
-    print("=" * 70, flush=True)
+    The whole chain (audit -> parallel training -> finalize -> tiled + full
+    eval) runs INSIDE Modal via `_orchestrate_60e`, so a dropped local
+    connection cannot kill training. Checkpoints, metrics and logs are
+    committed to the runs Volume every epoch by `_train`.
 
-    # 1. Preflight audit
-    exp0 = load_config(configs[0])
-    audit = modal_app_module._audit_original_dataset.remote(
-        str(exp0.data["config"]), int(exp0.train["imgsz"]), uuid.uuid4().hex[:12]
-    )
-    if not audit["passed"]:
-        raise ValueError("Dataset audit failed!")
+    IMPORTANT: run with the `-d` flag so the app survives the local process
+    exiting:
+
+        modal run -d launch_train_and_eval_60e.py
+
+    Then monitor with:
+        modal app logs <app-id>
+    and fetch results with:
+        modal run launch_train_and_eval_60e.py::fetch
+    """
+    from tinydet.utils.experiment import git_info
 
     commit, dirty = git_info()
+    if dirty:
+        print("[WARN] Working tree is dirty; commit/dirty will be recorded in run metadata.", flush=True)
 
-    # 2. Spawn parallel training runs
-    train_handles = []
-    for cfg_path in configs:
-        exp = load_config(cfg_path)
-        exp.data["preflight_signature"] = audit["dataset_signature_metadata_sha256"]
-        config_text = yaml.safe_dump(asdict(exp), sort_keys=False)
-        gpu = exp.hardware.get("gpu", "A10")
-        options = {"gpu": gpu}
-        if exp.output.get("wandb_project"):
-            options["secrets"] = [modal_app_module.wandb_secret]
+    if detach and not wait:
+        handle = modal_app_module._orchestrate_60e.spawn(CONFIGS, commit, dirty)
+        print("=" * 70, flush=True)
+        print("DETACHED LAUNCH — the campaign now runs inside Modal.", flush=True)
+        print(f"  Call ID : {handle.object_id}", flush=True)
+        print("  Monitor : modal app logs   (app id shown above / `modal app list`)", flush=True)
+        print("  Fetch   : modal run launch_train_and_eval_60e.py::fetch", flush=True)
+        print("  NOTE    : this run used `modal run -d`; without -d the app stops", flush=True)
+        print("            when this local process exits.", flush=True)
+        print("=" * 70, flush=True)
+        return
 
-        print(f"--> Spawning 60e training for: {cfg_path}...", flush=True)
-        handle = modal_app_module._train.with_options(**options).spawn(
-            cfg_path, commit, dirty, config_text=config_text, dataset_audit=audit
-        )
-        train_handles.append((cfg_path, handle))
+    # Attached mode: still executes remotely; a local drop only loses the
+    # final printout, never the training itself.
+    summary = modal_app_module._orchestrate_60e.remote(CONFIGS, commit, dirty)
+    print(json.dumps(summary, indent=2), flush=True)
 
-    # 3. Wait for training to complete and finalize pipelines
-    print("\nWaiting for all 60-epoch training jobs to finish...", flush=True)
-    run_paths = {}
-    for cfg_path, handle in train_handles:
-        run_full_path = handle.get()
-        print(f"[TRAIN COMPLETED] {cfg_path} -> {run_full_path}", flush=True)
-        rel_run = str(Path(run_full_path).relative_to(modal_app_module.RUN_ROOT))
-        modal_app_module._finalize_pipeline(rel_run)
-        run_paths[cfg_path] = rel_run
 
-    b_run = run_paths[configs[0]]
-    g_run = run_paths[configs[1]]
+@app.local_entrypoint()
+def fetch():
+    """Copy eval summaries + orchestration summary from the runs Volume to reports/.
 
-    # Prioritize best checkpoint if available, fallback to last.pt
-    b_ckpt = f"{b_run}/training/weights/best.pt"
-    g_ckpt = f"{g_run}/training/weights/best.pt"
+    Uses the Modal Volume API (listdir/read_file): `/mnt/runs` only exists
+    inside containers, never on the local machine.
+    """
+    runs_volume = modal_app_module.runs
+    runs_volume.reload()
 
-    print("\n" + "=" * 70, flush=True)
-    print("PHASE 2: RUNNING STANDARDIZED TILED EVALUATION (640x512, TOV PROTOCOL)", flush=True)
-    print("=" * 70, flush=True)
+    def pull(volume_path: str, target: Path) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("wb") as file:
+            runs_volume.read_file_into_fileobj(volume_path, file)
+        print(f"[SAVED] {target}", flush=True)
 
-    tiled_targets = [
-        ("baseline_tinyperson_60e_tiled", b_ckpt),
-        ("gauss_v3_1_tinyperson_60e_tiled", g_ckpt),
-    ]
+    copied = 0
+    try:
+        eval_entries = runs_volume.listdir("/eval")
+    except Exception:  # noqa: BLE001 - /eval does not exist before the first eval
+        eval_entries = []
+    for entry in eval_entries:
+        if entry.type.name != "DIRECTORY":
+            continue
+        children = {child.name for child in runs_volume.listdir(entry.path)}
+        if "summary.json" in children:
+            pull(f"{entry.path}/summary.json", Path("reports/eval") / f"{entry.name}.json")
+            copied += 1
+    print(f"Copied {copied} eval summary file(s) to reports/eval/", flush=True)
 
-    tiled_handles = []
-    for name, ckpt in tiled_targets:
-        print(f"--> Spawning tiled evaluation for {name} ({ckpt})...", flush=True)
-        handle = modal_app_module._run_tiled_checkpoint_evaluation.spawn(
-            relative_checkpoint=ckpt,
-            name=name,
-        )
-        tiled_handles.append((name, handle))
-
-    tiled_results = {}
-    for name, handle in tiled_handles:
-        res = handle.get()
-        tiled_results[name] = res
-        output_file = Path("reports/eval") / f"{name}.json"
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(json.dumps(res, indent=2) + "\n")
-        print(f"[EVAL DONE] Finished tiled evaluation for {name}:", flush=True)
-        print(json.dumps(res.get("summary", res), indent=2), flush=True)
-
-    print("\n" + "=" * 70, flush=True)
-    print("PHASE 3: RUNNING FULL-FRAME TEST EVALUATION (1280px)", flush=True)
-    print("=" * 70, flush=True)
-
-    full_targets = [
-        ("baseline_tinyperson_60e_full", b_ckpt),
-        ("gauss_v3_1_tinyperson_60e_full", g_ckpt),
-    ]
-
-    full_handles = []
-    for name, ckpt in full_targets:
-        print(f"--> Spawning full-frame evaluation for {name} ({ckpt})...", flush=True)
-        handle = modal_app_module._run_checkpoint_evaluation.spawn(
-            relative_checkpoint=ckpt,
-            name=name,
-            split="test",
-        )
-        full_handles.append((name, handle))
-
-    full_results = {}
-    for name, handle in full_handles:
-        res = handle.get()
-        full_results[name] = res
-        output_file = Path("reports/eval") / f"{name}.json"
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(json.dumps(res, indent=2) + "\n")
-        print(f"[EVAL DONE] Finished full-frame evaluation for {name}:", flush=True)
-        print(json.dumps(res.get("summary", res), indent=2), flush=True)
-
-    print("\n" + "=" * 70, flush=True)
-    print("ALL 60-EPOCH RUNS AND EVALUATIONS COMPLETE!", flush=True)
-    print("=" * 70, flush=True)
+    try:
+        orch_entries = [f for f in runs_volume.listdir("/orchestration") if f.name.startswith("summary-")]
+    except Exception:  # noqa: BLE001 - no orchestration summary yet
+        orch_entries = []
+    for entry in sorted(orch_entries, key=lambda f: f.name):
+        pull(entry.path, Path("reports/orchestration") / entry.name)
 
 
 if __name__ == "__main__":

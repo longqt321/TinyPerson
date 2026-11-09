@@ -21,8 +21,24 @@ models = modal.Volume.from_name("tiny-person-models", create_if_missing=True)
 runs = modal.Volume.from_name("tiny-person-runs", create_if_missing=True)
 wandb_secret = modal.Secret.from_name("wandb-secret", required_keys=["WANDB_API_KEY"])
 mounts = {str(DATA_ROOT): data, str(MODEL_ROOT): models, str(RUN_ROOT): runs}
+# GPU containers (training + evaluation): data loading and augmentation are
+# CPU/RAM heavy, so keep a generous request with a capped ceiling.
 CPU_LIMIT = (4.0, 8.0)
 MEMORY_LIMIT_MB = (12288, 24576)
+# CPU-only orchestration/plumbing containers (finalize, preflight, W&B tagging,
+# report assembly, the 60e orchestrator). They only copy files and await
+# handles, so 1 CPU / 1 GB is enough; the ceiling absorbs a transient spike.
+LIGHT_CPU = (1.0, 2.0)
+LIGHT_MEMORY_MB = (1024, 2048)
+# Dataset audit decodes every image with 24 worker threads, so it needs real
+# CPU but far less RAM than the training containers.
+AUDIT_CPU = (4.0, 8.0)
+AUDIT_MEMORY_MB = (8192, 16384)
+# CPU-side post-processing that loads a predictions artifact and computes AP
+# (finalize_predictions). Single-threaded numpy, but the artifact can hold
+# every val/test prediction, so keep a little headroom.
+POSTPROCESS_CPU = (2.0, 4.0)
+POSTPROCESS_MEMORY_MB = (4096, 8192)
 
 
 def _dataset_yaml_path(path: str | Path) -> Path:
@@ -64,7 +80,7 @@ def copytree_concurrent(src: Path, dst: Path, max_workers: int = 24) -> None:
 
 
 
-@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
+@app.function(image=image, cpu=AUDIT_CPU, memory=AUDIT_MEMORY_MB, max_containers=1,
               volumes=mounts, timeout=1800)
 def _audit_original_dataset(dataset_yaml: str, imgsz: int, audit_id: str):
     """Audit stored image pixels and paired labels before any YOLO preprocessing."""
@@ -203,7 +219,7 @@ def _train(
     return str(run)
 
 
-@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, scaledown_window=2, volumes={str(RUN_ROOT): runs}, timeout=1800)
+@app.function(image=image, cpu=LIGHT_CPU, memory=LIGHT_MEMORY_MB, max_containers=4, scaledown_window=2, volumes={str(RUN_ROOT): runs}, timeout=1800)
 def _finalize(run: str):
     from tinydet.training.finalize import finalize
     from tinydet.utils.experiment import resolve_run
@@ -220,6 +236,174 @@ def _finalize_pipeline(run: str):
     project = _finalize.remote(run)
     if project:
         _organize_wandb.remote(project)
+
+
+def _collect(handle_map: dict, label: str) -> dict:
+    """Drain a {key: handle} map, isolating failures per entry.
+
+    Returns {key: result-or-None}. A failed entry is reported and skipped;
+    it never aborts the remaining entries.
+    """
+    results = {}
+    for key, handle in handle_map.items():
+        try:
+            results[key] = handle.get()
+            print(f"[OK] {label} finished for {key}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - isolate per-run failures
+            results[key] = None
+            print(f"[FAILED] {label} for {key}: {exc}", flush=True)
+    return results
+
+
+@app.function(
+    image=image,
+    cpu=LIGHT_CPU,
+    memory=LIGHT_MEMORY_MB,
+    max_containers=1,
+    volumes=mounts,
+    timeout=43200,
+    secrets=[wandb_secret],
+)
+def _orchestrate_60e(configs: list[str], commit: str, dirty: bool):
+    """Detached orchestrator: the full train -> finalize -> eval chain runs
+    inside Modal, so a dropped local connection cannot kill the campaign.
+
+    Each phase isolates failures per run (see `_collect`); the summary is
+    persisted to the runs Volume at `orchestration/summary-<ts>.json` and also
+    returned to the caller.
+    """
+    from dataclasses import asdict
+
+    from tinydet.utils.config import load_config
+
+    print("=" * 70, flush=True)
+    print("ORCHESTRATOR: 60-EPOCH PARALLEL TRAINING + EVALUATION (NVIDIA A10)", flush=True)
+    print(f"Configs: {configs}", flush=True)
+    print("=" * 70, flush=True)
+
+    # 1. Preflight audit (shared gate: both configs use the same dataset).
+    #    A bad dataset invalidates both runs, so `passed=False` aborts here;
+    #    transient container errors are retried once instead of killing the chain.
+    exp0 = load_config(configs[0])
+    audit = None
+    for attempt in (1, 2):
+        try:
+            audit = _audit_original_dataset.remote(
+                str(exp0.data["config"]), int(exp0.train["imgsz"]), uuid.uuid4().hex[:12]
+            )
+            break
+        except Exception as exc:  # noqa: BLE001 - retry transient audit failure
+            print(f"[WARN] Preflight audit attempt {attempt} failed: {exc}", flush=True)
+    if audit is None:
+        raise RuntimeError("Preflight audit could not run (transient failure after retry).")
+    if not audit["passed"]:
+        raise ValueError("Dataset audit failed!")
+
+    # 2. One independent container per run. A spawn failure is recorded and
+    #    must not prevent the other run from being spawned.
+    train_handles = {}
+    failed_spawn: dict[str, str] = {}
+    for cfg_path in configs:
+        exp = load_config(cfg_path)
+        exp.data["preflight_signature"] = audit["dataset_signature_metadata_sha256"]
+        config_text = yaml.safe_dump(asdict(exp), sort_keys=False)
+        gpu = exp.hardware.get("gpu", "A10")
+        options = {"gpu": gpu}
+        if exp.output.get("wandb_project"):
+            options["secrets"] = [wandb_secret]
+        print(f"--> Spawning 60e training for: {cfg_path}...", flush=True)
+        try:
+            handle = _train.with_options(**options).spawn(
+                cfg_path, commit, dirty, config_text=config_text, dataset_audit=audit
+            )
+            train_handles[cfg_path] = handle
+        except Exception as exc:  # noqa: BLE001 - isolate per-run failures
+            failed_spawn[cfg_path] = str(exc)
+            print(f"[FAILED] TRAIN spawn for {cfg_path}: {exc}", flush=True)
+
+    train_results = _collect(train_handles, "TRAIN")
+    for cfg_path in failed_spawn:
+        train_results[cfg_path] = None
+
+    # 3. Finalize each successful run independently.
+    run_paths = {}
+    failed_finalize = []
+    failed_evals = []
+    for cfg_path, run_full_path in train_results.items():
+        if run_full_path is None:
+            continue
+        try:
+            rel_run = str(Path(run_full_path).relative_to(RUN_ROOT))
+            _finalize_pipeline(rel_run)
+            run_paths[cfg_path] = rel_run
+            print(f"[OK] FINALIZE finished for {rel_run}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - isolate per-run failures
+            failed_finalize.append(Path(cfg_path).stem)
+            print(f"[FAILED] FINALIZE for {run_full_path}: {exc}", flush=True)
+
+    # 4. Tiled evaluation (640x512) per finalized run.
+    tiled_handles = {}
+    for rel_run in run_paths.values():
+        run_name = rel_run.split("/")[0]
+        name = f"{run_name}_60e_tiled"
+        ckpt = f"{rel_run}/training/weights/best.pt"
+        print(f"--> Spawning tiled evaluation for {name} ({ckpt})...", flush=True)
+        try:
+            tiled_handles[name] = _run_tiled_checkpoint_evaluation.spawn(
+                relative_checkpoint=ckpt, name=name
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate per-run failures
+            failed_evals.append(name)
+            print(f"[FAILED] TILED EVAL spawn for {name}: {exc}", flush=True)
+    tiled_results = _collect(tiled_handles, "TILED EVAL")
+
+    # 5. Full-frame test evaluation (1280px) per finalized run.
+    full_handles = {}
+    for rel_run in run_paths.values():
+        run_name = rel_run.split("/")[0]
+        name = f"{run_name}_60e_full"
+        ckpt = f"{rel_run}/training/weights/best.pt"
+        print(f"--> Spawning full-frame evaluation for {name} ({ckpt})...", flush=True)
+        try:
+            full_handles[name] = _run_checkpoint_evaluation.spawn(
+                relative_checkpoint=ckpt, name=name, split="test"
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate per-run failures
+            failed_evals.append(name)
+            print(f"[FAILED] FULL EVAL spawn for {name}: {exc}", flush=True)
+    full_results = _collect(full_handles, "FULL EVAL")
+
+    # 6. Persist the summary on the Volume so it survives local disconnects.
+    succeeded = [Path(c).stem for c, r in train_results.items() if r is not None]
+    failed = [Path(c).stem for c, r in train_results.items() if r is None]
+    summary = {
+        "configs": configs,
+        "commit": commit,
+        "dirty": dirty,
+        "trained_ok": succeeded,
+        "train_failed": failed,
+        "finalize_failed": failed_finalize,
+        "eval_failed": failed_evals,
+        "tiled_eval": {k: (v or {}).get("summary") for k, v in tiled_results.items() if v},
+        "full_eval": {k: (v or {}).get("summary") for k, v in full_results.items() if v},
+        "finished_at": datetime.now(UTC).isoformat(),
+    }
+    summary_path = RUN_ROOT / "orchestration" / f"summary-{datetime.now(UTC):%Y%m%d-%H%M%S}.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+    runs.commit()
+    print("=" * 70, flush=True)
+    print(f"SUMMARY saved to volume: {summary_path}", flush=True)
+    print(f"  Trained OK : {', '.join(succeeded) if succeeded else '(none)'}", flush=True)
+    print(f"  Failed     : {', '.join(failed) if failed else '(none)'}", flush=True)
+    if failed_finalize:
+        print(f"  Finalize failed: {', '.join(failed_finalize)}", flush=True)
+    if failed_evals:
+        print(f"  Eval failed    : {', '.join(failed_evals)}", flush=True)
+    print("=" * 70, flush=True)
+    if failed:
+        raise RuntimeError(f"{len(failed)} training run(s) failed: {', '.join(failed)}")
+    return summary
 
 
 @app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=3600)
@@ -519,8 +703,8 @@ def _run_comparison_workflow(
 
 @app.function(
     image=image,
-    cpu=CPU_LIMIT,
-    memory=MEMORY_LIMIT_MB,
+    cpu=LIGHT_CPU,
+    memory=LIGHT_MEMORY_MB,
     timeout=86400,
     volumes=mounts,
     secrets=[wandb_secret],
@@ -753,7 +937,7 @@ def organize_wandb(project: str = "hoangngan/tiny-person-research"):
     print(_organize_wandb.remote(project))
 
 
-@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
+@app.function(image=image, cpu=POSTPROCESS_CPU, memory=POSTPROCESS_MEMORY_MB, max_containers=1,
               scaledown_window=2, volumes=mounts, timeout=3600)
 def _finish_evaluation(run: str, artifact: str, split: str):
     from tinydet.evaluation.evaluator import finalize_predictions
@@ -766,7 +950,7 @@ def _finish_evaluation(run: str, artifact: str, split: str):
     return result
 
 
-@app.function(image=image, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=1,
+@app.function(image=image, cpu=LIGHT_CPU, memory=LIGHT_MEMORY_MB, max_containers=1,
               scaledown_window=2, volumes=mounts, timeout=600)
 def _preflight(run: str, split: str = "", image_path: str = "", reuse_training: bool = False):
     import json
@@ -928,33 +1112,10 @@ def generate_comparison_report():
 def _subset_annotations(
     annotation_source: Path, data_yaml: Path, split: str, destination: Path
 ) -> Path:
-    """Restrict an official COCO JSON to the images of one YOLO split.
+    """Thin wrapper around the shared split-subsetting helper."""
+    from tinydet.evaluation.tinyperson_benchmark import subset_annotations_to_split
 
-    The repository's TinyPerson evaluator refuses partial predictions, so the
-    official train JSON (746 images) cannot be scored against a 84-image
-    validation split directly. Filtering the annotations is the only way to keep
-    the ignore/uncertain/dense metadata intact on a subset.
-    """
-    from tinydet.utils.dataset import dataset_images
-
-    wanted = {path.name for path in dataset_images(data_yaml, split)}
-    if not wanted:
-        raise ValueError(f"No images for split {split!r} in {data_yaml}")
-    payload = json.loads(annotation_source.read_text())
-    keep_ids = {int(row["id"]) for row in payload["images"] if Path(row["file_name"]).name in wanted}
-    images = [row for row in payload["images"] if int(row["id"]) in keep_ids]
-    annotations = [row for row in payload["annotations"] if int(row["image_id"]) in keep_ids]
-    covered = {Path(row["file_name"]).name for row in images}
-    missing = wanted - covered
-    if missing:
-        raise ValueError(
-            f"{len(missing)} {split} image(s) have no annotation in {annotation_source}; "
-            f"examples={sorted(missing)[:5]}"
-        )
-    destination.write_text(
-        json.dumps({**payload, "images": images, "annotations": annotations}, indent=2) + "\n"
-    )
-    return destination
+    return subset_annotations_to_split(annotation_source, data_yaml, split, destination)
 
 
 @app.function(
