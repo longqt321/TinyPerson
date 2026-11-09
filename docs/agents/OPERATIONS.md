@@ -65,9 +65,9 @@ of a training container while it waits on handles or copies files.
 `train.py` is the environment-agnostic entry point. It resolves every path to an
 absolute path, so the working directory does not matter.
 
-The project is managed with `uv`. `uv sync --extra gpu` provisions a Python 3.12
-environment and installs the CUDA build of torch pinned in `uv.lock`
-(`torch==2.11.0+cu128`), matching the Modal image. Do not `pip install` torch
+The project is managed with `uv`. `uv sync --extra gpu` provisions a Python 3.14
+environment and installs the CUDA build of torch pinned in `uv.lock`,
+matching the Modal image. Do not `pip install` torch
 separately: a CPU wheel would shadow the CUDA one.
 
 ```bash

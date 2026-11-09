@@ -8,7 +8,7 @@ import modal
 # skews three minors behind the local CPU environment (torch 2.14.0).
 # A10 = Ampere (sm_86); CUDA 13 only dropped Maxwell/Pascal/Volta.
 base_image = (
-    modal.Image.debian_slim(python_version="3.12").apt_install("libgl1", "libglib2.0-0")
+    modal.Image.debian_slim(python_version="3.14").apt_install("libgl1", "libglib2.0-0")
     .uv_pip_install("torch>=2.15,<3", "torchvision>=0.29,<1", index_url="https://download.pytorch.org/whl/cu132")
     .uv_pip_install(
         "ultralytics==8.4.208", "numpy>=2.5,<3", "pandas>=3.1,<4", "PyYAML>=6,<7",

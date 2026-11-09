@@ -4,7 +4,7 @@ This is a research codebase for tiny-person detection with YOLO26n on TinyPerson
 testing P2 features and the GauSS module (Gaussian Scale-Space Alignment and
 Refinement), implemented in `src/tinydet/modules/gauss.py`.
 
-Use `uv` with Python 3.12. Local work is CPU-only; full training and benchmark
+Use `uv` with Python 3.14. Local work is CPU-only; full training and benchmark
 require a Modal NVIDIA A10 or L4.
 
 ```bash

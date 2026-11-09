@@ -30,7 +30,7 @@ and the model list for comparisons.
   abstractions for speculative needs.
 - Keep metric names, split names, and W&B namespaces stable unless the task
   explicitly changes them.
-- Follow `ruff`, line length 100, Python 3.12.
+- Follow `ruff`, line length 100, Python 3.14.
 - Do not guess Ultralytics APIs; check the installed source or existing usage.
 
 ## Verification

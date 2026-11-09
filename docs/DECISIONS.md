@@ -299,3 +299,33 @@
   exif PASS; mypy 2.4.1 trên 3 module mới sạch; `modal profile current` OK.
 - **Chưa xác minh**: chưa build/run image Modal mới thật (cần `modal run` thật); chưa train
   trên torch 2.15 GPU (AMP/BN hành vi có thể khác nhẹ — theo dõi epoch đầu).
+
+## ADR-017: Nâng Python 3.12 → 3.14 (local + Modal image) (2026-11-09)
+
+- **Bối cảnh**: `requires-python = ">=3.12,<3.13"` và `debian_slim(python_version="3.12")`
+  ghim cứng 3.12, trong khi máy local đã có CPython 3.14.9 mặc định. Yêu cầu: dùng bản mới nhất
+  mà không xung đột package.
+- **Kiểm chứng trước khi đổi** (uv resolver thật, không suy đoán):
+  - 3.13 và 3.14 đều resolve sạch: `torch 2.15.0+cu132 + torchvision 0.29.2+cu132` (GPU),
+    `torch 2.15.0+cpu + torchvision 0.29.2+cpu` (CPU), ultralytics 8.4.208, numpy 2.5.4,
+    pandas 3.1.1, polars 2.1.0.
+  - Modal client 1.6.3: `SUPPORTED_PYTHON_SERIES` của builder mặc định `2026.10` có 3.14
+    (và 3.13/3.15); builder `2024.10` trở về trước thì không.
+- **Quyết định**: nâng lên **3.14** ở cả 6 chỗ ghim:
+  `pyproject.toml` (`requires-python`, `ruff target-version = py314`), `modal/image.py`,
+  `.github/workflows/cpu-checks.yml`, `docs/agents/CODE.md`, `docs/agents/OPERATIONS.md`,
+  `AGENTS.md`. Thêm `.python-version` = `3.14` (do `uv python pin`).
+- **Không sửa**: `outputs/*/environment.txt`, `backups/*/environment.txt`,
+  `reports/*.md` — đây là bản ghi lịch sử của các run đã chạy trên 3.12, sửa sẽ làm sai
+  provenance.
+- **Hệ quả**: lockfile re-resolve cho marker 3.14 (216 package). Local giữ
+  `torch 2.14.0+cpu` (uv giữ phiên bản đã lock vì vẫn tương thích 3.14; wheel cp314 có sẵn),
+  không phải 2.15 như GPU.
+- **Kiểm chứng sau khi đổi** (đã chạy, output thật): `python -V` = 3.14.9; import
+  torch/torchvision/numpy/pandas/ultralytics/polars OK; `ruff check src scripts modal
+  launch_train_and_eval_60e.py` → "All checks passed!"; GauSS self-test PASS
+  (params=36,878, MACs=1.0413 GMAC, ReZero identity exact); 7/7 stress suite
+  "FAILURES: none"; fork(7) == in-process PASS; benchmark eval vectorised 5.34 s vs
+  scalar 28.08 s (5.3x).
+- **Chưa xác minh**: chưa build/run image Modal với Python 3.14 thật (cần `modal run`);
+  chưa train GPU trên 3.14; chưa chạy CI GitHub với 3.14.
