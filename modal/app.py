@@ -23,8 +23,11 @@ wandb_secret = modal.Secret.from_name("wandb-secret", required_keys=["WANDB_API_
 mounts = {str(DATA_ROOT): data, str(MODEL_ROOT): models, str(RUN_ROOT): runs}
 # GPU containers (training + evaluation): data loading and augmentation are
 # CPU/RAM heavy, so keep a generous request with a capped ceiling.
+# (24576, 49152): the 150e batch-16 campaign was SIGKILLed (exit 137) at ~epoch
+# 131 with the previous (12288, 24576) ceiling — RAM grows slowly over epochs
+# (per-epoch val metrics + W&B media), so the ceiling needs ~2x headroom.
 CPU_LIMIT = (4.0, 8.0)
-MEMORY_LIMIT_MB = (12288, 24576)
+MEMORY_LIMIT_MB = (24576, 49152)
 # CPU-only orchestration/plumbing containers (finalize, preflight, W&B tagging,
 # report assembly, the campaign orchestrator). They only copy files and await
 # handles, so 1 CPU / 1 GB is enough; the ceiling absorbs a transient spike.

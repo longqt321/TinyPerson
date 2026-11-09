@@ -119,3 +119,18 @@ Bài học rút ra từ lỗi đã xảy ra. Mỗi mục có mã `L-###` để t
 - **Sửa:** `make_tiny_floor_forward` giờ broadcast `fg_mask` trực tiếp với `sqrt_area`
   rồi mới unsqueeze `is_tiny` lên chiều class; thêm `**kwargs` passthrough để wrapper sống
   sót khi assigner tương lai nhận thêm tham số (ví dụ `anc_strides`).
+
+
+## L-009: Nâng RAM ceiling khi kéo dài schedule — SIGKILL 137 xuất hiện muộn, không phải ở epoch 1
+
+- **Bối cảnh:** campaign 150e (app `ap-sTJpvV9GSDzzFYKOEq0PAW`, 2026-11-09) — cả 2 run
+  baseline + gauss đều bị `Runner killed (SIGKILL), exit code: 137` ở ~epoch 131 với
+  `MEMORY_LIMIT_MB = (12288, 24576)`. 60e batch 8 chạy cùng limit này không vấn đề.
+- **Bài học:** RAM của training container **tăng dần theo số epoch** (per-epoch val metrics
+  `val_predictions_latest.json`/`size_stratified.csv`, W&B media callback), nên smoke test
+  vài epoch đầu không phát hiện được. Lỗi RAM OOM trên Modal là SIGKILL từ host, không có
+  traceback Python — phải grep log cho "SIGKILL/exit code 137", và kiểm tra run dir thiếu
+  `completed.flag` dù `system_metrics.csv` ghi đủ epochs.
+- **Sửa:** nâng `MEMORY_LIMIT_MB` → `(24576, 49152)` trong `modal/app.py` (ADR-020).
+  Trend RAM cũ: chết ở ~130 epoch với 24 GB ⇒ ~185 MB/epoch tăng trưởng; 48 GB đủ cho 150e.
+- **Theo dõi:** nếu campaign sau (300e+) vẫn chết RAM ⇒ điều tra leak thật sự (BACKLOG BL-028).

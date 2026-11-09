@@ -361,3 +361,14 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Đề xuất:** ablation vòng sau — (a) p=0.10, (b) thay bằng `A.Affine` zoom-in có kiểm soát
   (scale ≤2x), hoặc (c) bỏ crop; đo AP theo size-stratified (tiny1/tiny2) để xem zoom-in crop
   giúp hay hại. Cần đổi preset trong `src/tinydet/augment/albumentations_stack.py` và cập nhật ADR-018.
+
+## BL-028: Điều tra tăng trưởng RAM theo epoch của training container
+
+- **Phát hiện:** 2026-11-10, từ crash SIGKILL 137 của campaign 150e (L-009).
+- **Hiện trạng:** RAM container tăng dần theo epoch; với batch 16 @1280 và `workers: 8`,
+  ceiling 24 GB bị vượt ở ~epoch 131. Chưa xác định được nguồn tăng: ứng viên là
+  `register_size_stratified_metrics` / `val_predictions_latest.json` (84 ảnh × 300 dets mỗi
+  epoch) / `WandbMediaCallback` (log ảnh mỗi epoch) / cache của Ultralytics.
+- **Đề xuất:** đo `psutil.Process().memory_info().rss` mỗi epoch và ghi vào
+  `system_metrics.csv` (hiện chỉ có VRAM) để có bằng chứng; sau đó mới quyết định free
+  object trong callback hay giảm tần suất log media. Không sửa trước campaign 150e.

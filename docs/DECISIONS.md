@@ -420,3 +420,28 @@
 - **Chưa xác minh**: VRAM thực tế ở batch 16 (ước tính ~18–20 GB từ 10.8 GB @ batch 8);
   thời gian/epoch ở batch 16; tác động của batch 16 + augmentation mới lên AP; chưa chạy
   campaign 150e thật.
+
+## ADR-020: Nâng RAM ceiling của container GPU lên 48 GB (2026-11-10)
+
+- **Bối cảnh:** campaign 150e (app `ap-sTJpvV9GSDzzFYKOEq0PAW`) — cả baseline và gauss bị
+  `Runner killed (SIGKILL), exit code: 137` ở ~epoch 131/150 với
+  `MEMORY_LIMIT_MB = (12288, 24576)`. Modal retry `_train` hai lần, tạo run dir mới
+  (`20261109-170302`, `20261109-171442`) và train lại từ epoch 1 — tức nếu không sửa thì
+  crash lặp lại vô hạn. 60e batch 8 với cùng limit không gặp vấn đề.
+- **Nguyên nhân:** RAM container tăng dần theo epoch (per-epoch val metrics + W&B media);
+  batch 16 làm baseline cao hơn. Ước lượng từ điểm chết: ~185 MB/epoch.
+- **Phương án đã xem:**
+  1. Giảm `workers` 8 → 4: giảm RAM dataloader nhưng tăng thời gian/epoch, và không giải
+     quyết được phần tăng theo epoch (vẫn chết nếu schedule dài hơn).
+  2. Tắt W&B media / giảm tần suất log ảnh: có thể là nguồn tăng, nhưng chưa có bằng chứng
+     (chưa đo RSS) — sửa mù sẽ mất tín hiệu debug.
+  3. **Nâng ceiling 24576 → 49152 MB** (đã chọn): sửa trực tiếp nguyên nhân chết, chi phí
+     thêm ~$0.19/h RAM (24 GB × $0.00000222/GiB/s), tức ~$0.5 cho cả campaign. Giữ nguyên
+     mọi siêu tham số đã chốt ở ADR-019 nên kết quả vẫn so sánh được.
+- **Hệ quả:** `MEMORY_LIMIT_MB = (24576, 49152)` cho mọi container GPU trong `modal/app.py`.
+  Request 24 GB cũng tăng theo (Modal tính theo mức dùng thực, không theo request).
+- **Kiểm chứng:** log 3h của app chứa `SIGKILL, exit code: 137` cho cả 2 run; run dir gốc
+  không có `training/completed.flag` dù `metrics/system_metrics.csv` có đủ epoch;
+  `ruff check modal/app.py` → All checks passed.
+- **Chưa xác minh:** liệu 48 GB có đủ cho trọn 150 epoch (chưa chạy lại); nguồn tăng RAM
+  thật sự (BL-028); chi phí thực tế trên dashboard Modal.
