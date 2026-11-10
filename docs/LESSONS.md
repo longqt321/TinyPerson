@@ -153,3 +153,20 @@ Bài học rút ra từ lỗi đã xảy ra. Mỗi mục có mã `L-###` để t
   vs baseline e76).
 - **Trạng thái:** giả thuyết chưa được chứng minh — cần BL-030. Đừng viết vào báo cáo
   "GauSS vô dụng với augment" trước khi có thí nghiệm kiểm soát.
+
+
+## L-011: Chênh lệch AP 1 seed phải qua paired bootstrap trước khi báo cáo — CI chứa 0 nghĩa là "không khác biệt"
+
+- **Bối cảnh:** campaign 150e cho gap AP@0.50 tiled +0.0046 (GauSS − baseline), tưởng là
+  kết quả dương. Paired bootstrap (B=120, resample 786 ảnh test, tái dùng
+  `evaluate_tinyperson` không đổi) cho 95% CI **[−0.0031, +0.0145]**, P(diff≤0)=0.175;
+  bucket tiny: diff −0.0024, CI [−0.0132, +0.0104], P=0.767. CI chứa 0 ở cả hai nhóm.
+- **Bài học:** gap nhỏ hơn ~2× độ lệch chuẩn bootstrap (±0.013–0.014) là nằm trong nhiễu
+  sampling; val và test còn nói ngược chiều (baseline tốt hơn trên val). Một seed + một
+  lần eval **không bao giờ** đủ để claim "module cải thiện AP".
+- **Cách tránh:** (a) trước khi claim, chạy paired bootstrap trên ảnh test (resample có
+  hoàn lại, giữ cặp base/gauss cùng ảnh để giữ tương quan); (b) quy ước ngưỡng: chỉ claim
+  khi CI không chứa 0; (c) multi-seed (3–5) cho error bar giữa các lần train, vì bootstrap
+  chỉ đo nhiễu sampling của eval, không đo nhiễu khởi tạo/train.
+- **Trạng thái:** đã áp dụng cho 150e — kết luận ghi ở ADR-021; script bootstrap ở
+  `/tmp/deepbench/bootstrap_ap.py` (chưa promote vào repo, xem BL-030).
