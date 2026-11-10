@@ -560,3 +560,30 @@
   ADR-021 cho đến khi bootstrap nói khác.
 - **Chưa xác minh:** probe ở 320px/batch 4 có thể đánh giá thấp SNR của train thật
   (1280px/batch 16); động học cosine+warmup chưa được mô phỏng; P5 là ước lượng chủ quan.
+
+## ADR-024: Tiêu chí v2 — cổng cơ chế phải chạy tự động trong trainer, không canh log thủ công (2026-11-10)
+
+- **Bối cảnh:** bản tiêu chí v1 (ADR-023) bị tự audit phát hiện 7 lỗi; 2 lỗi nghiêm trọng:
+  (a) cổng `|σ2_mean − 1.45| ≥ 0.02` **tự mâu thuẫn** với chính bằng chứng T4 của nó (σ mean
+  đứng yên) ⇒ sẽ kill run có cơ chế khỏe; (b) thiếu cổng đóng góp residual — trong khi T3
+  chứng minh xóa toàn bộ residual GauSS đổi loss ~0. Ngoài ra "theo dõi rồi kill thủ công"
+  là quy trình phụ thuộc người canh, không phải cơ chế.
+- **Quyết định:**
+  1. Cổng được **thực thi bằng code**: `src/tinydet/training/gauss_gate.py`, đăng ký qua
+     `register_gauss_gate(model, cfg)`; dừng run bằng `trainer.stop = True` (đúng cơ chế
+     Ultralytics dùng cho time-stop), ghi `metrics/gauss_gate_verdict.json` gồm observed +
+     checks + thresholds.
+  2. Ngưỡng nằm trong config `train.gauss_gate` (không hardcode).
+  3. Bộ cổng v2: `g_sigma2_std` (0.01@e10 / 0.02@e20), `g_alpha` (0.12 / 0.15),
+     **`g_residual_share`** (0.02 — mới), `g_val_floor` (0.06 — hạ từ 0.09 vì 0.09 chỉ cách
+     dao động epoch 0.4σ), `g_loss_finite` (mỗi epoch — mới). `σ2_mean`/`σ1_mean` chỉ ghi
+     nhận, **không** làm cổng kill.
+  4. Sửa bug chia slice SNR (`n1 = len(s1)*64` → `sum(numel)`): số T2 cũ dán nhãn sai
+     (σ1+σ2 gộp). Đo lại 8 batch: σ1 median 0.713, σ2 median 0.631, sign consistency 0.303
+     (mức random B=8 ≈ 0.28) ⇒ kết luận không đổi.
+- **Kiểm chứng:** `scripts/test_gauss_gate.py` PASS 5/5 (run khỏe không kill; kill đúng ở
+  σ2_std thấp, residual_share ~0, val sụp, NaN). `ruff` pass; `import tinydet.training.trainer` OK.
+- **Hệ quả:** G1 giờ chỉ cần launch đúng config — run tự dừng nếu cơ chế chết, không cần
+  agent canh. Chi phí tối đa của một lần G1 thất bại = 20 epoch.
+- **Chưa xác minh:** cổng chưa chạy trong run GPU thật (mới test trainer giả); ngưỡng
+  `residual_share_min = 0.02` suy luận từ probe, chưa có giá trị thực trong train.

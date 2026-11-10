@@ -10,6 +10,7 @@ from tinydet.augment import resolve_augmentations
 from tinydet.models.registry import build_model
 from tinydet.modules.gauss import configure_gauss_control_param_group
 from tinydet.training.epoch_metrics import register_epoch_metrics, register_size_stratified_metrics
+from tinydet.training.gauss_gate import register_gauss_gate
 from tinydet.training.iou_logging import log_ap_by_iou
 from tinydet.training.module_diagnostics import register_p2refine_callbacks
 from tinydet.training.wandb_media import WandbMediaCallback
@@ -135,6 +136,10 @@ def train(
     # on the same epoch timescale as the conv weights. The key must not leak
     # into model.train(), which rejects unknown args.
     gauss_lr_mult = float(train_args_s1.pop("gauss_control_lr_mult", 3.0))
+    # Pre-registered mechanism gates (ADR-023): kill the run at e10/e20 when
+    # the v3.2 mechanism is demonstrably dead. Pop so model.train() never
+    # sees the key.
+    gauss_gate_cfg = train_args_s1.pop("gauss_gate", None)
     gauss_setup = partial(_setup_gauss_optimizer, lr_mult=gauss_lr_mult)
 
     training_done_flag = run / "training" / "completed.flag"
@@ -198,6 +203,7 @@ def train(
                 )
                 model.callbacks["on_train_start"].insert(0, _log_active_head)
                 model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
+                register_gauss_gate(model, gauss_gate_cfg)
                 if on_epoch_end_callback is not None:
                     model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
                 if project:
@@ -301,6 +307,7 @@ def train(
             )
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
+            register_gauss_gate(model, gauss_gate_cfg)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:
@@ -352,6 +359,7 @@ def train(
             )
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
+            register_gauss_gate(model, gauss_gate_cfg)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:

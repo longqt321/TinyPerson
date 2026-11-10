@@ -165,7 +165,10 @@ def cmd_grad(args: argparse.Namespace) -> None:
     G = torch.stack(per_batch)
     mean_g, std_g = G.mean(0), G.std(0, unbiased=True)
     snr = mean_g.abs() / (std_g / np.sqrt(len(G))).clamp_min(1e-30)
-    n1 = len(s1) * 64
+    # channel count is the module hidden dim (32), not 64 — compute from
+    # the tensors themselves instead of assuming (audit fix: the old
+    # probe's hardcoded 64 merged sigma1 and sigma2 into one slice)
+    n1 = sum(dict(model.named_parameters())[n].numel() for n in s1)
     print(f"batches={len(G)} x {args.batch_size} imgs @ {args.imgsz}px")
     print(f"|g_sigma| per batch: {[round(float(x.norm()), 5) for x in per_batch]}")
     print(f"mean|g_conv| per batch: {[round(v, 2) for v in conv_norms]}")
