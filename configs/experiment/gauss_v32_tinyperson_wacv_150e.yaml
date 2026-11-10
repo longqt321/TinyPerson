@@ -54,6 +54,8 @@ train:
     early_epoch: 10
     early_sigma2_std_min: 0.01
     early_alpha_min: 0.12
+  # Wall-clock kill switch for unattended runs (expected runtime ~1.5 h).
+  time_budget_hours: 4.0
 hardware:
   gpu: A10
 output:

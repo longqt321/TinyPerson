@@ -68,6 +68,38 @@ def _setup_gauss_optimizer(trainer, lr_mult: float = 1.0) -> None:
 
 
 
+class _TimeBudgetGuard:
+    """Hard wall-clock stop: kill the run when the training exceeds the budget.
+
+    Safety net for unattended runs (ADR-025 follow-up): a hung dataloader or a
+    pathological slowdown must not burn GPU credit until the 6h Modal timeout.
+    Expected 150e runtime is ~1.5 h, so the default 4 h leaves ~2.7x headroom.
+    """
+
+    def __init__(self, budget_hours: float, started: float) -> None:
+        self.budget_s = float(budget_hours) * 3600.0
+        self.started = started
+        self.stopped = False
+
+    def on_fit_epoch_end(self, trainer) -> None:
+        if self.stopped:
+            return
+        elapsed = monotonic() - self.started
+        if elapsed > self.budget_s:
+            self.stopped = True
+            print(
+                f"[time-budget] elapsed {elapsed / 3600:.2f} h > budget "
+                f"{self.budget_s / 3600:.2f} h; stopping training", flush=True,
+            )
+            trainer.stop = True
+
+
+def _register_time_budget(model, budget_hours: float, started: float) -> _TimeBudgetGuard:
+    guard = _TimeBudgetGuard(budget_hours, started)
+    model.callbacks["on_fit_epoch_end"].append(guard.on_fit_epoch_end)
+    return guard
+
+
 def train(
     config_path: str | Path,
     source_git: tuple[str, bool] | None = None,
@@ -140,6 +172,8 @@ def train(
     # the v3.2 mechanism is demonstrably dead. Pop so model.train() never
     # sees the key.
     gauss_gate_cfg = train_args_s1.pop("gauss_gate", None)
+    # Wall-clock budget for unattended runs: pop so model.train() never sees it.
+    time_budget_hours = float(train_args_s1.pop("time_budget_hours", 4.0))
     gauss_setup = partial(_setup_gauss_optimizer, lr_mult=gauss_lr_mult)
 
     training_done_flag = run / "training" / "completed.flag"
@@ -204,6 +238,7 @@ def train(
                 model.callbacks["on_train_start"].insert(0, _log_active_head)
                 model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
                 register_gauss_gate(model, gauss_gate_cfg)
+                _register_time_budget(model, time_budget_hours, started)
                 if on_epoch_end_callback is not None:
                     model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
                 if project:
@@ -308,6 +343,7 @@ def train(
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
             register_gauss_gate(model, gauss_gate_cfg)
+            _register_time_budget(model, time_budget_hours, started)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:
@@ -360,6 +396,7 @@ def train(
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
             register_gauss_gate(model, gauss_gate_cfg)
+            _register_time_budget(model, time_budget_hours, started)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:

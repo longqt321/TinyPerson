@@ -612,3 +612,11 @@
   `run_id` khác; nếu không sẽ nhận lại run cũ. Đây là hành vi mong muốn (không đốt tiền).
 - **Chưa xác minh:** nguyên nhân hard-kill vẫn chưa xác định (log Modal chỉ giữ ~200 dòng);
   đường resume từ `last.pt` chưa được chạy thử trên GPU sau thay đổi này.
+
+### Bổ sung ADR-025: time-budget guard cho run không người trông
+
+- `trainer.train` pop `train.time_budget_hours` (mặc định 4.0; run 150e thật ~1.5 h ⇒ headroom
+  ~2.7×) và đăng ký `_TimeBudgetGuard` ở cả 3 nhánh train (stage1/stage2/single): quá ngân
+  sách ⇒ `trainer.stop = True`. Chặn kịch bản container **treo** (không crash) đốt GPU tới
+  timeout 6 h của Modal. Ultralytics 8.4.208 đã bỏ arg `time` nên phải tự viết.
+- Regression: `scripts/test_resume_and_gate.py` ALL PASS sau khi thêm guard.
