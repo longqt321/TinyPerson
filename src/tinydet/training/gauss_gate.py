@@ -134,7 +134,14 @@ class GaussGateCallback:
         losses = getattr(trainer, "loss_items", None)
         vals = []
         if losses is not None:
-            vals.extend(float(v) for v in losses)
+            # Ultralytics >=8.4 passes a dict {'box_loss': tensor, ...}; older
+            # versions pass a tensor. Iterate values only, and never let a
+            # non-numeric entry kill the run (verified in a real CPU run).
+            items = losses.values() if isinstance(losses, dict) else losses
+            vals.extend(
+                float(v) for v in items
+                if isinstance(v, (int, float)) or hasattr(v, "item")
+            )
         diag = self.modules[0][1].last_diag if self.modules else {}
         vals.extend(
             float(v)

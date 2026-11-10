@@ -447,3 +447,11 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Đề xuất:** smoke run 2e (~$0.05) với `modal app logs --timestamps` giữ lại toàn bộ log,
   ghi `memory.current`/`memory.peak` từ cgroup mỗi epoch để xác định có chạm trần hay không.
 - **Giảm nhẹ hiện tại:** ADR-025 (resume) đã giới hạn thiệt hại của mỗi lần kill còn ~1 epoch.
+
+## BL-035: (đã sửa) `_check_finite` crash với `loss_items` dạng dict
+
+- **Phát hiện:** 2026-11-10 bằng `scripts/test_resume_and_gate.py` (run CPU thật). Ultralytics
+  8.4.208 truyền `trainer.loss_items` là dict ⇒ `float('box_loss')` ⇒ ValueError ⇒ training
+  abort ở epoch 1. Đã sửa: chỉ lặp qua `.values()` và bỏ qua phần tử không phải số.
+- **Ý nghĩa:** nếu launch G1 mà không test, run sẽ chết ngay epoch 1 và (trước ADR-025) retry
+  train lại từ đầu.
