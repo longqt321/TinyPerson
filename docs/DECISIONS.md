@@ -445,3 +445,31 @@
   `ruff check modal/app.py` → All checks passed.
 - **Chưa xác minh:** liệu 48 GB có đủ cho trọn 150 epoch (chưa chạy lại); nguồn tăng RAM
   thật sự (BL-028); chi phí thực tế trên dashboard Modal.
+
+## ADR-021: Hoãn ablation 2×2 (augment × model); ghi nhận gap GauSS thu hẹp (2026-11-10)
+
+- **Bối cảnh:** kết quả chính thức campaign 150e (`ap-yJXm5NjIoH73hanG7cjlBP`, commit
+  `a20f7b6`) cho thấy GauSS vẫn thắng baseline nhưng cách biệt nhỏ hơn nhiều so với vòng
+  60e nội bộ: AP@0.50 tiled all +0.0046 (+1.1%) vs +0.0221 (+7.3%); bucket tiny −0.0016
+  (60e: +0.0337). Chi tiết: `GAP_SHRINK_ANALYSIS` (artifact) và BL-030.
+- **Giả thuyết chính:** preset augmentation B bật cho cả hai nhánh đã cung cấp scale
+  invariance bằng dữ liệu, trùng chức năng GauSS. Bằng chứng gián tiếp: baseline tăng
+  +40.7% ở tiny (GauSS +24.4%); GauSS hội tụ nhanh hơn (90% fitness ở e61 vs e76) nhưng
+  trần tương đương; gap theo epoch dao động ±0.01.
+- **Phương án đã xem:**
+  1. **Chạy ngay ablation 2×2** (2 run 150e không augment, ~2 h GPU ≈ $4): khoa học nhất
+     nhưng user chọn hoãn để chốt hướng phân tích trước.
+  2. **Bản rẻ 60e có augment** (~45 phút ≈ $1.5): nhanh nhưng confound do under-trained.
+  3. **Không chạy gì, chỉ phân tích dữ liệu đã có** (đã chọn): ghi nhận hiện tượng, ghi
+     giả thuyết + dự đoán bác bỏ được vào BACKLOG, chưa đưa kết luận nhân quả vào báo cáo.
+- **Quyết định:** chọn (3) — chưa chạy thí nghiệm mới; mọi phát biểu về nguyên nhân phải
+  giữ ở dạng giả thuyết. Không sửa kết quả 150e đã ghi; không đụng config 60e.
+- **Hệ quả:** báo cáo khoa học hiện **không được** claim "GauSS tăng AP đáng kể" cho recipe
+  150e có augment. Claim còn đứng vững trên dữ liệu hiện có: GauSS thắng AP@0.25 tiled ở
+  mọi bucket, MR@0.25 thấp hơn ở mọi bucket, hội tụ nhanh hơn ~15 epoch, và oracle `score`
+  cho thấy score calibration là nút thắt (+0.21 AP50).
+- **Kiểm chứng:** các bảng trong artifact `GAP_SHRINK_ANALYSIS` tính trực tiếp từ
+  `reports/eval/*_150e_*.json` và `/tmp/deepbench/final/*_60e_*/summary.json`;
+  đường cong hội tụ từ `metrics/system_metrics.csv` của 2 run 150e.
+- **Chưa xác minh:** nguyên nhân nhân quả của gap thu hẹp (cần BL-030); độ lớn nhiễu seed
+  (chỉ seed 42, dao động quan sát ±0.01 AP); định nghĩa oracle variant `both`.

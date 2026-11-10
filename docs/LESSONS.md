@@ -134,3 +134,22 @@ Bài học rút ra từ lỗi đã xảy ra. Mỗi mục có mã `L-###` để t
 - **Sửa:** nâng `MEMORY_LIMIT_MB` → `(24576, 49152)` trong `modal/app.py` (ADR-020).
   Trend RAM cũ: chết ở ~130 epoch với 24 GB ⇒ ~185 MB/epoch tăng trưởng; 48 GB đủ cho 150e.
 - **Theo dõi:** nếu campaign sau (300e+) vẫn chết RAM ⇒ điều tra leak thật sự (BACKLOG BL-028).
+
+
+## L-010: Augmentation có thể thay thế chức năng của module — bật augment cho cả hai model làm mờ lợi thế kiến trúc
+
+- **Bối cảnh:** campaign 150e (ADR-019) bật `augmentations_preset: tinyperson_b` cho cả
+  baseline và GauSS. Gap AP@0.50 tiled (GauSS − baseline) thu hẹp từ +7.3% (60e, không
+  augment) xuống +1.1% (150e); bucket tiny từ +12.6% xuống −0.4%.
+- **Bài học:** khi so sánh một module với baseline, **không được bật augmentation trùng
+  chức năng với module cho cả hai nhánh** — augmentation có thể hấp thụ trọn vẹn lợi thế
+  kiến trúc, làm kết quả so sánh vô nghĩa (hoặc tệ: kết luận sai rằng module vô dụng).
+  Trước khi thiết kế so sánh, liệt kê chức năng của module (ở đây: scale invariance) và
+  kiểm tra augmentation/recipe nào cung cấp cùng chức năng đó.
+- **Cách tránh:** (a) chạy ablation có/không augment cho cả hai nhánh (ma trận 2×2) trước
+  khi kết luận; (b) nếu augment là một phần recipe chính thức, báo cáo cả hai cột và nêu
+  rõ tương tác; (c) phân tích đường cong hội tụ — module có thể thắng ở "hội tụ nhanh"
+  ngay cả khi hoà ở "trần chất lượng" (đúng trường hợp này: GauSS đạt 90% fitness ở e61
+  vs baseline e76).
+- **Trạng thái:** giả thuyết chưa được chứng minh — cần BL-030. Đừng viết vào báo cáo
+  "GauSS vô dụng với augment" trước khi có thí nghiệm kiểm soát.

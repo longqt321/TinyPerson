@@ -384,3 +384,26 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Đề xuất:** bỏ `reload()` (Volume API `listdir`/`read_file_into_fileobj` từ client đã đọc
   trạng thái mới nhất), hoặc chuyển `fetch` thành một `@app.function` rồi `.remote()`.
   Cần kiểm tra lại với Modal 1.6.3 trước khi sửa.
+
+## BL-030: Ablation 2×2 (augment × model) để phân lập nguyên nhân gap GauSS thu hẹp
+
+- **Phát hiện:** 2026-11-10. Gap AP@0.50 tiled (GauSS − baseline) giảm từ +0.0221 (+7.3%)
+  ở vòng 60e xuống +0.0046 (+1.1%) ở vòng 150e; tiny từ +0.0337 xuống −0.0016.
+- **Giả thuyết chính:** `augmentations_preset: tinyperson_b` bật cho **cả hai** model đã
+  "dạy" scale invariance bằng dữ liệu (`Downscale` 0.4–0.7 + `RandomSizedBBoxSafeCrop`
+  zoom tới 20×), trùng chức năng GauSS ⇒ baseline không còn cần module.
+- **Bằng chứng gián tiếp (không tốn GPU):**
+  - Baseline tăng 60e→150e mạnh nhất ở tiny (+40.7%) và tiny1 (+33.6%), GauSS chỉ +24.4%/+17.7%;
+    GauSS tăng mạnh nhất ở reasonable (+43.8%) nơi scale aug ít liên quan.
+  - GauSS đạt 90% fitness cuối ở epoch 61, baseline ở epoch 76 ⇒ lợi thế GauSS ở 60e phần
+    lớn là tốc độ hội tụ, không phải trần chất lượng.
+  - Gap fitness theo epoch dao động ±0.01 quanh 0 (e20 −0.008, e40 +0.009, e60 −0.004).
+- **Confound:** giữa 2 vòng thay đổi 5 biến cùng lúc (epochs 60→150, batch 8→16,
+  patience 15→40, warmup 2→3, augment none→preset B) ⇒ chưa thể quy cho augment.
+- **Đề xuất (chưa chạy — user quyết định hoãn):** hoàn tất ma trận 2×2 bằng 2 run
+  **150e không augment** (baseline + gauss), giữ nguyên mọi siêu tham số khác. Chi phí
+  ~2 h GPU ≈ $4. Dự đoán bác bỏ được: gap(no-augment) ≈ +0.02 ⇒ giả thuyết đúng;
+  ≈ +0.005 ⇒ giả thuyết sai (nguyên nhân là schedule/batch).
+- **Ý nghĩa:** nếu giả thuyết đúng, claim của GauSS phải chuyển từ "tăng AP cuối" sang
+  "recall sớm (AP@0.25/MR@0.25) + hội tụ nhanh + score calibration"; đây là claim cơ chế
+  mạnh hơn và trung thực hơn.
