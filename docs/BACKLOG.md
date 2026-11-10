@@ -418,3 +418,21 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Đề xuất:** chạy `ruff check launch_parallel_tinyperson.py report-bundle --fix` một
   lần trong commit riêng, hoặc thêm `exclude` cho các script này trong `pyproject.toml`
   nếu chúng là tool một-lần.
+
+## BL-032: Đưa hằng nghiên cứu của GauSS v3.2 ra khỏi code (env-config như `TINYDET_ABLATION`)
+
+- **Phát hiện:** 2026-11-10 (self-audit). `GATE_INIT_*`, `SIGMA1_*`, `SIGMA2_*` là hằng số
+  module. Muốn chạy nhánh S1 (mở dải σ2) hay đổi gate init phải sửa `gauss.py` mỗi lần, và
+  config cũ `gauss_v3_tinyperson_wacv_150e.yaml` giờ build v3.2 mà không có cờ nào ⇒ phá
+  reproducibility của kết quả đã báo cáo.
+- **Đề xuất:** thêm env var theo đúng pattern có sẵn: `TINYDET_GAUSS_INIT=0,0,0,0` (tái lập
+  v3.1 forward), `TINYDET_GAUSS_SIGMA=0.4,0.9,1.1,1.8` (hoặc 1.1,3.0 cho S1). Mặc định =
+  v3.2 hiện tại. Ghi giá trị vào metadata run để truy vết.
+- **Chưa làm:** cần user duyệt vì đụng API module nghiên cứu.
+
+## BL-033: `collect_gauss_router_zloss` là dead code — chưa nối vào training loss
+
+- **Phát hiện:** 2026-11-10. Module expose z-loss (ST-MoE) và docs ghi "optional, weight
+  1e-3", nhưng trainer không cộng nó vào loss ⇒ `router_corr` chỉ được regularize gián tiếp.
+- **Đề xuất:** hoặc nối vào loss trong trainer (kèm config `gauss_router_zloss_weight`),
+  hoặc xoá để tránh người đọc hiểu nhầm là đang bật.

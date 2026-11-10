@@ -192,3 +192,20 @@ Bài học rút ra từ lỗi đã xảy ra. Mỗi mục có mã `L-###` để t
   (ở đây 3.0) thay vì tăng LR toàn cục.
 - **Trạng thái:** đã sửa trong v3.2 (ADR-022); self-test PASS với `max|∂L/∂σ|@init =
   5.01e-05`, `σ drift/200 steps = 1.074`. Chưa train lại trên GPU.
+
+
+## L-013: Đo "độ nhạy" của module phải cố định BN và dùng đúng mode của loss
+
+- **Bối cảnh:** khi probe σ của GauSS bằng loss YOLO thật, tôi gặp hai cái bẫy liên tiếp:
+  (1) forward ở `train()` + `no_grad()` vẫn **cập nhật BN running stats** ⇒ trạng thái model
+  đổi giữa các điều kiện đo; (2) sửa bằng `eval()` thì **sai nặng hơn**: eval mode decode
+  box (output 895k vs 853k phần tử) và độ nhạy với σ tụt từ 0.13 xuống 7e-5 (~2000×), vì
+  loss được định nghĩa trên prediction thô của train mode.
+- **Bài học:** với model có BN + head decode, muốn đo độ nhạy tham số bằng loss thì phải
+  **train mode + snapshot/restore BN buffers** quanh mỗi lần đo. Không dùng eval mode để
+  "cho sạch", và không tin rằng no_grad là đủ để đo là không đổi trạng thái.
+- **Cách tránh:** viết một hàm `measure_losses()` duy nhất (snapshot buffers → đo → restore)
+  và dùng cho mọi điều kiện; kiểm tra chéo bằng một can thiệp "chắc chắn phải đổi" (ở đây:
+  gates→0) — nếu can thiệp đó cho delta ≈ 0 thì phép đo hỏng, không phải module bất động.
+- **Trạng thái:** đã áp dụng trong `scripts/gauss_probe.py`; số liệu T3 trùng khớp với bản
+  đo cũ nên kết luận không đổi.

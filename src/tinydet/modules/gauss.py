@@ -152,9 +152,9 @@ Integration notes (everything stays inside this file):
    reflect-pad path on the target TensorRT version.
 
 Contract summary (input 1280x1280, C2=64, P3=64, P4=128, D=32, B=1):
- - Trainable parameters : 36,878
+ - Trainable parameters : 36,879
  - Learned Conv2d layers: 27
- - Control scalars      : 131 (128 sigma + alpha + gamma_in + gamma_out)
+ - Control scalars      : 132 (128 sigma + alpha + gamma_in + gamma_out + gamma_mid)
  - Exact MACs (B=1)     : 1,041,326,080 default
                           1,049,518,080 with learned_router
                           (use_saliency adds 819,200, not in contract)
@@ -500,7 +500,8 @@ class RefinementBranch(nn.Module):
 class GauSS(nn.Module):
     """GauSS v3.1 — Gaussian Scale-Space Feature Refinement.
 
-    ReZero-exact at init, energy-prior routing with bounded learned
+    ReZero-inspired bounded gates (v3.2: warm-started, see docstring item 1),
+    energy-prior routing with bounded learned
     correction, content-aware upsampling, and contamination-free ablations.
     See module docstring for the full v3.1 changelog and integration notes.
     """
@@ -1030,13 +1031,15 @@ def configure_gauss_control_param_group(
     Call AFTER the trainer builds the optimizer (idempotent; safe on resume).
     Under Ultralytics this must be hooked post `trainer.build_optimizer`,
     otherwise the raw scalars land in the default `weight` group and weight
-    decay drags alpha_raw/gamma_*_raw toward 0 (= gate 0.25), silently
-    destroying the ReZero-exact initialization.
+    decay drags alpha_raw/gamma_*_raw toward 0, silently changing the
+    warm-started gate values.
 
     `lr_mult` (v3.2) scales the control-group LR relative to the inferred
-    base LR. The sigma gradient is intrinsically ~1e-4-scale (it crosses
-    the whole band-refinement stack), so the trainer default is 3.0; pass
-    1.0 to reproduce the v3.1 optimizer behaviour.
+    base LR. The sigma gradient is intrinsically ~1e-4-scale; the trainer
+    passes `gauss_control_lr_mult` from the train config (default 3.0).
+    NOTE: this function's own default is 1.0 (= v3.1 optimizer behaviour);
+    the trainer is the only caller that applies the 3x multiplier, so
+    calling this function directly gives v3.1-equivalent optimization.
     """
     control_params = collect_gauss_control_params(model)
     if not control_params:
@@ -1310,11 +1313,9 @@ if __name__ == "__main__":
         collect_gauss_router_zloss(module), module.router_z_loss()
     ), "z-loss helper mismatch"
 
-    # 6. Gradients: warm the gain, then require full coverage -------------
-    # (At exact ReZero init the z-path is quiet by design for one step, as in
-    # canonical ReZero; warm alpha to exercise every parameter's gradient.)
-    with torch.no_grad():
-        module.alpha_raw.fill_(1.0)
+    # 6. Gradients: full coverage WITHOUT manual warming -------------------
+    # (v3.1 required warming alpha_raw because the gates were zero-init; in
+    # v3.2 the warm start makes every parameter's gradient live at init.)
     module.zero_grad(set_to_none=True)
     out_p2 = module([c2_t, p3_t, p4_t])
     out_p2.square().mean().backward()
@@ -1446,7 +1447,11 @@ if __name__ == "__main__":
     assert torch.allclose(s32[0], v31_s1x, atol=1e-6), "sigma1 value drift in remap"
     assert torch.allclose(s32[3], v31_s2y, atol=1e-6), "sigma2 value drift in remap"
 
-    # 10c. Sigma actually LEARNS: 200 Adam steps on a synthetic objective ---
+    # 10c. Control group is optimizable end-to-end: 200 Adam steps on a
+    # SYNTHETIC objective (MSE to a random target). This only proves the
+    # optimizer wiring moves the control scalars — it says nothing about
+    # whether sigma is useful for detection (see scripts/gauss_probe.py for
+    # the real-loss identifiability probes).
     torch.manual_seed(0)
     m_learn = GauSS(c1=[64, 64, 128], c2=32)
     m_learn.zero_grad(set_to_none=True)

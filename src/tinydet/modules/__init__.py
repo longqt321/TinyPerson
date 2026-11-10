@@ -15,6 +15,7 @@ from tinydet.modules.gauss import (
     is_gauss_control_param_name,
     mode_unused_param_names,
     remap_v3_to_v31_state_dict,
+    remap_v31_to_v32_state_dict,
 )
 from tinydet.modules.p2_refine import P2Refine
 
@@ -34,4 +35,5 @@ __all__ = [
     "is_gauss_control_param_name",
     "mode_unused_param_names",
     "remap_v3_to_v31_state_dict",
+    "remap_v31_to_v32_state_dict",
 ]
