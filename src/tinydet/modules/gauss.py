@@ -1,165 +1,59 @@
-"""GauSS v3.2 — Gaussian Scale-Space Feature Refinement for YOLO26n-P2.
+"""GauSS — Gaussian Scale-Space Feature Refinement for YOLO26n-P2.
 
-Single-file revision of the GauSS v3 module. Drop-in replacement for
-gauss.py: class name (GauSS), constructor signature and forward signature
-are unchanged, so existing YAML registration keeps working.
-Only this file is touched — no trainer / YAML changes required.
+Drop-in PyTorch module registered under the name ``GauSS``. It refines the
+P2 detection feature with an explicit Gaussian scale-space decomposition,
+band routing, content-aware upsampling and bounded residual gates.
 
-v3.2 changelog (mechanism-repair revision, driven by the 150e diagnosis):
+Structure (all inside this file):
 
- 1. WARM-STARTED GATES (replaces the v3.1 "EXACT ReZero identity" item).
-    Root-cause finding of the 150e campaign: with y = x0 + alpha*z(sigma)
-    + gamma*b_h(sigma) and x0 independent of sigma, alpha == gamma == 0
-    at init forces dL/dsigma == 0 EXACTLY at step 1 — and the measured
-    sigma drift after 150 real epochs was only 3.5–5% of its allowed
-    range (the scale-space mechanism was effectively frozen). Exact
-    identity at init and a nonzero sigma gradient are mathematically
-    incompatible, so the identity property is dropped BY DESIGN:
-    - alpha_raw   init = atanh(2 * 0.10)  -> alpha   = 0.10
-    - gamma_in    init = atanh(2 * 0.05)  -> gamma_in  = 0.05
-    - gamma_out   init = atanh(2 * 0.05)  -> gamma_out = 0.05
-    - gamma_mid   init = atanh(2 * 0.05)  -> gamma_mid = 0.05 (new)
-    At init the output is a SMALL perturbation of x0 (residual RMS
-    ~0.1 * RMS(x0)), not a bitwise identity; the self-test now asserts
-    the sigma gradient and output sensitivity instead of the identity.
-
- 2. MID-BAND DIRECT ANCHOR (new gate `gamma_mid_raw`). v3.1 gave sigma1
-    a short gradient path (gamma_out * b_h, where b_h = x0 - l1 depends
-    only on sigma1) but sigma2 only a deep indirect path (through the
-    band branches, refinement stack and alpha). The new term
-    gamma_mid * b_m (b_m = l1 - l2 depends on BOTH sigma1 and sigma2)
-    gives sigma2 the same one-hop path to the output. Ablation hygiene:
-    zeroed under `no_mid_band` and `no_direct_anchor` like b_h.
-
- 3. Sigma re-parameterization: sigmoid-bounded -> tanh-centered.
-    sigma1 = 0.65 + 0.25*tanh(raw) in [0.4, 0.9]; sigma2 = 1.45 +
-    0.35*tanh(raw) in [1.1, 1.8] (same ranges and init values as v3.1,
-    but d(sigma)/d(raw) doubles from 0.125/0.175 to 0.25/0.35 and the
-    sigmoid saturation near the bounds is removed). v3.1 checkpoints
-    convert with `remap_v31_to_v32_state_dict` (raw_v32 = raw_v31 / 2;
-    gate raws are unchanged because both parameterizations map raw=0 to
-    the same gate and remap preserves gate VALUES).
-
- 4. Control-group learning-rate multiplier. `configure_gauss_control_
-    param_group(..., lr_mult=...)` scales the dedicated `control` group
-    (132 scalars, weight_decay=0) relative to the base LR. The sigma
-    gradient is intrinsically ~1e-4-scale; with lr_mult=3 the control
-    scalars can move on the same epoch timescale as the conv weights.
-    The trainer passes `gauss_control_lr_mult` from the train config
-    (default 3.0; set 1.0 to reproduce the v3.1 optimizer behaviour).
-
- 5. Diagnostics: added `gaussian/sigma1_min/max`, `gaussian/sigma2_min/
-    max` (per-channel spread visibility) and `contribution/mid_anchor_
-    share`; `gates/gamma_mid` added to the gates block.
-
- 6. Router correction becomes trainable in practice: with alpha != 0 at
-    init, dL/da != 0, so the zero-init router correction now receives a
-    real gradient from step 1 (in v3.1 it was gradient-dead at init for
-    the same reason as sigma). The energy prior stays detached BY DESIGN
-    (it is a fixed input-statistics prior; the learned correction is the
-    trainable part) — see v3.1 item 3 for the ST-MoE z-loss rationale.
-
-v3.1 changelog (each item traceable to review findings + arXiv evidence):
-
- 1. EXACT ReZero identity at init. Gates re-parametrized from
-    `0.5 * sigmoid(raw)` (v3: init -6 -> alpha ~ 0.0012) to
-    `0.5 * tanh(raw)` with raw = 0, so alpha = gamma = 0 EXACTLY and
-    y_p2 == baseline x0 bitwise at epoch 0 (verified in the self-test).
-    Gate gradient at init rises from 0.0012 to 0.5 (~400x), removing the
-    sigmoid saturation stall while keeping the bounded-range safety.
-    [ReZero: arXiv:2003.04887]
-
- 2. Content-aware upsampling. Both nearest-neighbour `F.interpolate`
-    calls (P3->P2 and P4->P3 fusion) are replaced by a DySample-style
-    point-sampling upsampler with zero-init offsets, i.e. EXACTLY equal to
-    `F.interpolate(mode="bilinear", align_corners=False)` at init
-    (verified in the self-test) and adaptively moved by gradients after.
-    Rationale: nearest fusion at the high/low-band interface is the
-    aliasing source identified by FreqFusion (arXiv:2408.12879);
-    DySample is ultra-light (arXiv:2308.15085).
-
- 3. Hybrid band router (default). Parameter-free log-energy prior measured
-    on the RAW bands b_h/b_m/b_l at stride-4 (pre-BN physical magnitude,
-    pooled to stride-8), plus a zero-init 1x1 learned correction inside
-    the softmax. At init the correction is 0, so routing is EXACTLY the
-    v3 energy-proportional rule; afterwards the model can adapt without
-    the collapse risk, controlled by an ST-MoE router z-loss (Eq. 5 of
-    arXiv:2202.08906 — squared log-sum-exp of the correction logits)
-    exposed via `GauSS.router_z_loss()` (suggest loss weight 1e-3;
-    model-wide helper: `collect_gauss_router_zloss(model)`).
-    [ST-MoE: arXiv:2202.08906]
-    - Pure-v3 energy routing:      TINYDET_ABLATION=no_router_corr
-    - v3 heavy learned router:     TINYDET_ABLATION=learned_router
-      (the route_dw/route_bn/route_out stack is now computed ONLY under
-      this flag — removes ~10.65M dead MACs from the default path)
-
- 4. Ablation hygiene.
-    - `no_high_band` now gates BOTH high-band paths (refined r_h AND the
-      direct stride-4 anchor gamma_out * b_h). In v3 the direct anchor
-      leaked through and biased the ablation (~22% output change).
-    - New flag `no_direct_anchor` isolates the stride-4 direct anchor
-      from the refined anchor for clean contribution attribution.
-    - Band-fusion weights are renormalized over the ACTIVE bands
-      (masked log-energies before softmax in the hybrid router;
-      uniform-over-active in `no_router` mode), so band ablations no
-      longer shrink the fused feature mass.
-
- 5. Split high-band gates: `gamma_in` (refined anchor at stride-8,
-    inside x_d) and `gamma_out` (direct anchor at stride-4, in y_p2).
-    v3 coupled both roles into one scalar.
-
- 6. Dilated context rates {1, 3, 5} (was {1, 2, 3}) — module-owned
-    context RF at stride-8 grows from 7x7 to 11x11 px, addressing the
-    small effective-receptive-field regime for the 60%-large-object
-    label distribution. [ERF: arXiv:1701.04128]
-    Configurable via `GauSS(..., dilations=(1, 3, 5))`.
-
- 7. fp32 routing math (energies, log-softmax, z-loss) for AMP safety.
-
- 8. Review-pass corrections (v3.1.1):
-    - `no_router` ablation: uniform weights renormalized over ACTIVE
-      bands (was fixed 1/3 per band incl. ablated ones — shrank the
-      fused feature mass, contradicting item 4).
-    - Analytical MACs: `learned_router` mode no longer counts the
-      inactive router-correction conv (1,051,975,680 -> 1,049,518,080);
-      DySample offset-head MACs use the fixed 32 out-channels (correct
-      for any hidden width d, not just d=32).
-    - DySample base sampling grid built in fp32, cast to input dtype
-      (removes fp16 coordinate drift under AMP).
-    - New helper `collect_gauss_router_zloss(model)`; docstring notes for
-      strict=False legacy loading and router-flag precedence.
+- ``LearnableGaussianScaleSpace``: per-channel separable Gaussian blurs at
+  two learnable scales (sigma1 fine, sigma2 coarse). Sigmas are
+  re-parameterized as ``sigma = center + half * tanh(raw)`` with
+  sigma1 in [0.4, 0.9] (center 0.65, half 0.25) and sigma2 in [1.1, 1.8]
+  (center 1.45, half 0.35); d(sigma)/d(raw) at init is 0.25 / 0.35.
+- ``DySampleUp``: DySample-style point-sampling upsampler (arXiv:2308.15085)
+  with zero-init offsets, equal to bilinear interpolation at init.
+- ``BandBranch`` / ``DilatedContextBranch`` / ``RefinementBranch``: light
+  per-band processors (dilated context rates default (1, 3, 5)).
+- ``GauSS``: composition. Output
+  ``y_p2 = x0 + alpha * z(sigma) + gamma_in * b_in + gamma_out * b_h
+  + gamma_mid * b_m`` where the gates are ``g = 0.5 * tanh(raw)`` with
+  warm-start values alpha=0.10, gamma_in=gamma_out=gamma_mid=0.05
+  (constants ``GATE_INIT_*`` below).
+- Hybrid band router: parameter-free log-energy prior measured on the raw
+  bands at stride-4 (pre-BN physical magnitude, pooled to stride-8) plus a
+  zero-init 1x1 learned correction inside the softmax
+  (arXiv:2202.08906 router z-loss exposed via ``GauSS.router_z_loss()``).
+- Ablation flags via env var ``TINYDET_ABLATION`` (frozen at construction):
+  see ``ABLATION_FLAGS`` and ``mode_unused_param_names``. Band-fusion
+  weights are renormalized over the active bands.
+- fp32 routing math (energies, log-softmax, z-loss) for AMP safety.
 
 Integration notes (everything stays inside this file):
- - DDP: in default mode the parameters returned by
-   `module.unused_param_names()` receive no gradient; either run
-   DDP(find_unused_parameters=True) or use the list to build the DDP
-   wrapper. In `learned_router` mode only router_corr.* is unused.
- - Optimizer: call `configure_gauss_control_param_group(opt, model)`
-   AFTER the trainer builds the optimizer so the control scalars
-   (128 sigma + alpha + gamma_in + gamma_out) are excluded from weight
-   decay (idempotent; safe on resume).
- - Legacy v3 checkpoints: convert with `remap_v3_to_v31_state_dict(sd)`
-   before load_state_dict (sigmoid-space gates -> tanh-space, gamma_h
-   -> gamma_in/gamma_out); load with strict=False — the v3.1-only params
-   (router_corr.*, dy_up3/dy_up4 .offset.*) keep their constructor
-   zero-init, which is exactly the intended state.
- - Router z-loss (hybrid mode): loss = loss + 1e-3 *
-   collect_gauss_router_zloss(model). Optional — the correction also
-   trains through the mixing weights without it.
- - Router flag precedence: learned_router > no_router > hybrid default.
- - Export: PixelShuffle / PixelUnshuffle / grid_sample map to standard
-   ONNX ops (DepthToSpace / GatherND-style sampling); verify the
-   reflect-pad path on the target TensorRT version.
+- DDP: in default mode the parameters returned by
+  ``module.unused_param_names()`` receive no gradient; either run
+  DDP(find_unused_parameters=True) or use the list to build the DDP wrapper.
+  In ``learned_router`` mode only router_corr.* is unused.
+- Optimizer: ``configure_gauss_control_param_group(opt, model, lr_mult=...)``
+  puts the control scalars (128 sigma + 4 gates) into a dedicated group
+  excluded from weight decay, with an optional LR multiplier; idempotent,
+  safe on resume.
+- Legacy checkpoints: ``remap_v3_to_v31_state_dict`` and
+  ``remap_v31_to_v32_state_dict`` convert older parameterizations; load
+  with ``strict=False`` for params added after v3.
+- Router z-loss (hybrid mode): optional; ``collect_gauss_router_zloss(model)``
+  returns the scalar to add to the loss.
+- Router flag precedence: learned_router > no_router > hybrid default.
+- Export: PixelShuffle / PixelUnshuffle / grid_sample map to standard ONNX
+  ops; verify the reflect-pad path on the target TensorRT version.
 
 Contract summary (input 1280x1280, C2=64, P3=64, P4=128, D=32, B=1):
- - Trainable parameters : 36,879
- - Learned Conv2d layers: 27
- - Control scalars      : 132 (128 sigma + alpha + gamma_in + gamma_out + gamma_mid)
- - Exact MACs (B=1)     : 1,041,326,080 default
-                          1,049,518,080 with learned_router
-                          (use_saliency adds 819,200, not in contract)
- - vs v3                : +24.58M MACs net (+2.42% module, ~ +0.14% of a
-                          YOLO26n forward at 1280 — estimate)
+- Trainable parameters : 36,879
+- Learned Conv2d layers: 27
+- Control scalars      : 132 (128 sigma + alpha + gamma_in + gamma_out + gamma_mid)
+- Exact MACs (B=1)     : 1,041,326,080 default
+                         1,049,518,080 with learned_router
+                         (use_saliency adds 819,200, not in contract)
 """
 
 from __future__ import annotations
@@ -184,15 +78,14 @@ CONTROL_PARAM_SUFFIXES: tuple[str, ...] = (
     "gamma_mid_raw",
 )
 
-# v3.2 warm-started gate values (see docstring item 1). Exact identity at
-# init (all gates 0) forces dL/dsigma == 0 at step 1 — measured on the
-# real module in the 150e diagnosis — so the gates start slightly open.
+# Warm-started gate values: the output is a small bounded perturbation of
+# the input feature at init, and every gate has a nonzero gradient.
 GATE_INIT_ALPHA = 0.10
 GATE_INIT_GAMMA_IN = 0.05
 GATE_INIT_GAMMA_OUT = 0.05
 GATE_INIT_GAMMA_MID = 0.05
 
-# v3.2 sigma parameterization (docstring item 3): sigma = center + half*tanh(raw).
+# Sigma parameterization: sigma = center + half*tanh(raw).
 SIGMA1_CENTER, SIGMA1_HALF = 0.65, 0.25  # range [0.4, 0.9]
 SIGMA2_CENTER, SIGMA2_HALF = 1.45, 0.35  # range [1.1, 1.8]
 
@@ -273,8 +166,8 @@ def mode_unused_param_names(flags: Sequence[str] | frozenset[str]) -> tuple[str,
 class LearnableGaussianScaleSpace(nn.Module):
     """Separable 1D learnable Gaussian scale-space filter with single reflect pad.
 
-    Two scales per channel and per axis (v3.2 tanh-centered parameterization,
-    d(sigma)/d(raw) = 0.25 / 0.35 at init — twice the v3.1 sigmoid slope):
+    Two scales per channel and per axis (tanh-centered parameterization,
+    d(sigma)/d(raw) = 0.25 / 0.35 at init):
       - Scale 1: support 5x5 (radius=2), sigma_1 = 0.65 + 0.25*tanh(raw),
                  range [0.4, 0.9], init 0.65
       - Scale 2: support 9x9 (radius=4), sigma_2 = 1.45 + 0.35*tanh(raw),
@@ -307,7 +200,7 @@ class LearnableGaussianScaleSpace(nn.Module):
         )
 
     def compute_sigmas(self) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """Compute bounded sigmas in FP32 (v3.2: tanh-centered, slope 0.25/0.35)."""
+        """Compute bounded sigmas in FP32 (tanh-centered, slope 0.25/0.35)."""
         s1x = SIGMA1_CENTER + SIGMA1_HALF * torch.tanh(self.sigma1x_raw.float())
         s1y = SIGMA1_CENTER + SIGMA1_HALF * torch.tanh(self.sigma1y_raw.float())
         s2x = SIGMA2_CENTER + SIGMA2_HALF * torch.tanh(self.sigma2x_raw.float())
@@ -498,12 +391,12 @@ class RefinementBranch(nn.Module):
 
 
 class GauSS(nn.Module):
-    """GauSS v3.1 — Gaussian Scale-Space Feature Refinement.
+    """GauSS — Gaussian Scale-Space Feature Refinement.
 
-    ReZero-inspired bounded gates (v3.2: warm-started, see docstring item 1),
+    Bounded residual gates (warm-started, see module docstring),
     energy-prior routing with bounded learned
     correction, content-aware upsampling, and contamination-free ablations.
-    See module docstring for the full v3.1 changelog and integration notes.
+    See module docstring for design details and integration notes.
     """
 
     def __init__(
@@ -573,12 +466,12 @@ class GauSS(nn.Module):
         self.route_bn = nn.BatchNorm2d(d)
         self.route_out = nn.Conv2d(d, 4, kernel_size=1, stride=1, padding=0, bias=True)
 
-        # v3.1 hybrid-router correction: zero-init, added to the log-energy
+        # Hybrid-router correction: zero-init, added to the log-energy
         # prior inside the band softmax; behaviour-identical to pure energy
         # routing at init (ST-MoE-style z-loss available via router_z_loss()).
         self.router_corr = nn.Conv2d(d, 3, kernel_size=1, stride=1, padding=0, bias=True)
 
-        # v3.1 content-aware upsamplers (zero-init == bilinear at init).
+        # Content-aware upsamplers (zero-init == bilinear at init).
         self.dy_up3 = DySampleUp(d, scale=2, groups=4)
         self.dy_up4 = DySampleUp(d, scale=2, groups=4)
 
@@ -594,10 +487,9 @@ class GauSS(nn.Module):
         self.recon_bn = nn.BatchNorm2d(4 * d)
         self.ps = nn.PixelShuffle(upscale_factor=2)
 
-        # Bounded residual gates: g = 0.5 * tanh(raw). v3.2 warm start
-        # (docstring item 1): nonzero init is REQUIRED for a nonzero sigma
-        # gradient — with alpha == gamma == 0 the output is sigma-independent
-        # and dL/dsigma == 0 exactly at step 1 (measured, 150e diagnosis).
+        # Bounded residual gates: g = 0.5 * tanh(raw), warm-started
+        # (nonzero init); with alpha == gamma == 0 the output would be
+        # sigma-independent and dL/dsigma == 0 exactly at step 1.
         self.alpha_raw = nn.Parameter(torch.zeros(1, dtype=torch.float32))
         # gamma_in : refined high-band anchor at stride-8 (inside x_d)
         self.gamma_in_raw = nn.Parameter(torch.zeros(1, dtype=torch.float32))
@@ -605,7 +497,7 @@ class GauSS(nn.Module):
         self.gamma_out_raw = nn.Parameter(torch.zeros(1, dtype=torch.float32))
         # gamma_mid: DIRECT mid-band anchor at native stride-4 (in y_p2);
         # b_m = l1 - l2 depends on BOTH sigma1 and sigma2, giving sigma2 a
-        # one-hop gradient path (v3.2 docstring item 2).
+        # one-hop gradient path from sigma1 and sigma2 to the output.
         self.gamma_mid_raw = nn.Parameter(torch.zeros(1, dtype=torch.float32))
 
         self.act = nn.SiLU(inplace=False)
@@ -648,7 +540,7 @@ class GauSS(nn.Module):
             self.route_out.weight[3].mul_(0.01)
             if self.route_out.bias is not None:
                 self.route_out.bias.zero_()
-            # control scalars: sigmas centered (sigma == v3.1 init values),
+            # control scalars: sigmas centered at the configured init values,
             # gates warm-started so the sigma path is differentiable at step 1.
             self.gaussian.sigma1x_raw.zero_()
             self.gaussian.sigma1y_raw.zero_()
@@ -679,7 +571,7 @@ class GauSS(nn.Module):
         return 0.5 * torch.tanh(self.gamma_out_raw.float())
 
     def compute_gamma_mid(self) -> Tensor:
-        """Direct mid-band anchor gain = 0.5 * tanh(gamma_mid_raw) (v3.2)."""
+        """Direct mid-band anchor gain = 0.5 * tanh(gamma_mid_raw)."""
         return 0.5 * torch.tanh(self.gamma_mid_raw.float())
 
     def router_z_loss(self) -> Tensor:
@@ -747,7 +639,7 @@ class GauSS(nn.Module):
         pi1, pi2, pi3 = pi[:, 0:1], pi[:, 1:2], pi[:, 2:3]
         c_ctx = self.act(c0 + pi1 * t1 + pi2 * t2 + pi3 * t3)
 
-        # ---- 4.4 Band Routing (v3.1: energy prior on RAW bands + zero-init correction) ----
+        # ---- 4.4 Band Routing (energy prior on RAW bands + zero-init correction) ----
         # Energies in FP32. Default: measured on the raw bands b_* at native
         # stride-4 (pre-BN physical magnitude), then avg-pooled to stride-8.
         if "energy_on_refined" in flags:
@@ -801,7 +693,7 @@ class GauSS(nn.Module):
             ).float()
             self._z_loss = torch.zeros((), device=x0.device, dtype=torch.float32)
         else:
-            # v3.1 default hybrid: softmax(log-energy prior + zero-init correction).
+            # Default hybrid: softmax(log-energy prior + zero-init correction).
             # At init corr == 0 -> a == e / sum(e) EXACTLY (pure v3 energy rule).
             corr = self.router_corr(u).float()
             a = torch.softmax(log_e + corr, dim=1)
@@ -858,10 +750,9 @@ class GauSS(nn.Module):
             b_m_eff = b_m
 
         # Residual addition WITHOUT activation: pure linear combination.
-        # v3.2 warm start: alpha/gamma != 0 at init -> y_p2 is a SMALL
-        # perturbation of x0 (residual RMS ~0.1 * RMS(x0)), and dL/dsigma
-        # is nonzero from step 1 (the v3.1 bitwise identity is dropped —
-        # it mathematically forced a dead sigma gradient).
+        # Warm start: alpha/gamma != 0 at init -> y_p2 is a small bounded
+        # perturbation of x0 (residual RMS ~0.1 * RMS(x0)) with nonzero
+        # gate and sigma gradients from the first step.
         y_p2 = x0 + alpha * z + gamma_out * b_h_eff + gamma_mid * b_m_eff
 
         # ---- 11. Detached Diagnostics ----
@@ -942,10 +833,10 @@ class GauSS(nn.Module):
 
 
 # --------------------------------------------------------------------------- #
-# Legacy checkpoint adaptation (v3 sigmoid-space gates -> v3.1 tanh-space)
+# Legacy checkpoint adaptation helpers
 # --------------------------------------------------------------------------- #
 def remap_v3_to_v31_state_dict(state_dict: dict[str, Tensor]) -> dict[str, Tensor]:
-    """Convert a GauSS v3 checkpoint to the v3.1 gate parametrization.
+    """Convert a legacy GauSS checkpoint to the tanh gate parametrization.
 
     v3 gates:  g = 0.5 * sigmoid(raw)          in [0, 0.5]
     v3.1:      g = 0.5 * tanh(raw)             in (-0.5, 0.5)
@@ -978,7 +869,7 @@ def remap_v3_to_v31_state_dict(state_dict: dict[str, Tensor]) -> dict[str, Tenso
 
 
 def remap_v31_to_v32_state_dict(state_dict: dict[str, Tensor]) -> dict[str, Tensor]:
-    """Convert a GauSS v3.1 checkpoint to the v3.2 parameterization.
+    """Convert a previous-generation checkpoint to the tanh sigma parameterization.
 
     Only the sigma raws change. v3.1: sigma1 = 0.4 + 0.5*sigmoid(r),
     sigma2 = 1.1 + 0.7*sigmoid(r). v3.2: sigma1 = 0.65 + 0.25*tanh(r),
@@ -1267,7 +1158,7 @@ if __name__ == "__main__":
         )
     out_p2 = module([c2_t, p3_t, p4_t])
     assert out_p2.shape == (2, 32, 80, 80), f"Unexpected output shape: {out_p2.shape}"
-    # Warm start (v3.2): NOT bitwise identity, but a small perturbation.
+    # Warm start: NOT bitwise identity, but a small perturbation.
     rel = (out_p2 - x0_ref).norm() / x0_ref.norm().clamp_min(1e-12)
     assert 1e-3 < float(rel.detach()) < 0.35, f"warm-start residual out of range: rel={float(rel)}"
     # The core v3.2 contract: sigma receives a gradient AT INIT.
@@ -1347,7 +1238,7 @@ if __name__ == "__main__":
     assert diag["optimizer/control_weight_decay"] == 0.0
     assert diag["optimizer/control_lr"] == 1e-3
     assert diag["routing/mixing_std"] > 0.0, "Spatial mixing gate has zero spatial variance!"
-    assert diag["gates/alpha"] > 0.0  # warm-started at init (v3.2)
+    assert diag["gates/alpha"] > 0.0  # warm-started at init
     # lr_mult=3 scales the control group (v3.2 item 4)
     configure_gauss_control_param_group(opt, module, base_lr=1e-3, lr_mult=3.0)
     assert module.get_diagnostics(optimizer=opt)["optimizer/control_lr"] == 3e-3

@@ -42,15 +42,14 @@ train:
   multi_scale: 0.0
   compile: false
   gauss_control_lr_mult: 3.0
-  # Pre-registered mechanism gates (ADR-023, artifact CRITERIA_V32_PREREG v2).
-  # Kill the run at e10/e20 when the mechanism is demonstrably dead instead of
-  # paying for 150 epochs. Thresholds calibrated on the v3.1 150e diagnostics.
+  # Per-epoch diagnostic gates (ADR-023, artifact CRITERIA_V32_PREREG v2).
+  # Each threshold is a number measured on the previous 150e run.
   gauss_gate:
     epochs: [10, 20]
-    sigma2_std_min: 0.02        # v3.1 e20 = 0.011
-    alpha_min: 0.15             # v3.1 e20 = 0.097; v3.2 init = 0.10
-    residual_share_min: 0.02    # T3 probe: whole residual ~0 of train loss
-    val_map50_floor: 0.06       # v3.1 e20 = 0.102; floor = "not collapsed"
+    sigma2_std_min: 0.02        # previous run e20 = 0.011
+    alpha_min: 0.15             # previous run e20 = 0.097; init = 0.10
+    residual_share_min: 0.02    # probe measurement of residual share of loss
+    val_map50_floor: 0.06       # previous run e20 = 0.102
     early_epoch: 10
     early_sigma2_std_min: 0.01
     early_alpha_min: 0.12
