@@ -1,0 +1,52 @@
+# 150-epoch TinyPerson campaign with the v3.2 mechanism repair (ADR-022).
+# Same recipe as gauss_v3_tinyperson_wacv_150e.yaml; the only difference is
+# the module revision (v3.2 warm-started gates + gamma_mid anchor + tanh
+# sigma parameterization) and the explicit control-group LR multiplier.
+# Rationale: in the 150e v3.1 run the sigma drift was 3.5-5% of its range
+# and dL/dsigma was exactly 0 at init (ROOT_CAUSE_150E analysis, 2026-11-10).
+seed: 42
+data:
+  config: /mnt/data/tinyperson-yolo-v2/data.yaml
+train:
+  epochs: 150
+  patience: 40
+  val: true
+  imgsz: 1280
+  batch: 16
+  workers: 8
+  optimizer: AdamW
+  lr0: 0.002
+  lrf: 0.1
+  cos_lr: true
+  warmup_epochs: 3.0
+  amp: true
+  deterministic: false
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  augmentations_preset: tinyperson_b
+  multi_scale: 0.0
+  compile: false
+  gauss_control_lr_mult: 3.0
+hardware:
+  gpu: A10
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+name: gauss_v32_tinyperson_wacv_150e
+model:
+  config: configs/model/yolo26n_tiny_A2_p2_gauss_tinyperson.yaml

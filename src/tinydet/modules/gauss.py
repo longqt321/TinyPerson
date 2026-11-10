@@ -1,9 +1,63 @@
-"""GauSS v3.1 — Gaussian Scale-Space Feature Refinement for YOLO26n-P2.
+"""GauSS v3.2 — Gaussian Scale-Space Feature Refinement for YOLO26n-P2.
 
 Single-file revision of the GauSS v3 module. Drop-in replacement for
 gauss.py: class name (GauSS), constructor signature and forward signature
 are unchanged, so existing YAML registration keeps working.
 Only this file is touched — no trainer / YAML changes required.
+
+v3.2 changelog (mechanism-repair revision, driven by the 150e diagnosis):
+
+ 1. WARM-STARTED GATES (replaces the v3.1 "EXACT ReZero identity" item).
+    Root-cause finding of the 150e campaign: with y = x0 + alpha*z(sigma)
+    + gamma*b_h(sigma) and x0 independent of sigma, alpha == gamma == 0
+    at init forces dL/dsigma == 0 EXACTLY at step 1 — and the measured
+    sigma drift after 150 real epochs was only 3.5–5% of its allowed
+    range (the scale-space mechanism was effectively frozen). Exact
+    identity at init and a nonzero sigma gradient are mathematically
+    incompatible, so the identity property is dropped BY DESIGN:
+    - alpha_raw   init = atanh(2 * 0.10)  -> alpha   = 0.10
+    - gamma_in    init = atanh(2 * 0.05)  -> gamma_in  = 0.05
+    - gamma_out   init = atanh(2 * 0.05)  -> gamma_out = 0.05
+    - gamma_mid   init = atanh(2 * 0.05)  -> gamma_mid = 0.05 (new)
+    At init the output is a SMALL perturbation of x0 (residual RMS
+    ~0.1 * RMS(x0)), not a bitwise identity; the self-test now asserts
+    the sigma gradient and output sensitivity instead of the identity.
+
+ 2. MID-BAND DIRECT ANCHOR (new gate `gamma_mid_raw`). v3.1 gave sigma1
+    a short gradient path (gamma_out * b_h, where b_h = x0 - l1 depends
+    only on sigma1) but sigma2 only a deep indirect path (through the
+    band branches, refinement stack and alpha). The new term
+    gamma_mid * b_m (b_m = l1 - l2 depends on BOTH sigma1 and sigma2)
+    gives sigma2 the same one-hop path to the output. Ablation hygiene:
+    zeroed under `no_mid_band` and `no_direct_anchor` like b_h.
+
+ 3. Sigma re-parameterization: sigmoid-bounded -> tanh-centered.
+    sigma1 = 0.65 + 0.25*tanh(raw) in [0.4, 0.9]; sigma2 = 1.45 +
+    0.35*tanh(raw) in [1.1, 1.8] (same ranges and init values as v3.1,
+    but d(sigma)/d(raw) doubles from 0.125/0.175 to 0.25/0.35 and the
+    sigmoid saturation near the bounds is removed). v3.1 checkpoints
+    convert with `remap_v31_to_v32_state_dict` (raw_v32 = raw_v31 / 2;
+    gate raws are unchanged because both parameterizations map raw=0 to
+    the same gate and remap preserves gate VALUES).
+
+ 4. Control-group learning-rate multiplier. `configure_gauss_control_
+    param_group(..., lr_mult=...)` scales the dedicated `control` group
+    (132 scalars, weight_decay=0) relative to the base LR. The sigma
+    gradient is intrinsically ~1e-4-scale; with lr_mult=3 the control
+    scalars can move on the same epoch timescale as the conv weights.
+    The trainer passes `gauss_control_lr_mult` from the train config
+    (default 3.0; set 1.0 to reproduce the v3.1 optimizer behaviour).
+
+ 5. Diagnostics: added `gaussian/sigma1_min/max`, `gaussian/sigma2_min/
+    max` (per-channel spread visibility) and `contribution/mid_anchor_
+    share`; `gates/gamma_mid` added to the gates block.
+
+ 6. Router correction becomes trainable in practice: with alpha != 0 at
+    init, dL/da != 0, so the zero-init router correction now receives a
+    real gradient from step 1 (in v3.1 it was gradient-dead at init for
+    the same reason as sigma). The energy prior stays detached BY DESIGN
+    (it is a fixed input-statistics prior; the learned correction is the
+    trainable part) — see v3.1 item 3 for the ST-MoE z-loss rationale.
 
 v3.1 changelog (each item traceable to review findings + arXiv evidence):
 
@@ -127,7 +181,25 @@ CONTROL_PARAM_SUFFIXES: tuple[str, ...] = (
     "alpha_raw",
     "gamma_in_raw",
     "gamma_out_raw",
+    "gamma_mid_raw",
 )
+
+# v3.2 warm-started gate values (see docstring item 1). Exact identity at
+# init (all gates 0) forces dL/dsigma == 0 at step 1 — measured on the
+# real module in the 150e diagnosis — so the gates start slightly open.
+GATE_INIT_ALPHA = 0.10
+GATE_INIT_GAMMA_IN = 0.05
+GATE_INIT_GAMMA_OUT = 0.05
+GATE_INIT_GAMMA_MID = 0.05
+
+# v3.2 sigma parameterization (docstring item 3): sigma = center + half*tanh(raw).
+SIGMA1_CENTER, SIGMA1_HALF = 0.65, 0.25  # range [0.4, 0.9]
+SIGMA2_CENTER, SIGMA2_HALF = 1.45, 0.35  # range [1.1, 1.8]
+
+
+def _gate_raw(gate: float) -> float:
+    """Inverse of g = 0.5 * tanh(raw): the raw value that yields gate `gate`."""
+    return math.atanh(2.0 * float(gate))
 
 ABLATION_FLAGS: frozenset[str] = frozenset({
     "no_high_band",
@@ -201,9 +273,12 @@ def mode_unused_param_names(flags: Sequence[str] | frozenset[str]) -> tuple[str,
 class LearnableGaussianScaleSpace(nn.Module):
     """Separable 1D learnable Gaussian scale-space filter with single reflect pad.
 
-    Two scales per channel and per axis:
-      - Scale 1: support 5x5 (radius=2), sigma_1 in [0.4, 0.9], init 0.65
-      - Scale 2: support 9x9 (radius=4), sigma_2 in [1.1, 1.8], init 1.45
+    Two scales per channel and per axis (v3.2 tanh-centered parameterization,
+    d(sigma)/d(raw) = 0.25 / 0.35 at init — twice the v3.1 sigmoid slope):
+      - Scale 1: support 5x5 (radius=2), sigma_1 = 0.65 + 0.25*tanh(raw),
+                 range [0.4, 0.9], init 0.65
+      - Scale 2: support 9x9 (radius=4), sigma_2 = 1.45 + 0.35*tanh(raw),
+                 range [1.1, 1.8], init 1.45
     """
 
     coord1: Tensor
@@ -232,11 +307,11 @@ class LearnableGaussianScaleSpace(nn.Module):
         )
 
     def compute_sigmas(self) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """Compute bounded sigmas in FP32."""
-        s1x = 0.4 + 0.5 * torch.sigmoid(self.sigma1x_raw.float())
-        s1y = 0.4 + 0.5 * torch.sigmoid(self.sigma1y_raw.float())
-        s2x = 1.1 + 0.7 * torch.sigmoid(self.sigma2x_raw.float())
-        s2y = 1.1 + 0.7 * torch.sigmoid(self.sigma2y_raw.float())
+        """Compute bounded sigmas in FP32 (v3.2: tanh-centered, slope 0.25/0.35)."""
+        s1x = SIGMA1_CENTER + SIGMA1_HALF * torch.tanh(self.sigma1x_raw.float())
+        s1y = SIGMA1_CENTER + SIGMA1_HALF * torch.tanh(self.sigma1y_raw.float())
+        s2x = SIGMA2_CENTER + SIGMA2_HALF * torch.tanh(self.sigma2x_raw.float())
+        s2y = SIGMA2_CENTER + SIGMA2_HALF * torch.tanh(self.sigma2y_raw.float())
         return s1x, s1y, s2x, s2y
 
     @staticmethod
@@ -518,13 +593,19 @@ class GauSS(nn.Module):
         self.recon_bn = nn.BatchNorm2d(4 * d)
         self.ps = nn.PixelShuffle(upscale_factor=2)
 
-        # Bounded residual gates: g = 0.5 * tanh(raw), raw init 0 -> g == 0
-        # EXACTLY (ReZero identity) with gate gradient 0.5 at init.
+        # Bounded residual gates: g = 0.5 * tanh(raw). v3.2 warm start
+        # (docstring item 1): nonzero init is REQUIRED for a nonzero sigma
+        # gradient — with alpha == gamma == 0 the output is sigma-independent
+        # and dL/dsigma == 0 exactly at step 1 (measured, 150e diagnosis).
         self.alpha_raw = nn.Parameter(torch.zeros(1, dtype=torch.float32))
         # gamma_in : refined high-band anchor at stride-8 (inside x_d)
         self.gamma_in_raw = nn.Parameter(torch.zeros(1, dtype=torch.float32))
         # gamma_out: DIRECT high-band anchor at native stride-4 (in y_p2)
         self.gamma_out_raw = nn.Parameter(torch.zeros(1, dtype=torch.float32))
+        # gamma_mid: DIRECT mid-band anchor at native stride-4 (in y_p2);
+        # b_m = l1 - l2 depends on BOTH sigma1 and sigma2, giving sigma2 a
+        # one-hop gradient path (v3.2 docstring item 2).
+        self.gamma_mid_raw = nn.Parameter(torch.zeros(1, dtype=torch.float32))
 
         self.act = nn.SiLU(inplace=False)
 
@@ -566,14 +647,16 @@ class GauSS(nn.Module):
             self.route_out.weight[3].mul_(0.01)
             if self.route_out.bias is not None:
                 self.route_out.bias.zero_()
-            # control scalars
+            # control scalars: sigmas centered (sigma == v3.1 init values),
+            # gates warm-started so the sigma path is differentiable at step 1.
             self.gaussian.sigma1x_raw.zero_()
             self.gaussian.sigma1y_raw.zero_()
             self.gaussian.sigma2x_raw.zero_()
             self.gaussian.sigma2y_raw.zero_()
-            self.alpha_raw.zero_()
-            self.gamma_in_raw.zero_()
-            self.gamma_out_raw.zero_()
+            self.alpha_raw.fill_(_gate_raw(GATE_INIT_ALPHA))
+            self.gamma_in_raw.fill_(_gate_raw(GATE_INIT_GAMMA_IN))
+            self.gamma_out_raw.fill_(_gate_raw(GATE_INIT_GAMMA_OUT))
+            self.gamma_mid_raw.fill_(_gate_raw(GATE_INIT_GAMMA_MID))
             # saliency gate: small weights, zero bias (legacy path)
             self.saliency_gate.weight.mul_(0.01)
             if self.saliency_gate.bias is not None:
@@ -593,6 +676,10 @@ class GauSS(nn.Module):
     def compute_gamma_out(self) -> Tensor:
         """Direct high-band anchor gain = 0.5 * tanh(gamma_out_raw)."""
         return 0.5 * torch.tanh(self.gamma_out_raw.float())
+
+    def compute_gamma_mid(self) -> Tensor:
+        """Direct mid-band anchor gain = 0.5 * tanh(gamma_mid_raw) (v3.2)."""
+        return 0.5 * torch.tanh(self.gamma_mid_raw.float())
 
     def router_z_loss(self) -> Tensor:
         """ST-MoE router z-loss (Eq. 5, arXiv:2202.08906) of the correction.
@@ -759,14 +846,22 @@ class GauSS(nn.Module):
 
         alpha = self.compute_alpha().to(dtype=z.dtype)
         gamma_out = self.compute_gamma_out().to(dtype=b_h.dtype)
+        gamma_mid = self.compute_gamma_mid().to(dtype=b_h.dtype)
         if ("no_high_band" in flags) or ("no_direct_anchor" in flags):
             b_h_eff = torch.zeros_like(b_h)
         else:
             b_h_eff = b_h
+        if ("no_mid_band" in flags) or ("no_direct_anchor" in flags):
+            b_m_eff = torch.zeros_like(b_m)
+        else:
+            b_m_eff = b_m
 
         # Residual addition WITHOUT activation: pure linear combination.
-        # ReZero-exact at init: alpha == gamma_* == 0 -> y_p2 == x0 bitwise.
-        y_p2 = x0 + alpha * z + gamma_out * b_h_eff
+        # v3.2 warm start: alpha/gamma != 0 at init -> y_p2 is a SMALL
+        # perturbation of x0 (residual RMS ~0.1 * RMS(x0)), and dL/dsigma
+        # is nonzero from step 1 (the v3.1 bitwise identity is dropped —
+        # it mathematically forced a dead sigma gradient).
+        y_p2 = x0 + alpha * z + gamma_out * b_h_eff + gamma_mid * b_m_eff
 
         # ---- 11. Detached Diagnostics ----
         with torch.no_grad():
@@ -778,6 +873,7 @@ class GauSS(nn.Module):
             rms_in = x0.detach().float().square().mean().sqrt().clamp_min(1e-12)
             rms_out = y_p2.detach().float().square().mean().sqrt().clamp_min(1e-12)
             rms_anchor = (gamma_out * b_h_eff).detach().float().square().mean().sqrt()
+            rms_mid_anchor = (gamma_mid * b_m_eff).detach().float().square().mean().sqrt()
             a_f = a.detach().float()
             # torch.special.entr: -x*ln(x) per element, 0 at x==0 (no clamping bias).
             entropy = torch.special.entr(a_f).sum(dim=1).mean()
@@ -801,14 +897,20 @@ class GauSS(nn.Module):
                 "refinement/residual_ratio": float((rms_res / rms_in).item()),
                 "contribution/alpha_z_share": float((rms_res / rms_out).item()),
                 "contribution/anchor_share": float((rms_anchor / rms_out).item()),
+                "contribution/mid_anchor_share": float((rms_mid_anchor / rms_out).item()),
                 "contribution/identity_share": float((rms_in / rms_out).item()),
                 "gates/alpha": float(self.compute_alpha().item()),
                 "gates/gamma_in": float(self.compute_gamma_in().item()),
                 "gates/gamma_out": float(self.compute_gamma_out().item()),
+                "gates/gamma_mid": float(self.compute_gamma_mid().item()),
                 "gaussian/sigma1_mean": float(sigma1.mean().item()),
                 "gaussian/sigma2_mean": float(sigma2.mean().item()),
                 "gaussian/sigma1_std": float(sigma1.std(unbiased=False).item()),
                 "gaussian/sigma2_std": float(sigma2.std(unbiased=False).item()),
+                "gaussian/sigma1_min": float(sigma1.min().item()),
+                "gaussian/sigma1_max": float(sigma1.max().item()),
+                "gaussian/sigma2_min": float(sigma2.min().item()),
+                "gaussian/sigma2_max": float(sigma2.max().item()),
             }
             # Merge DySample offset diagnostics (0.0 == pure bilinear at init).
             for dy_name in ("dy_up3", "dy_up4"):
@@ -874,6 +976,28 @@ def remap_v3_to_v31_state_dict(state_dict: dict[str, Tensor]) -> dict[str, Tenso
     return out
 
 
+def remap_v31_to_v32_state_dict(state_dict: dict[str, Tensor]) -> dict[str, Tensor]:
+    """Convert a GauSS v3.1 checkpoint to the v3.2 parameterization.
+
+    Only the sigma raws change. v3.1: sigma1 = 0.4 + 0.5*sigmoid(r),
+    sigma2 = 1.1 + 0.7*sigmoid(r). v3.2: sigma1 = 0.65 + 0.25*tanh(r),
+    sigma2 = 1.45 + 0.35*tanh(r). Both give (sigma - center)/half =
+    2*sigmoid(r) - 1 = tanh(r/2), hence r_v32 = r_v31 / 2 exactly.
+
+    Gate raws need no conversion: g = 0.5*tanh(raw) in both versions, so a
+    v3.1 raw already denotes the same gate value. `gamma_mid_raw` is absent
+    from v3.1 checkpoints and keeps its constructor warm-start value; load
+    with strict=False.
+    """
+    out: dict[str, Tensor] = {}
+    for k, v in state_dict.items():
+        if k.endswith(("sigma1x_raw", "sigma1y_raw", "sigma2x_raw", "sigma2y_raw")):
+            out[k] = (v.float() * 0.5).to(v.dtype)
+        else:
+            out[k] = v
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Section 9: Optimizer Parameter Group Utilities
 # --------------------------------------------------------------------------- #
@@ -899,6 +1023,7 @@ def configure_gauss_control_param_group(
     optimizer: torch.optim.Optimizer,
     model: nn.Module,
     base_lr: float | None = None,
+    lr_mult: float = 1.0,
 ) -> dict[str, Any] | None:
     """Move GauSS control parameters into a dedicated `control` group with weight_decay=0.0.
 
@@ -907,6 +1032,11 @@ def configure_gauss_control_param_group(
     otherwise the raw scalars land in the default `weight` group and weight
     decay drags alpha_raw/gamma_*_raw toward 0 (= gate 0.25), silently
     destroying the ReZero-exact initialization.
+
+    `lr_mult` (v3.2) scales the control-group LR relative to the inferred
+    base LR. The sigma gradient is intrinsically ~1e-4-scale (it crosses
+    the whole band-refinement stack), so the trainer default is 3.0; pass
+    1.0 to reproduce the v3.1 optimizer behaviour.
     """
     control_params = collect_gauss_control_params(model)
     if not control_params:
@@ -926,18 +1056,19 @@ def configure_gauss_control_param_group(
 
     if inferred_lr is None:
         inferred_lr = float(optimizer.param_groups[0].get("lr", 1e-3))
+    ctrl_lr = inferred_lr * float(lr_mult)
 
     if existing_ctrl_group is not None:
         existing_ctrl_group["params"] = control_params
         existing_ctrl_group["weight_decay"] = 0.0
-        existing_ctrl_group.setdefault("lr", inferred_lr)
-        existing_ctrl_group.setdefault("initial_lr", inferred_lr)
+        existing_ctrl_group["lr"] = ctrl_lr
+        existing_ctrl_group["initial_lr"] = ctrl_lr
         return existing_ctrl_group
 
     ctrl_group: dict[str, Any] = {
         "params": control_params,
-        "lr": inferred_lr,
-        "initial_lr": inferred_lr,
+        "lr": ctrl_lr,
+        "initial_lr": ctrl_lr,
         "weight_decay": 0.0,
         "param_group": "control",
     }
@@ -1077,6 +1208,7 @@ __all__ = [
     "is_gauss_control_param_name",
     "mode_unused_param_names",
     "remap_v3_to_v31_state_dict",
+    "remap_v31_to_v32_state_dict",
 ]
 
 
@@ -1093,10 +1225,10 @@ if __name__ == "__main__":
     conv_count = sum(1 for m in module.modules() if isinstance(m, nn.Conv2d))
     ctrl_params = collect_gauss_control_params(module)
     ctrl_count = sum(p.numel() for p in ctrl_params)
-    assert total_params == 36_878, f"Expected 36,878 params, got {total_params}"
+    assert total_params == 36_879, f"Expected 36,879 params, got {total_params}"
     assert conv_count == 27, f"Expected 27 Conv2d modules, got {conv_count}"
-    assert ctrl_count == 131, (
-        f"Expected 131 control scalars (128 sigma + alpha + gamma_in + gamma_out), got {ctrl_count}"
+    assert ctrl_count == 132, (
+        f"Expected 132 control scalars (128 sigma + alpha + gamma_in + gamma_out + gamma_mid), got {ctrl_count}"
     )
 
     # 2. Analytical MACs -------------------------------------------------
@@ -1121,7 +1253,7 @@ if __name__ == "__main__":
     up_err = (got_up - ref_up).abs().max().item()
     assert up_err < 1e-5, f"DySample(zero-init) != bilinear: max|d|={up_err}"
 
-    # 4. Exact ReZero identity: y_p2 == x0 bitwise at init ----------------
+    # 4. v3.2 warm start: near-identity output, LIVE sigma gradient --------
     c2_t = torch.randn(2, 64, 80, 80, requires_grad=True)
     p3_t = torch.randn(2, 64, 40, 40, requires_grad=True)
     p4_t = torch.randn(2, 128, 20, 20, requires_grad=True)
@@ -1132,8 +1264,31 @@ if __name__ == "__main__":
         )
     out_p2 = module([c2_t, p3_t, p4_t])
     assert out_p2.shape == (2, 32, 80, 80), f"Unexpected output shape: {out_p2.shape}"
-    ident_err = (out_p2 - x0_ref).abs().max().item()
-    assert ident_err == 0.0, f"ReZero identity violated: max|y - x0| = {ident_err}"
+    # Warm start (v3.2): NOT bitwise identity, but a small perturbation.
+    rel = (out_p2 - x0_ref).norm() / x0_ref.norm().clamp_min(1e-12)
+    assert 1e-3 < float(rel.detach()) < 0.35, f"warm-start residual out of range: rel={float(rel)}"
+    # The core v3.2 contract: sigma receives a gradient AT INIT.
+    module.zero_grad(set_to_none=True)
+    out_p2 = module([c2_t, p3_t, p4_t])
+    out_p2.square().mean().backward()
+    sigma_grads = [
+        float(p.grad.abs().max())
+        for n, p in module.named_parameters() if n.startswith("gaussian.sigma")
+    ]
+    assert max(sigma_grads) > 1e-8, (
+        f"dL/dsigma == 0 at init (v3.1 regression): {sigma_grads}"
+    )
+    # Output sensitivity to a sigma perturbation (v3.1 measured 0.0 exactly).
+    with torch.no_grad():
+        base = module([c2_t, p3_t, p4_t]).clone()
+        module.gaussian.sigma1x_raw.add_(0.4)
+        module.gaussian.sigma1y_raw.add_(0.4)
+        pert = module([c2_t, p3_t, p4_t])
+        sens = float((pert - base).abs().max())
+        module.gaussian.sigma1x_raw.sub_(0.4)
+        module.gaussian.sigma1y_raw.sub_(0.4)
+    assert sens > 1e-3, f"sigma perturbation has no output effect: {sens}"
+    sigma_sens = sens
 
     # 5. Router correction is behaviour-identical to pure energy at init --
     # zero-init corr -> z-loss equals (log 3)^2 exactly (ST-MoE baseline value)
@@ -1191,7 +1346,10 @@ if __name__ == "__main__":
     assert diag["optimizer/control_weight_decay"] == 0.0
     assert diag["optimizer/control_lr"] == 1e-3
     assert diag["routing/mixing_std"] > 0.0, "Spatial mixing gate has zero spatial variance!"
-    assert diag["gates/alpha"] > 0.0  # warmed above
+    assert diag["gates/alpha"] > 0.0  # warm-started at init (v3.2)
+    # lr_mult=3 scales the control group (v3.2 item 4)
+    configure_gauss_control_param_group(opt, module, base_lr=1e-3, lr_mult=3.0)
+    assert module.get_diagnostics(optimizer=opt)["optimizer/control_lr"] == 3e-3
 
     # 8. Ablation regression: no_high_band gates BOTH high-band paths -----
     os.environ["TINYDET_ABLATION"] = "no_high_band"
@@ -1263,9 +1421,57 @@ if __name__ == "__main__":
     )
     assert "gamma_h_raw" not in remapped
 
+    # 10b. v3.1 -> v3.2 sigma remap: r_v32 == r_v31 / 2 (exact) -----------
+    sd31 = {
+        "gaussian.sigma1x_raw": torch.tensor([0.8, -0.4]),
+        "gaussian.sigma2y_raw": torch.tensor([1.2]),
+        "alpha_raw": torch.tensor([0.3616]),
+        "conv.weight": torch.tensor([1.0]),
+    }
+    sd32 = remap_v31_to_v32_state_dict(sd31)
+    assert torch.allclose(sd32["gaussian.sigma1x_raw"], sd31["gaussian.sigma1x_raw"] / 2)
+    assert torch.allclose(sd32["gaussian.sigma2y_raw"], sd31["gaussian.sigma2y_raw"] / 2)
+    # gate raws are version-invariant (same gate value -> same raw)
+    assert torch.equal(sd32["alpha_raw"], sd31["alpha_raw"])
+    assert torch.equal(sd32["conv.weight"], sd31["conv.weight"])
+    # and the remap preserves the actual sigma VALUES
+    m32 = LearnableGaussianScaleSpace(2)
+    with torch.no_grad():
+        m32.sigma1x_raw.copy_(sd32["gaussian.sigma1x_raw"])
+        m32.sigma2y_raw.copy_(sd32["gaussian.sigma2y_raw"])
+    s32 = m32.compute_sigmas()
+    # v3.1 formula restated locally (the class now implements v3.2)
+    v31_s1x = 0.4 + 0.5 * torch.sigmoid(sd31["gaussian.sigma1x_raw"])
+    v31_s2y = 1.1 + 0.7 * torch.sigmoid(sd31["gaussian.sigma2y_raw"])
+    assert torch.allclose(s32[0], v31_s1x, atol=1e-6), "sigma1 value drift in remap"
+    assert torch.allclose(s32[3], v31_s2y, atol=1e-6), "sigma2 value drift in remap"
+
+    # 10c. Sigma actually LEARNS: 200 Adam steps on a synthetic objective ---
+    torch.manual_seed(0)
+    m_learn = GauSS(c1=[64, 64, 128], c2=32)
+    m_learn.zero_grad(set_to_none=True)
+    opt_l = torch.optim.Adam(collect_gauss_control_params(m_learn), lr=3e-3)
+    tgt = torch.randn(2, 32, 80, 80)
+    start = {
+        n: p.detach().clone()
+        for n, p in m_learn.named_parameters() if n.startswith("gaussian.sigma")
+    }
+    for _ in range(200):
+        opt_l.zero_grad(set_to_none=True)
+        loss_l = F.mse_loss(m_learn([c2_t.detach(), p3_t.detach(), p4_t.detach()]), tgt)
+        loss_l.backward()
+        opt_l.step()
+    drift = max(
+        float((p.detach() - start[n]).abs().max())
+        for n, p in m_learn.named_parameters() if n.startswith("gaussian.sigma")
+    )
+    assert drift > 0.05, f"sigma barely moves under Adam: |dsigma_raw|max={drift:.4f}"
+
     print(
-        f"[PASS] GauSS v3.1 verified: params={total_params:,} | convs={conv_count} | "
+        f"[PASS] GauSS v3.2 verified: params={total_params:,} | convs={conv_count} | "
         f"ctrl={ctrl_count} | MACs={mac_info['total_gmacs']:.8f} GMAC "
-        f"({mac_info['total_gflops']:.8f} GFLOPs) | ReZero identity exact | "
-        f"DySample==bilinear (err={up_err:.2e}) | ablations contamination-free"
+        f"({mac_info['total_gflops']:.8f} GFLOPs) | warm start (rel={float(rel):.3f}) | "
+        f"dL/dsigma@init={max(sigma_grads):.2e}, sens={sigma_sens:.2e} | "
+        f"sigma drift/200 steps={drift:.3f} | DySample==bilinear (err={up_err:.2e}) | "
+        f"ablations contamination-free"
     )

@@ -473,3 +473,60 @@
   đường cong hội tụ từ `metrics/system_metrics.csv` của 2 run 150e.
 - **Chưa xác minh:** nguyên nhân nhân quả của gap thu hẹp (cần BL-030); độ lớn nhiễu seed
   (chỉ seed 42, dao động quan sát ±0.01 AP); định nghĩa oracle variant `both`.
+## ADR-022: Sửa cơ chế GauSS (v3.2) — bỏ "exact identity at init", warm-start cổng (2026-11-10)
+
+- **Bối cảnh:** phân tích truy nguyên 150e (`ROOT_CAUSE_150E`, artifact) đo trực tiếp trên
+  module thật: `max|∂L/∂σ| = 0.000e+00` tại init và độ nhạy output với σ cũng `0.000e+00`;
+  sau 150 epoch thật σ chỉ trôi 3.5–5% dải cho phép; `high_band_share` đứng yên
+  0.102→0.107. Gap AP50 tiled +0.0048 với 95% CI [−0.0031, +0.0145] (paired bootstrap,
+  B=120) ⇒ không có hiệu ứng. Nguyên nhân không phải "module kém" mà là **cơ chế lõi
+  không hoạt động**.
+- **Chẩn đoán toán học:** `y = x0 + alpha·z(σ) + gamma_out·b_h(σ)` với `x0` không phụ
+  thuộc σ. Nếu `alpha = gamma = 0` (đúng trạng thái ReZero-exact của v3.1) thì `y ≡ x0`
+  ⇒ `∂L/∂σ ≡ 0` **chính xác**, không phải "nhỏ". Exact identity tại init và gradient σ
+  khác 0 là **hai điều kiện loại trừ nhau**. Đo thực nghiệm xác nhận: alpha=0 → 0.000e+00;
+  alpha=0.10 → 8.1e-05.
+- **Phương án đã xem:**
+  1. **Giữ identity, thêm loss phụ cho σ** (ví dụ ép σ khớp thống kê band): giữ được tính
+     chất "không đổi baseline ở epoch 0" nhưng phải bịa supervision ngoài task — không có
+     cơ sở lý thuyết, và vẫn không cho σ tác động lên output.
+  2. **Tăng LR cho σ** (giữ identity): vô hiệu về mặt toán học — gradient bằng 0 thì mọi
+     LR đều bằng 0.
+  3. **Warm-start cổng (đã chọn):** bỏ identity bitwise, init `alpha=0.10`,
+     `gamma_in/out/mid=0.05`; output tại init là nhiễu động nhỏ (residual norm 17% của x0)
+     thay vì identity. Đây là cách duy nhất để `∂L/∂σ ≠ 0` ngay bước 1.
+- **Quyết định (v3.2, `src/tinydet/modules/gauss.py`):**
+  1. Warm-start cổng: `alpha=0.10`, `gamma_in=0.05`, `gamma_out=0.05`, `gamma_mid=0.05`
+     (raw = atanh(2g)).
+  2. Thêm **mid-band direct anchor** `gamma_mid · b_m` với `b_m = l1 − l2` phụ thuộc **cả**
+     σ1 và σ2 ⇒ σ2 có đường gradient 1-hop ra output (v3.1 chỉ có σ1 có đường này).
+  3. Đổi tham số hoá σ từ sigmoid sang **tanh-centered**: `σ1 = 0.65 + 0.25·tanh(raw)`,
+     `σ2 = 1.45 + 0.35·tanh(raw)` — cùng dải và cùng giá trị init, nhưng đạo hàm
+     `dσ/draw` tăng gấp đôi (0.25/0.35 so với 0.125/0.175) và hết bão hoà sigmoid.
+  4. `configure_gauss_control_param_group(..., lr_mult=...)`; trainer đọc
+     `gauss_control_lr_mult` từ config train, **mặc định 3.0** (1.0 = hành vi v3.1).
+  5. Chẩn đoán mới: `gaussian/sigma{1,2}_{min,max}`, `gates/gamma_mid`,
+     `contribution/mid_anchor_share`.
+  6. Router correction giờ học được (trước đây `∂L/∂a = 0` tại init vì alpha=0). Energy
+     prior vẫn `detach()` **có chủ ý**: nó là prior thống kê input cố định, phần học được
+     là correction (ST-MoE z-loss giữ ổn định).
+- **Kiểm chứng (số thật, chạy local CPU):**
+  - Self-test `python src/tinydet/modules/gauss.py`: **PASS** — params 36,879 (+1 so với
+    v3.1), ctrl 132, MACs không đổi 1.04132608 GMAC, `max|∂L/∂σ|@init = 5.01e-05`,
+    `sens = 3.89e-02`, `σ drift/200 Adam steps = 1.074`, remap v3.1→v3.2 chính xác
+    (r/2, giá trị σ bảo toàn), ablation `no_high_band`/`no_direct_anchor` vẫn sạch.
+  - Script đo gradient: σ grad 1.2e-05…4.4e-05 so với **median conv grad 7.4e-05** ⇒ cùng
+    bậc; `router_corr.weight` grad 6.4e-04 (trước: 0).
+  - Smoke toàn model (`build_model` + forward/backward 320×320): 4/4 tham số σ có
+    gradient, 132 control params được thu thập.
+  - `ruff check src/tinydet/modules/gauss.py src/tinydet/training/trainer.py`: pass.
+- **Hệ quả:**
+  - Checkpoint v3.1 **không load trực tiếp** được ý nghĩa như cũ: dùng
+    `remap_v31_to_v32_state_dict` (chỉ chia đôi sigma raw; gate raw giữ nguyên vì cùng
+    `0.5·tanh`), load `strict=False` (thiếu `gamma_mid_raw`).
+  - Config mới `configs/experiment/gauss_v32_tinyperson_wacv_150e.yaml` (giữ nguyên recipe
+    150e, thêm `gauss_control_lr_mult: 3.0`). Config 150e cũ và 60e **không sửa**.
+  - Mọi kết quả 150e đã báo vẫn là của v3.1; không được trộn số giữa hai phiên bản.
+- **Chưa xác minh:** chưa train lại v3.2 trên GPU ⇒ chưa biết σ có thực sự dịch chuyển
+  trong train thật và AP có cải thiện; chưa kiểm tra tính ổn định AMP/fp16 với warm-start;
+  chưa chạy multi-seed; giá trị `lr_mult=3.0` chưa được tune.

@@ -51,9 +51,9 @@ def _log_active_head(trainer) -> None:
     print("=" * 70, flush=True)
 
 
-def _setup_gauss_optimizer(trainer) -> None:
-    """Ensure GauSS scale-space and router control parameters have weight_decay=0.0 and sync scheduler."""
-    configure_gauss_control_param_group(trainer.optimizer, trainer.model)
+def _setup_gauss_optimizer(trainer, lr_mult: float = 1.0) -> None:
+    """GauSS control group: weight_decay=0.0, LR = base_lr * lr_mult, scheduler-synced."""
+    configure_gauss_control_param_group(trainer.optimizer, trainer.model, lr_mult=lr_mult)
     # If the trainer has already constructed its lr_scheduler (LambdaLR),
     # re-synchronize its lr_lambdas and base_lrs to match the updated param_groups.
     if hasattr(trainer, "scheduler") and hasattr(trainer.scheduler, "lr_lambdas"):
@@ -130,6 +130,12 @@ def train(
     augmentations = resolve_augmentations(preset)
     if augmentations is not None:
         train_args_s1["augmentations"] = augmentations
+    # GauSS control-group LR multiplier (v3.2): sigma gradients are
+    # intrinsically ~1e-4-scale, so the default 3x keeps the control scalars
+    # on the same epoch timescale as the conv weights. The key must not leak
+    # into model.train(), which rejects unknown args.
+    gauss_lr_mult = float(train_args_s1.pop("gauss_control_lr_mult", 3.0))
+    gauss_setup = partial(_setup_gauss_optimizer, lr_mult=gauss_lr_mult)
 
     training_done_flag = run / "training" / "completed.flag"
     training_best_pt = run / "training" / "weights" / "best.pt"
@@ -191,7 +197,7 @@ def train(
                     wandb_enabled=bool(project),
                 )
                 model.callbacks["on_train_start"].insert(0, _log_active_head)
-                model.callbacks["on_pretrain_routine_end"].append(_setup_gauss_optimizer)
+                model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
                 if on_epoch_end_callback is not None:
                     model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
                 if project:
@@ -294,7 +300,7 @@ def train(
                 wandb_enabled=bool(project),
             )
             model.callbacks["on_train_start"].insert(0, _log_active_head)
-            model.callbacks["on_pretrain_routine_end"].append(_setup_gauss_optimizer)
+            model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:
@@ -345,7 +351,7 @@ def train(
                 wandb_enabled=bool(project),
             )
             model.callbacks["on_train_start"].insert(0, _log_active_head)
-            model.callbacks["on_pretrain_routine_end"].append(_setup_gauss_optimizer)
+            model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:

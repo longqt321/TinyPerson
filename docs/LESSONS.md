@@ -170,3 +170,25 @@ Bài học rút ra từ lỗi đã xảy ra. Mỗi mục có mã `L-###` để t
   chỉ đo nhiễu sampling của eval, không đo nhiễu khởi tạo/train.
 - **Trạng thái:** đã áp dụng cho 150e — kết luận ghi ở ADR-021; script bootstrap ở
   `/tmp/deepbench/bootstrap_ap.py` (chưa promote vào repo, xem BL-030).
+
+
+## L-012: "Identity at init" và "gradient khác 0 cho tham số cơ chế" loại trừ nhau — warm-start cổng
+
+- **Bối cảnh:** GauSS v3.1 dùng ReZero-exact (`alpha = 0.5·tanh(raw)`, raw init 0) để
+  `y_p2 == x0` bitwise ở epoch 0. Hệ quả không được xét: `y = x0 + alpha·z(σ) + gamma·b(σ)`
+  với `x0` độc lập σ ⇒ `alpha = gamma = 0` thì `∂L/∂σ ≡ 0` **chính xác**, và output **hoàn
+  toàn không phụ thuộc σ** (đo: perturb σ 0.65→0.77 cho Δoutput = 0.000e+00). Sau 150
+  epoch thật, σ chỉ trôi 3.5–5% dải; router correction cũng chết gradient vì `∂L/∂a = 0`
+  tại init; `high_band_share` đứng yên.
+- **Bài học:** mọi "residual module khởi tạo bằng 0 để giữ baseline" đều có **dead-start**
+  cho các tham số chỉ tác động qua nhánh residual. Trước khi chọn identity-at-init, phải
+  chứng minh bằng test rằng `∂L/∂θ > 0` tại init cho **từng** tham số đặc trưng của module.
+  Không có test đó thì "module không cải thiện" là kết luận vô nghĩa — module chưa từng
+  được phép hoạt động.
+- **Cách tránh:** (a) warm-start cổng ở giá trị nhỏ nhưng khác 0 (ở đây alpha=0.10,
+  gamma=0.05 ⇒ residual norm 17% của x0) và ghi rõ đánh đổi; (b) thêm test hồi quy
+  `assert max|∂L/∂σ| > 0` + `assert output sensitivity > 0` vào self-test của module;
+  (c) với tham số có gradient bậc nhỏ hơn conv 1 bậc, tách param group với `lr_mult`
+  (ở đây 3.0) thay vì tăng LR toàn cục.
+- **Trạng thái:** đã sửa trong v3.2 (ADR-022); self-test PASS với `max|∂L/∂σ|@init =
+  5.01e-05`, `σ drift/200 steps = 1.074`. Chưa train lại trên GPU.

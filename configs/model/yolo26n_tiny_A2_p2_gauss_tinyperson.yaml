@@ -1,4 +1,4 @@
-# YOLO26n-P2 GauSS v3.1 model for TinyPerson (official protocol: single 'person' class)
+# YOLO26n-P2 GauSS v3.2 model for TinyPerson (official protocol: single 'person' class)
 nc: 1
 end2end: True
 reg_max: 1
@@ -35,7 +35,7 @@ head:
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 17 (from 16)
   - [[-1, 2], 1, Concat, [1]]       # 18 (17 + 2)
   - [-1, 2, C3k2, [128, True]]      # 19 - P2 intermediate (32 ch)
-  - [[2, 16, 13], 1, GauSS, [32]]   # 20 - GauSS v3.1 (C2=64, P3=64, P4=128 -> 32 ch)
+  - [[2, 16, 13], 1, GauSS, [32]]   # 20 - GauSS v3.2 (C2=64, P3=64, P4=128 -> 32 ch)
   - [-1, 1, Conv, [128, 3, 2]]      # 21 - downsample GauSS output (32 -> 32 ch)
   - [[-1, 16], 1, Concat, [1]]      # 22 (21 + 16 -> 32+64=96 ch)
   - [-1, 2, C3k2, [256, True]]      # 23 (64 ch)
