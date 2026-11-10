@@ -436,3 +436,14 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
   1e-3", nhưng trainer không cộng nó vào loss ⇒ `router_corr` chỉ được regularize gián tiếp.
 - **Đề xuất:** hoặc nối vào loss trong trainer (kèm config `gauss_router_zloss_weight`),
   hoặc xoá để tránh người đọc hiểu nhầm là đang bật.
+
+## BL-034: Chưa xác định nguyên nhân hard-kill container train (SIGKILL)
+
+- **Phát hiện:** 2026-11-10. Mọi run crash của campaign 150e có `metadata.status = RUNNING`
+  và không có `error` ⇒ container bị kill cứng, không phải exception. Các lần chết ở epoch
+  khác nhau (150, 148, 37, 16, 4, 3) nên không phải lỗi tất định tại một epoch.
+- **Nghi phạm:** RAM tăng dần (W&B media + per-epoch artifacts) so với trần cgroup 48 GB;
+  hoặc preemption của host. Chưa có bằng chứng.
+- **Đề xuất:** smoke run 2e (~$0.05) với `modal app logs --timestamps` giữ lại toàn bộ log,
+  ghi `memory.current`/`memory.peak` từ cgroup mỗi epoch để xác định có chạm trần hay không.
+- **Giảm nhẹ hiện tại:** ADR-025 (resume) đã giới hạn thiệt hại của mỗi lần kill còn ~1 epoch.

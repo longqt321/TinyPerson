@@ -421,5 +421,11 @@ def train(
             import wandb
 
             if wandb.run is not None:
-                wandb.finish()
+                # A failed final sync must not fail an otherwise TRAINED run:
+                # the exception would mark the Modal function as failed and
+                # trigger a retry (which re-spawns the whole train container).
+                try:
+                    wandb.finish()
+                except Exception as exc:  # noqa: BLE001 - W&B is optional logging
+                    print(f"W&B finish failed (ignored): {exc}", flush=True)
     return run

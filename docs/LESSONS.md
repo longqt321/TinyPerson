@@ -209,3 +209,13 @@ Bài học rút ra từ lỗi đã xảy ra. Mỗi mục có mã `L-###` để t
   gates→0) — nếu can thiệp đó cho delta ≈ 0 thì phép đo hỏng, không phải module bất động.
 - **Trạng thái:** đã áp dụng trong `scripts/gauss_probe.py`; số liệu T3 trùng khớp với bản
   đo cũ nên kết luận không đổi.
+
+## L-014: Retry mặc định của cloud = train lại từ đầu nếu run_id không tất định
+
+- **Bối cảnh:** `_train` trên Modal bị hard-kill; Modal tự retry; vì `run_id` sinh từ
+  timestamp, mỗi retry tạo thư mục mới ⇒ `last.pt` cũ không được dùng ⇒ train lại 150e.
+- **Bài học:** với job dài và tốn tiền, **idempotency là yêu cầu về chi phí, không phải
+  chuyện code đẹp**. Mọi thứ có thể retry phải có khoá tất định (commit+seed), phải resume
+  được từ checkpoint, và phải trả về ngay nếu việc đã xong.
+- **Cách tránh:** trước khi launch, tự hỏi "nếu hàm này chạy lại 3 lần thì tốn bao nhiêu?".
+  Nếu câu trả lời là "3 lần full training" thì chưa được launch.

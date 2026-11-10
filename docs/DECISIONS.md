@@ -587,3 +587,28 @@
   agent canh. Chi phí tối đa của một lần G1 thất bại = 20 epoch.
 - **Chưa xác minh:** cổng chưa chạy trong run GPU thật (mới test trainer giả); ngưỡng
   `residual_share_min = 0.02` suy luận từ probe, chưa có giá trị thực trong train.
+
+## ADR-025: Retry-safe training — run_id tất định + resume + idempotent orchestrator
+
+- **Ngày:** 2026-11-10. **Trạng thái:** Accepted.
+- **Bối cảnh:** campaign 150e ngày 2026-11-09 tốn ~$12–13 thay vì ~$3. Nguyên nhân: (a)
+  container `_train` bị hard-kill (metadata của mọi run crash đều còn `status=RUNNING`, không
+  có `error` ⇒ bị SIGKILL, không phải exception Python); (b) orchestrator không truyền
+  `run_id`, nên mỗi lần Modal auto-retry tạo thư mục timestamp mới và **train lại từ epoch 0**.
+  Có 2 lần train đủ 150e bị vứt bỏ (~6.6 GPU-giờ ≈ $7.3).
+- **Quyết định:**
+  1. `_train` tự sinh `run_id` tất định `f"{commit}{-dirty}-seed{seed}"` khi caller không
+     truyền; `_orchestrate_campaign` truyền tường minh cùng công thức.
+  2. `_train` trở thành **idempotent**: nếu run đã có `training/completed.flag` + status
+     `TRAINED|COMPLETED` + config khớp ⇒ trả về ngay, không train lại.
+  3. Nếu thư mục run tồn tại nhưng `config.yaml` khác config hiện tại ⇒ **raise** thay vì
+     resume nhầm vào run của cấu hình khác.
+  4. `_train` đặt `retries=2`; retry giờ resume từ `last.pt` (đường resume đã có sẵn trong
+     `trainer.train`), nên chi phí một lần kill ≈ 1 epoch (~25 s) thay vì cả run.
+  5. `_orchestrate_campaign`: `retries=1`, `timeout` 43200 → 21600, và bỏ qua train cho run
+     đã hoàn tất (`_complete_run_path`) ⇒ orchestrator retry gần như miễn phí.
+  6. `_collect` chấp nhận cả handle lẫn đường dẫn run (run được tái sử dụng).
+- **Hệ quả:** muốn train lại cùng commit+seed một cách chủ động phải đổi commit hoặc truyền
+  `run_id` khác; nếu không sẽ nhận lại run cũ. Đây là hành vi mong muốn (không đốt tiền).
+- **Chưa xác minh:** nguyên nhân hard-kill vẫn chưa xác định (log Modal chỉ giữ ~200 dòng);
+  đường resume từ `last.pt` chưa được chạy thử trên GPU sau thay đổi này.

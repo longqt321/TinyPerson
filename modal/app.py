@@ -142,7 +142,46 @@ def _audit_original_dataset(dataset_yaml: str, imgsz: int, audit_id: str):
     return result
 
 
-@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=21600)
+def _deterministic_run_id(commit: str, dirty: bool, seed: int) -> str:
+    """Retry-safe run id: a Modal retry (or relaunch) resolves to the same run
+    directory, so `trainer.train` resumes from `last.pt` instead of restarting
+    from epoch 0. The 2026-11-09 campaign burned ~$7 because the orchestrator
+    passed no run_id, so every retry created a fresh timestamped directory."""
+    return f"{commit}{'-dirty' if dirty else ''}-seed{seed}"
+
+
+def _run_dir_for(config_name: str, run_id: str) -> Path:
+    return RUN_ROOT / config_name / run_id
+
+
+def _config_matches_run(run: Path, config_text: str) -> bool:
+    """A reused/resumed run must have been created from the same config."""
+    saved = run / "config.yaml"
+    if not saved.is_file():
+        return True  # run dir exists but was never initialized; safe to fill in
+    try:
+        return yaml.safe_load(saved.read_text()) == yaml.safe_load(config_text)
+    except yaml.YAMLError:
+        return False
+
+
+def _complete_run_path(config_name: str, run_id: str, config_text: str) -> str | None:
+    """Return the run path when this exact run already finished training."""
+    run = _run_dir_for(config_name, run_id)
+    if not (run / "metadata.json").is_file() or not (run / "training" / "completed.flag").is_file():
+        return None
+    if not _config_matches_run(run, config_text):
+        return None
+    try:
+        status = json.loads((run / "metadata.json").read_text()).get("status")
+    except (OSError, ValueError):
+        return None
+    if status in ("TRAINED", "COMPLETED"):
+        return str(run)
+    return None
+
+
+@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=21600, retries=2)
 def _train(
     config: str,
     commit: str,
@@ -159,6 +198,22 @@ def _train(
     os.environ["TINYDET_ABLATION"] = ablation
     runs.reload()
     raw_config = yaml.safe_load(config_text) if config_text else yaml.safe_load(Path(config).read_text())
+    # Deterministic run id unless the caller supplies one: Modal retries (and
+    # relaunches) then resume from last.pt instead of retraining from scratch.
+    canonical = config_text if config_text is not None else yaml.safe_dump(raw_config, sort_keys=False)
+    if run_id is None:
+        run_id = _deterministic_run_id(commit, dirty, int(raw_config["seed"]))
+    complete = _complete_run_path(raw_config["name"], run_id, canonical)
+    if complete is not None:
+        # Idempotent: a retry/relaunch of an already-trained run is free.
+        print(f"[SKIP] Run already TRAINED, reusing: {complete}", flush=True)
+        return complete
+    existing = _run_dir_for(raw_config["name"], run_id)
+    if (existing / "config.yaml").is_file() and not _config_matches_run(existing, canonical):
+        raise ValueError(
+            f"Run directory {existing.relative_to(RUN_ROOT)} exists with a different config; "
+            "refusing to resume into it. Pass an explicit run_id or remove the directory."
+        )
     volume_yaml = _dataset_yaml_path(raw_config["data"]["config"])
     volume_dataset = volume_yaml.parent
     if not volume_yaml.is_file():
@@ -242,13 +297,18 @@ def _finalize_pipeline(run: str):
 
 
 def _collect(handle_map: dict, label: str) -> dict:
-    """Drain a {key: handle} map, isolating failures per entry.
+    """Drain a {key: handle-or-path} map, isolating failures per entry.
 
     Returns {key: result-or-None}. A failed entry is reported and skipped;
-    it never aborts the remaining entries.
+    it never aborts the remaining entries. A plain string is a run path that
+    was reused because training had already completed, so it passes through.
     """
     results = {}
     for key, handle in handle_map.items():
+        if isinstance(handle, str):
+            results[key] = handle
+            print(f"[OK] {label} reused for {key}", flush=True)
+            continue
         try:
             results[key] = handle.get()
             print(f"[OK] {label} finished for {key}", flush=True)
@@ -264,7 +324,8 @@ def _collect(handle_map: dict, label: str) -> dict:
     memory=LIGHT_MEMORY_MB,
     max_containers=1,
     volumes=mounts,
-    timeout=43200,
+    timeout=21600,
+    retries=1,
     secrets=[wandb_secret],
 )
 def _orchestrate_campaign(configs: list[str], commit: str, dirty: bool):
@@ -314,10 +375,24 @@ def _orchestrate_campaign(configs: list[str], commit: str, dirty: bool):
         options = {"gpu": gpu}
         if exp.output.get("wandb_project"):
             options["secrets"] = [wandb_secret]
-        print(f"--> Spawning {exp.train['epochs']}e training for: {cfg_path}...", flush=True)
+        # Deterministic run id so a retried orchestrator resumes instead of
+        # retraining. This is the fix for the 2026-11-09 campaign, where a
+        # retry spawned new timestamped dirs and retrained 150e from scratch.
+        run_id = _deterministic_run_id(commit, dirty, int(exp.seed))
+        complete = _complete_run_path(exp.name, run_id, config_text)
+        if complete is not None:
+            print(f"[SKIP] TRAIN already complete, reusing: {complete}", flush=True)
+            train_handles[cfg_path] = complete
+            continue
+        print(f"--> Spawning {exp.train['epochs']}e training for: {cfg_path} (run_id={run_id})...", flush=True)
         try:
             handle = _train.with_options(**options).spawn(
-                cfg_path, commit, dirty, config_text=config_text, dataset_audit=audit
+                cfg_path,
+                commit,
+                dirty,
+                config_text=config_text,
+                dataset_audit=audit,
+                run_id=run_id,
             )
             train_handles[cfg_path] = handle
         except Exception as exc:  # noqa: BLE001 - isolate per-run failures
@@ -515,12 +590,6 @@ def train(config: str, preflight_only: bool = False, strict_resolution: bool = F
         raise ValueError(
             "Strict resolution preflight failed: at least half of parsed objects are "
             "predicted to have sqrt-area below 4 px. Review the report and choose imgsz."
-        )
-    if require_source_metadata and audit["coco_dimension_status"] != "verified":
-        raise ValueError(
-            "Source COCO dimensions are not fully verified against stored rasters "
-            f"(status={audit['coco_dimension_status']!r}). Add the original COCO metadata "
-            "or resolve image-name/dimension mismatches before training."
         )
     if require_source_metadata and audit["coco_dimension_status"] != "verified":
         raise ValueError(
@@ -1131,7 +1200,7 @@ def _subset_annotations(
     memory=MEMORY_LIMIT_MB,
     max_containers=2,
     volumes=mounts,
-    timeout=10800,
+    timeout=3600,
 )
 def _run_checkpoint_evaluation(relative_checkpoint: str, name: str, split: str = "val"):
     """Run the full evaluation stack (benchmark, AP75 oracles, error analysis) on one checkpoint.
@@ -1261,7 +1330,7 @@ def evaluate_checkpoint(
     memory=MEMORY_LIMIT_MB,
     max_containers=2,
     volumes=mounts,
-    timeout=10800,
+    timeout=3600,
 )
 def _run_tiled_checkpoint_evaluation(relative_checkpoint: str, name: str):
     """Run tiled crop + merge evaluation (640x512, overlap 100) on test split."""
