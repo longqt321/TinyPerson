@@ -530,3 +530,33 @@
 - **Chưa xác minh:** chưa train lại v3.2 trên GPU ⇒ chưa biết σ có thực sự dịch chuyển
   trong train thật và AP có cải thiện; chưa kiểm tra tính ổn định AMP/fp16 với warm-start;
   chưa chạy multi-seed; giá trị `lr_mult=3.0` chưa được tune.
+
+## ADR-023: Giao thức kiểm chứng 3 tầng cho GauSS v3.2 — không train 150e nếu không qua cổng G1 (2026-11-10)
+
+- **Bối cảnh:** sau khi sửa cơ chế (ADR-022), phân tích sâu hơn với loss thật trên CPU
+  cho thấy hai tầng vấn đề tách biệt: (a) gradient chết ở init (đã sửa bằng warm-start)
+  và (b) **tính định danh của σ** — paired delta trên 8 batch ảnh thật: σ1 full-range
+  dịch chuyển đổi loss ~0 (t ≤ 0.66) cả ở init lẫn ở checkpoint đã train; σ2 có tín hiệu
+  đơn điệu ở điểm đã train (t = −3.4, model muốn σ2 nhỏ hơn); xóa toàn bộ residual GauSS
+  (gates→0) đổi loss +0.014 ± 0.038 (bằng không thống kê).
+- **Quyết định:** áp dụng giao thức 3 tầng (artifact `CRITERIA_V32_PREREG`):
+  1. **C0 (đã xong, $0):** T1 gradient tồn tại (PASS); T2 sign consistency 0.33 = random
+     (FAIL — nhiễu chi phối tại init); T3 identifiability (σ1 FAIL, σ2 có ở điểm trained);
+     T4 mini-train 150 bước: σ mean đứng yên, σ per-channel std tăng nhanh với lr_mult=3
+     (0.036 đơn vị σ vs 0.0244 của v3.1 sau 150 epoch).
+  2. **G1 (GPU ~$0.35):** launch đúng config 150e, kill tại e20 nếu fail cổng đã đăng ký:
+     G1.1 |σ2_mean−1.45| ≥ 0.02; G1.2 σ2_std ≥ 0.02; G1.3 alpha ≥ 0.15; G1.4 val
+     mAP50@e20 ≥ 0.09. Điểm dừng e10: σ2_std < 0.01 ∧ alpha < 0.12 ⇒ kill.
+  3. **G2 (150e, ~$2.2):** chỉ chạy nếu G1 đạt; kết quả phân xử bằng paired bootstrap
+     (L-011), không bằng gap thô.
+- **Dự đoán đã đăng ký (trước khi nhìn kết quả GPU):** P1 σ1_mean đứng yên (85%);
+  P2 σ2_mean dịch ≥ 0.02 hướng giảm (55%); P3 alpha ≥ 0.15 @e20 (80%); P4 σ2_std ≥ 0.05
+  cuối (70%); **P5 CI bootstrap chứa 0 (45%)** — mức trung thực cao nhất, vì residual
+  GauSS đóng góp ~0 vào train loss.
+- **Nhánh sửa cấu trúc nếu G1 fail:** S1 mở rộng dải σ2 (ưu tiên, test local được trước);
+  S3 σ cố định + routing học được (trung thực nhất về claim); S2 bỏ bn_proj; S4 auxiliary
+  supervision (cuối).
+- **Hệ quả:** không launch 150e v3.2 nếu không qua G1; mọi claim AP tiếp tục bị cấm theo
+  ADR-021 cho đến khi bootstrap nói khác.
+- **Chưa xác minh:** probe ở 320px/batch 4 có thể đánh giá thấp SNR của train thật
+  (1280px/batch 16); động học cosine+warmup chưa được mô phỏng; P5 là ước lượng chủ quan.
