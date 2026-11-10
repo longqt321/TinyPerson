@@ -181,7 +181,7 @@ def _complete_run_path(config_name: str, run_id: str, config_text: str) -> str |
     return None
 
 
-@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=21600, retries=2)
+@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0, scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB, max_containers=4, volumes=mounts, timeout=7200, retries=2)
 def _train(
     config: str,
     commit: str,
@@ -324,7 +324,7 @@ def _collect(handle_map: dict, label: str) -> dict:
     memory=LIGHT_MEMORY_MB,
     max_containers=1,
     volumes=mounts,
-    timeout=21600,
+    timeout=7200,
     retries=1,
     secrets=[wandb_secret],
 )
