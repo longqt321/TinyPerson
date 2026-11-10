@@ -46,11 +46,11 @@ def make_dataset(root: Path) -> Path:
 
 
 def train_args(epochs: int, project: Path, name: str, data_yaml: Path) -> dict:
-    return dict(
-        data=str(data_yaml), project=str(project), name=name, exist_ok=True,
-        epochs=epochs, imgsz=IMG_SIZE, batch=2, device="cpu", verbose=False,
-        plots=False, save_period=-1, workers=0, val=True,
-    )
+    return {
+        "data": str(data_yaml), "project": str(project), "name": name, "exist_ok": True,
+        "epochs": epochs, "imgsz": IMG_SIZE, "batch": 2, "device": "cpu", "verbose": False,
+        "plots": False, "save_period": -1, "workers": 0, "val": True,
+    }
 
 
 def main() -> int:
@@ -71,7 +71,8 @@ def main() -> int:
         return 1
     resumed = YOLO(str(last))
     resumed.train(resume=True, **train_args(4, project, "r", data_yaml))
-    rows = list(csv.DictReader(open(project / "r" / "results.csv")))
+    with open(project / "r" / "results.csv") as handle:
+        rows = list(csv.DictReader(handle))
     epochs = [int(r["epoch"]) for r in rows]
     if max(epochs) < 3:
         print(f"FAIL: resume did not continue (max epoch {max(epochs)})")
