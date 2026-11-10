@@ -407,3 +407,14 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
 - **Ý nghĩa:** nếu giả thuyết đúng, claim của GauSS phải chuyển từ "tăng AP cuối" sang
   "recall sớm (AP@0.25/MR@0.25) + hội tụ nhanh + score calibration"; đây là claim cơ chế
   mạnh hơn và trung thực hơn.
+
+## BL-031: 16 lỗi ruff pre-existing ngoài `src/` — `ruff check .` đang đỏ
+
+- **Phát hiện:** 2026-11-10 khi lint trước commit L-011. `uv run --extra cpu --group dev
+  ruff check .` báo 16 lỗi (5 fixable), toàn bộ nằm ngoài `src/tinydet`:
+  `launch_parallel_tinyperson.py` (3), `report-bundle/tools/{build,check_manuscript,
+  guard,make_figures,md_lint,verify_refs}.py` (13). Chủ yếu I001 import sort và tương tự.
+- **Tác động:** hook lint đỏ khiến mỗi commit phải kiểm tra thủ công lỗi nào là mới.
+- **Đề xuất:** chạy `ruff check launch_parallel_tinyperson.py report-bundle --fix` một
+  lần trong commit riêng, hoặc thêm `exclude` cho các script này trong `pyproject.toml`
+  nếu chúng là tool một-lần.
