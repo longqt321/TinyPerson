@@ -38,6 +38,7 @@ import yaml
 
 from tinydet.utils.config import ExperimentConfig, load_config
 from tinydet.utils.runtime import (
+    DEFAULT_HF_DATASET_REPO,
     default_output_root,
     detect_host,
     discover_dataset,
@@ -61,6 +62,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Experiment YAML.",
     )
     parser.add_argument("--data", type=Path, help="Override data.config (file or directory).")
+    parser.add_argument(
+        "--hf-dataset",
+        default=os.environ.get("TINYDET_HF_DATASET", DEFAULT_HF_DATASET_REPO),
+        help="Hugging Face dataset repo to auto-download if dataset is not present locally. "
+        "Pass empty string '' to disable.",
+    )
     parser.add_argument(
         "--data-root", type=Path, help="Override the 'path' key inside the dataset YAML."
     )
@@ -264,7 +271,10 @@ def main(argv: list[str] | None = None) -> int:
 
     from tinydet.utils.dataset import normalize_dataset_yaml
 
-    discovered = discover_dataset(args.data, config.data.get("config"), host, REPO_ROOT)
+    hf_repo = args.hf_dataset.strip() or None
+    discovered = discover_dataset(
+        args.data, config.data.get("config"), host, REPO_ROOT, hf_repo=hf_repo
+    )
     staged = discovered if args.no_stage else stage_dataset_to_local_ssd(discovered, host)
     dataset_yaml = normalize_dataset_yaml(staged, root=args.data_root)
 

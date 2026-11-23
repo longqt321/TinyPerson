@@ -63,16 +63,16 @@ Chi tiết đầy đủ nằm trong:
 
 ## 4. Các Lệnh Thực thi Chính
 
-### Chạy 1 lệnh trên Google Colab / Kaggle (tự cài `uv` + PyTorch CUDA, tự tìm/stage dataset, preflight, W&B sync & resume)
-1. Thêm secret `WANDB_API_KEY` trong **Colab Secrets** (hoặc **Kaggle Add-ons → Secrets**).
-2. Trên Colab (nếu dataset nằm trên Google Drive, mount Drive trước — script tự copy sang `/content/data_local` để không nghẽn I/O FUSE):
+### Chạy 1 lệnh trên Google Colab / Kaggle (tự cài `uv` + PyTorch CUDA, tự tải dataset từ Hugging Face, preflight, W&B sync & resume)
+1. Thêm secret `WANDB_API_KEY` trong **Colab Secrets** (hoặc **Kaggle Add-ons → Secrets**; thêm `HF_TOKEN` nếu chuyển dataset repo sang private).
+2. Chạy đúng 1 lệnh sau khi `git clone`:
 ```bash
 git clone <repo-url> && cd thigiacmaytinh
 bash scripts/run_gpu.sh --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml
 ```
-- **Tự động hoàn toàn**: cài `uv`, `uv sync --extra gpu --frozen` (Python 3.14 + `torch+cu128` theo `uv.lock`), phát hiện môi trường (`colab`/`kaggle`), tự tìm `tinyperson-yolo-v2/data.yaml`, chạy `audit_dataset` + model preflight, đăng nhập W&B từ Secrets và gắn tag `host:colab` / `host:kaggle` với deterministic run ID (`resume="allow"`) đồng bộ hoàn toàn với Modal, lưu checkpoint bền vững (Google Drive / `/kaggle/working/runs`), và gọi `finalize()`.
+- **Tự động hoàn toàn**: cài `uv`, `uv sync --extra gpu --frozen` (Python 3.14 + `torch+cu128` theo `uv.lock`), phát hiện môi trường (`colab`/`kaggle`), tự tìm dataset local hoặc **tự tải `tinyperson-yolo-v2.tar.gz` từ Hugging Face (`longqt321/tinyperson-yolo`) + xác minh SHA-256 + giải nén vào SSD local**, chạy `audit_dataset` + model preflight, đăng nhập W&B từ Secrets với tag `host:colab`/`host:kaggle` và deterministic run ID (`resume="allow"`) đồng bộ hoàn toàn với Modal, lưu checkpoint bền vững (Google Drive / `/kaggle/working/runs`), và gọi `finalize()`.
 - Chạy lại đúng lệnh trên sau khi bị ngắt session sẽ **tự động resume** từ `last.pt`.
-- Truyền thêm cờ tùy chọn nếu cần: `--data <path>`, `--output-root <dir>`, `--wandb-group <group>`, `--batch 8`, `--epochs 150`.
+- Truyền thêm cờ tùy chọn nếu cần: `--hf-dataset <owner/repo>`, `--data <path>`, `--output-root <dir>`, `--wandb-group <group>`, `--batch 8`, `--epochs 150`.
 
 ### Kiểm tra nhanh trên CPU (lint & dry-run)
 ```bash

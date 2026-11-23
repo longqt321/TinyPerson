@@ -1,14 +1,19 @@
-"""Runtime detection, W&B auth sync, and dataset discovery for Modal, Colab, and Kaggle."""
+"""Runtime detection, secret sync (W&B/HF), and dataset provisioning for Modal, Colab, and Kaggle."""
 
 from __future__ import annotations
 
 import hashlib
 import os
 import shutil
+import tarfile
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 import torch
+
+DEFAULT_HF_DATASET_REPO = "longqt321/tinyperson-yolo"
+DEFAULT_HF_ARCHIVE_NAME = "tinyperson-yolo-v2.tar.gz"
 
 
 def detect_host() -> str:
@@ -22,31 +27,32 @@ def detect_host() -> str:
     return "local"
 
 
+def resolve_secret(name: str) -> str | None:
+    """Read a secret from environment variables, Colab ``userdata``, or Kaggle Secrets."""
+    value = os.environ.get(name)
+    if value:
+        return value
+
+    with suppress(Exception):
+        from google.colab import userdata  # type: ignore[import-not-found]
+
+        value = userdata.get(name)
+        if value:
+            return value
+
+    with suppress(Exception):
+        from kaggle_secrets import UserSecretsClient  # type: ignore[import-not-found]
+
+        value = UserSecretsClient().get_secret(name)
+        if value:
+            return value
+
+    return None
+
+
 def ensure_wandb_auth() -> str | None:
-    """Resolve ``WANDB_API_KEY`` from env, Colab ``userdata``, or Kaggle ``UserSecretsClient``.
-
-    When found, exports the key into ``os.environ["WANDB_API_KEY"]`` and logs in
-    non-interactively so both explicit ``wandb.init`` calls and Ultralytics
-    callbacks authenticate identically across Modal, Colab, and Kaggle.
-    """
-    api_key = os.environ.get("WANDB_API_KEY")
-
-    if not api_key:
-        try:
-            from google.colab import userdata  # type: ignore[import-not-found]
-
-            api_key = userdata.get("WANDB_API_KEY")
-        except Exception:  # noqa: BLE001 - optional Colab runtime
-            api_key = None
-
-    if not api_key:
-        try:
-            from kaggle_secrets import UserSecretsClient  # type: ignore[import-not-found]
-
-            api_key = UserSecretsClient().get_secret("WANDB_API_KEY")
-        except Exception:  # noqa: BLE001 - optional Kaggle runtime
-            api_key = None
-
+    """Resolve ``WANDB_API_KEY`` and authenticate W&B non-interactively across hosts."""
+    api_key = resolve_secret("WANDB_API_KEY")
     if not api_key:
         return None
 
@@ -94,6 +100,17 @@ def default_output_root(host: str, repo_root: Path) -> Path:
     return (repo_root / "runs").resolve()
 
 
+def default_local_data_root(host: str, repo_root: Path) -> Path:
+    """Local fast-SSD directory where downloaded/staged datasets are unpacked."""
+    if host == "colab":
+        return Path("/content/data_local")
+    if host == "kaggle":
+        return Path("/kaggle/working/data_local")
+    if host == "modal":
+        return Path("/mnt/data")
+    return (repo_root / "datasets" / "derived").resolve()
+
+
 def stable_run_id(seed: int, host: str) -> str:
     """Deterministic run folder name so rerunning the same command resumes cleanly."""
     return f"{host}-seed{seed}"
@@ -114,13 +131,75 @@ def _find_yaml_under(root: Path, preferred_dir: str = "tinyperson-yolo-v2") -> P
     return None
 
 
+def download_hf_dataset(
+    repo_id: str,
+    dest_parent: Path,
+    archive_name: str = DEFAULT_HF_ARCHIVE_NAME,
+) -> Path:
+    """Download and extract the verified TinyPerson YOLO archive from Hugging Face."""
+    from huggingface_hub import hf_hub_download
+
+    dataset_dir_name = archive_name.removesuffix(".tar.gz")
+    target_yaml = dest_parent / dataset_dir_name / "data.yaml"
+    if target_yaml.is_file():
+        print(f"[dataset] Using cached dataset: {target_yaml}", flush=True)
+        return target_yaml.resolve()
+
+    token = resolve_secret("HF_TOKEN")
+    print(f"[dataset] Downloading {archive_name} from hf://datasets/{repo_id}...", flush=True)
+    archive_path = Path(
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=archive_name,
+            repo_type="dataset",
+            token=token,
+        )
+    )
+
+    try:
+        sha_path = Path(
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=f"{archive_name}.sha256",
+                repo_type="dataset",
+                token=token,
+            )
+        )
+        expected = sha_path.read_text().strip().split()[0]
+        with archive_path.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != expected:
+            raise ValueError(
+                f"Dataset archive SHA-256 mismatch: expected {expected}, got {actual}"
+            )
+        print(f"[dataset] SHA-256 verified: {actual[:12]}...", flush=True)
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - checksum file is optional on custom repos
+        print(f"[dataset] Skipping SHA-256 verification ({exc})", flush=True)
+
+    dest_parent.mkdir(parents=True, exist_ok=True)
+    print(f"[dataset] Extracting to {dest_parent}...", flush=True)
+    with tarfile.open(archive_path, "r:gz") as tar:
+        tar.extractall(dest_parent, filter="data")
+
+    if not target_yaml.is_file():
+        found = _find_yaml_under(dest_parent, preferred_dir=dataset_dir_name)
+        if found is None:
+            raise FileNotFoundError(f"Extracted archive did not contain data.yaml under {dest_parent}")
+        return found
+    return target_yaml.resolve()
+
+
 def discover_dataset(
     explicit: Path | None,
     config_data_path: str | None,
     host: str,
     repo_root: Path,
+    *,
+    hf_repo: str | None = DEFAULT_HF_DATASET_REPO,
 ) -> Path:
-    """Locate ``data.yaml`` automatically across Modal, Colab, Kaggle, and local hosts."""
+    """Locate ``data.yaml`` locally, or auto-download from Hugging Face if absent."""
     candidates: list[Path] = []
     if explicit is not None:
         candidates.append(explicit.expanduser())
@@ -135,6 +214,7 @@ def discover_dataset(
         [
             repo_root / "datasets" / "derived" / "tinyperson-yolo-v2" / "data.yaml",
             Path("/content/data_local/tinyperson-yolo-v2/data.yaml"),
+            Path("/kaggle/working/data_local/tinyperson-yolo-v2/data.yaml"),
             Path("/mnt/data/tinyperson-yolo-v2/data.yaml"),
         ]
     )
@@ -156,12 +236,12 @@ def discover_dataset(
         if found is not None:
             return found
 
+    if hf_repo:
+        return download_hf_dataset(hf_repo, default_local_data_root(host, repo_root))
+
     raise FileNotFoundError(
         "Could not locate dataset data.yaml automatically.\n"
-        "Pass --data <path/to/data.yaml> or set TINYDET_DATA, or place tinyperson-yolo-v2 under:\n"
-        "  - Google Colab : /content/data_local/tinyperson-yolo-v2/data.yaml or Google Drive\n"
-        "  - Kaggle       : /kaggle/input/<dataset-slug>/tinyperson-yolo-v2/data.yaml\n"
-        "  - Local repo   : datasets/derived/tinyperson-yolo-v2/data.yaml"
+        "Pass --data <path/to/data.yaml>, --hf-dataset <owner/repo>, or set TINYDET_DATA."
     )
 
 
