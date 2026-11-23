@@ -63,33 +63,25 @@ Chi tiết đầy đủ nằm trong:
 
 ## 4. Các Lệnh Thực thi Chính
 
+### Chạy 1 lệnh trên Google Colab / Kaggle (tự cài `uv` + PyTorch CUDA, tự tìm/stage dataset, preflight, W&B sync & resume)
+1. Thêm secret `WANDB_API_KEY` trong **Colab Secrets** (hoặc **Kaggle Add-ons → Secrets**).
+2. Trên Colab (nếu dataset nằm trên Google Drive, mount Drive trước — script tự copy sang `/content/data_local` để không nghẽn I/O FUSE):
+```bash
+git clone <repo-url> && cd thigiacmaytinh
+bash scripts/run_gpu.sh --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml
+```
+- **Tự động hoàn toàn**: cài `uv`, `uv sync --extra gpu --frozen` (Python 3.14 + `torch+cu128` theo `uv.lock`), phát hiện môi trường (`colab`/`kaggle`), tự tìm `tinyperson-yolo-v2/data.yaml`, chạy `audit_dataset` + model preflight, đăng nhập W&B từ Secrets và gắn tag `host:colab` / `host:kaggle` với deterministic run ID (`resume="allow"`) đồng bộ hoàn toàn với Modal, lưu checkpoint bền vững (Google Drive / `/kaggle/working/runs`), và gọi `finalize()`.
+- Chạy lại đúng lệnh trên sau khi bị ngắt session sẽ **tự động resume** từ `last.pt`.
+- Truyền thêm cờ tùy chọn nếu cần: `--data <path>`, `--output-root <dir>`, `--wandb-group <group>`, `--batch 8`, `--epochs 150`.
+
 ### Kiểm tra nhanh trên CPU (lint & dry-run)
 ```bash
 uv sync --extra cpu --group dev
 uv run --extra cpu --group dev ruff check .
-uv run --extra cpu --group dev python train.py \
-  --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml \
-  --data datasets/derived/tinyperson-yolo-v2/data.yaml --dry-run
+bash scripts/run_gpu.sh --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml --dry-run
 ```
 
 Train trên CPU bị chặn có chủ đích: cả `train.py` và `tinydet.training.trainer.train` đều từ chối khi không có CUDA.
-
-### Huấn luyện trên GPU host bất kỳ (Colab, Kaggle, RunPod, ...)
-```bash
-pip install -q uv
-uv sync --extra gpu --group dev
-
-uv run --extra gpu python train.py \
-  --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml \
-  --data /content/data_local/tinyperson-yolo-v2/data.yaml \
-  --output-root /content/drive/MyDrive/tinydet_runs \
-  --device 0 --batch 8 --imgsz 1280 --workers 4 \
-  --name gauss_v3_seed42 --run-id run1
-```
-
-Lưu ý:
-- Luôn truyền `--extra gpu` cho `uv run` để giữ đúng bản `torch` CUDA đã khóa trong `uv.lock`.
-- Muốn resume khi run bị ngắt giữa chừng, phải truyền lại đúng `--run-id`.
 
 ### Chạy chiến dịch trên Modal (detached)
 ```bash

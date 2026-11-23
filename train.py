@@ -1,31 +1,34 @@
-"""Environment-agnostic training CLI for TinyDet experiments.
+"""Environment-agnostic training CLI for TinyDet experiments (Modal, Colab, Kaggle, local GPU).
 
-Single entry point for every CUDA host (Modal, Colab, Kaggle, RunPod, ...).
-CPU training stays disabled on purpose: ``tinydet.training.trainer.train``
-raises when CUDA is unavailable.
+Single entry point with full Modal parity:
+1. Auto-detects host (``colab``, ``kaggle``, ``modal``, ``local``).
+2. Auto-discovers dataset ``data.yaml`` (and stages Google Drive FUSE datasets to
+   Colab local SSD ``/content/data_local`` to avoid I/O bottlenecks).
+3. Auto-selects a persistent writable ``output_root`` (Drive on Colab,
+   ``/kaggle/working/runs`` on Kaggle, ``./runs`` locally).
+4. Auto-authenticates W&B from env, Colab ``userdata``, or Kaggle ``UserSecretsClient``,
+   using deterministic run IDs (``resume="allow"``) and ``host:<name>`` tags for
+   full synchronization with Modal runs.
+5. Runs dataset preflight audit (``audit_dataset``) and model sanity checks before
+   training, logs all artifacts/metrics, and calls ``finalize(run)`` upon completion.
 
 Examples
 --------
-Modal keeps using ``modal/app.py``; this CLI is for GPU hosts without Modal::
+One-command run on Google Colab / Kaggle after ``git clone``::
 
-    python train.py \
-        --config configs/experiment/p2refine_tinyperson_wacv.yaml \
-        --data /content/data_local/tinyperson-yolo-v2/data.yaml \
-        --output-root /content/drive/MyDrive/tinydet_runs \
-        --device 0 --batch 8 --imgsz 1280 --workers 4 \
-        --name p2refine_colab_seed42 --run-id run1
+    bash scripts/run_gpu.sh --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml
 
-Pass the same ``--run-id`` again to resume an interrupted run. Without it each
-invocation creates a new timestamped run folder, so ``last.pt`` is never found
-and training restarts from epoch 0.
+CPU dry-run validation (no GPU required)::
 
-Validate the whole path without a GPU (no training, no CUDA required)::
-
-    python train.py --config configs/experiment/p2refine_tinyperson_wacv.yaml \
+    uv run --extra cpu python train.py \
+        --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml \
         --data datasets/derived/tinyperson-yolo-v2/data.yaml --dry-run
 """
 
+from __future__ import annotations
+
 import argparse
+import os
 import sys
 import tempfile
 from dataclasses import asdict, replace
@@ -34,14 +37,29 @@ from pathlib import Path
 import yaml
 
 from tinydet.utils.config import ExperimentConfig, load_config
+from tinydet.utils.runtime import (
+    default_output_root,
+    detect_host,
+    discover_dataset,
+    ensure_wandb_auth,
+    stable_run_id,
+    stage_dataset_to_local_ssd,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train a TinyDet experiment on any CUDA GPU.",
+        description="Train a TinyDet experiment on any CUDA GPU (Colab, Kaggle, local, Modal).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--config", required=True, type=Path, help="Experiment YAML.")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=REPO_ROOT / "configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml",
+        help="Experiment YAML.",
+    )
     parser.add_argument("--data", type=Path, help="Override data.config (file or directory).")
     parser.add_argument(
         "--data-root", type=Path, help="Override the 'path' key inside the dataset YAML."
@@ -50,9 +68,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--name", help="Override the experiment name (run folder).")
     parser.add_argument(
         "--run-id",
-        help="Run folder name under <output-root>/<name>/. Reuse the same value to resume an "
-        "interrupted run: without it every invocation gets a new timestamped folder and "
-        "training restarts from scratch.",
+        help="Run folder name under <output-root>/<name>/. Defaults to a stable host+seed ID "
+        "on Colab/Kaggle so rerunning the same command resumes automatically.",
     )
     parser.add_argument("--device", help="CUDA device list, e.g. '0' or '0,1'.")
     parser.add_argument("--epochs", type=int, help="Override train.epochs.")
@@ -60,27 +77,35 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--imgsz", type=int, help="Override train.imgsz.")
     parser.add_argument("--workers", type=int, help="Override train.workers.")
     parser.add_argument("--seed", type=int, help="Override seed.")
+    parser.add_argument("--wandb-project", help="Override W&B project name.")
+    parser.add_argument("--wandb-group", help="Optional W&B group name to match Modal campaigns.")
     parser.add_argument(
         "--no-wandb", action="store_true", help="Disable W&B logging for this run."
     )
     parser.add_argument(
+        "--no-stage",
+        action="store_true",
+        help="Do not copy Google Drive datasets to Colab local SSD.",
+    )
+    parser.add_argument(
+        "--skip-audit",
+        action="store_true",
+        help="Skip dataset preflight audit before training.",
+    )
+    parser.add_argument(
+        "--no-finalize",
+        action="store_true",
+        help="Skip post-training finalize() step.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Resolve config, dataset and model, print statistics, then exit without training.",
+        help="Run preflight checks (config, dataset, model) on CPU and exit without training.",
     )
     return parser.parse_args(argv)
 
 
-REPO_ROOT = Path(__file__).resolve().parent
-
-
 def _resolve_model_config(value: str | Path, experiment_path: Path) -> Path:
-    """Resolve a model YAML path that may be relative to CWD, repo root, or configs/.
-
-    Experiment YAMLs store ``model.config`` relative to the repository root
-    (e.g. ``configs/model/foo.yaml``), so a run started from another working
-    directory must still find it.
-    """
     candidate = Path(value).expanduser()
     if candidate.is_absolute():
         return candidate.resolve()
@@ -97,10 +122,12 @@ def _resolve_model_config(value: str | Path, experiment_path: Path) -> Path:
     return (REPO_ROOT / candidate).resolve()
 
 
-def _resolve_paths(
-    config: ExperimentConfig, args: argparse.Namespace, experiment_path: Path
+def _resolve_config(
+    config: ExperimentConfig,
+    args: argparse.Namespace,
+    experiment_path: Path,
+    host: str,
 ) -> ExperimentConfig:
-    """Make every path absolute so the run no longer depends on the working directory."""
     model = dict(config.model)
     model["config"] = str(_resolve_model_config(model["config"], experiment_path))
     if not Path(model["config"]).is_file():
@@ -115,6 +142,11 @@ def _resolve_paths(
     output = dict(config.output)
     if args.output_root is not None:
         output["root"] = str(args.output_root.expanduser().resolve())
+    elif host != "modal" and str(output.get("root", "")).startswith("/mnt/"):
+        output["root"] = str(default_output_root(host, REPO_ROOT))
+
+    if args.wandb_project is not None:
+        output["wandb_project"] = args.wandb_project
     if args.no_wandb:
         output["wandb_project"] = None
 
@@ -125,6 +157,8 @@ def _resolve_paths(
             train[key] = value
     if args.device is not None:
         train["device"] = args.device
+    if host in {"colab", "kaggle"} and args.workers is None:
+        train["workers"] = min(int(train.get("workers", 4)), os.cpu_count() or 2)
 
     seed = config.seed if args.seed is None else args.seed
     name = config.name if args.name is None else args.name
@@ -133,22 +167,31 @@ def _resolve_paths(
     )
 
 
-def _print_summary(config: ExperimentConfig, dataset_yaml: Path) -> None:
+def _print_summary(
+    config: ExperimentConfig,
+    dataset_yaml: Path,
+    host: str,
+    run_id: str | None,
+    wandb_group: str | None,
+) -> None:
     print("=" * 70)
+    print(f"Host       : {host}")
     print(f"Experiment : {config.name}")
+    print(f"Run ID     : {run_id or '(auto-timestamp)'}")
     print(f"Seed       : {config.seed}")
     print(f"Model YAML : {config.model['config']}")
     print(f"Dataset    : {dataset_yaml}")
     print(f"Run root   : {config.output['root']}")
-    print(f"W&B        : {config.output.get('wandb_project') or 'disabled'}")
+    print(f"W&B        : {config.output.get('wandb_project') or 'disabled'}"
+          f"{f' (group={wandb_group})' if wandb_group else ''}")
     for key in ("epochs", "imgsz", "batch", "workers", "optimizer", "lr0", "device"):
         if key in config.train:
             print(f"{key:<11}: {config.train[key]}")
     print("=" * 70, flush=True)
 
 
-def _dry_run(config: ExperimentConfig, dataset_yaml: Path) -> None:
-    """Build the model and dataset objects on CPU; never trains."""
+def _run_model_preflight(config: ExperimentConfig, dataset_yaml: Path) -> None:
+    """Validate model build, parameter count, strides, and dataset split visibility."""
     from ultralytics.utils.torch_utils import get_flops, get_num_gradients, get_num_params
 
     from tinydet.models.registry import build_model
@@ -162,24 +205,41 @@ def _dry_run(config: ExperimentConfig, dataset_yaml: Path) -> None:
     gradients = get_num_gradients(inner)
     gflops = get_flops(inner, imgsz)
     strides = [int(s) for s in inner.model[-1].stride.tolist()]
+    train_images = len(dataset_images(dataset_yaml, "train"))
     val_images = len(dataset_images(dataset_yaml, "val"))
-    print(f"layers     : {layers}")
-    print(f"parameters : {params:,}")
-    print(f"gradients  : {gradients:,}")
-    print(f"GFLOPs     : {gflops:.3f} @ {imgsz}x{imgsz}")
-    print(f"strides    : {strides}")
-    print(f"val images : {val_images}")
-    print("[DRY RUN] config, dataset and model all resolve. No training performed.", flush=True)
+    print(
+        f"[preflight] model: layers={layers}, params={params:,}, grads={gradients:,}, "
+        f"GFLOPs={gflops:.3f}@{imgsz}, strides={strides}",
+        flush=True,
+    )
+    print(f"[preflight] dataset splits: train={train_images}, val={val_images}", flush=True)
+    if train_images == 0:
+        raise ValueError(f"Training split has 0 images in {dataset_yaml}")
+
+
+def _run_dataset_preflight(config: ExperimentConfig, dataset_yaml: Path) -> dict:
+    """Run the same ``audit_dataset`` preflight that Modal executes before training."""
+    from tinydet.data.image_audit import audit_dataset
+
+    imgsz = int(config.train["imgsz"])
+    workers = min(16, max(2, os.cpu_count() or 4))
+    print(f"[preflight] auditing dataset images/labels (imgsz={imgsz}, workers={workers})...", flush=True)
+    report = audit_dataset(dataset_yaml, imgsz, workers=workers)
+    summary = {
+        "imgsz": imgsz,
+        "images_total": report.get("images_total"),
+        "severe_resolution_loss": report.get("severe_resolution_loss"),
+        "dataset_signature_metadata_sha256": report.get("dataset_signature_metadata_sha256"),
+    }
+    print(
+        f"[preflight] dataset audit OK: images={summary['images_total']}, "
+        f"signature={str(summary['dataset_signature_metadata_sha256'])[:12]}...",
+        flush=True,
+    )
+    return summary
 
 
 def _check_output_root(config: ExperimentConfig) -> None:
-    """Fail early with an actionable message when the run root is not writable.
-
-    Experiment YAMLs default to ``/mnt/runs``, which only exists on Modal. On
-    Colab, Kaggle or a bare GPU host that path is either missing or read-only,
-    and the failure otherwise surfaces as a bare PermissionError deep inside
-    ``create_run``.
-    """
     root = Path(config.output["root"])
     try:
         root.mkdir(parents=True, exist_ok=True)
@@ -198,17 +258,29 @@ def _check_output_root(config: ExperimentConfig) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    host = detect_host()
     experiment_path = Path(args.config).expanduser().resolve()
-    config = _resolve_paths(load_config(experiment_path), args, experiment_path)
+    config = _resolve_config(load_config(experiment_path), args, experiment_path, host)
 
-    from tinydet.utils.dataset import normalize_dataset_yaml, resolve_dataset_yaml
+    from tinydet.utils.dataset import normalize_dataset_yaml
 
-    raw_dataset = resolve_dataset_yaml(config.data["config"])
-    dataset_yaml = normalize_dataset_yaml(raw_dataset, root=args.data_root)
-    _print_summary(config, dataset_yaml)
+    discovered = discover_dataset(args.data, config.data.get("config"), host, REPO_ROOT)
+    staged = discovered if args.no_stage else stage_dataset_to_local_ssd(discovered, host)
+    dataset_yaml = normalize_dataset_yaml(staged, root=args.data_root)
+
+    effective_run_id = args.run_id
+    if effective_run_id is None and host in {"colab", "kaggle"}:
+        effective_run_id = stable_run_id(config.seed, host)
+
+    _print_summary(config, dataset_yaml, host, effective_run_id, args.wandb_group)
+    _run_model_preflight(config, dataset_yaml)
+
+    dataset_audit: dict | None = None
+    if not args.skip_audit:
+        dataset_audit = _run_dataset_preflight(config, dataset_yaml)
 
     if args.dry_run:
-        _dry_run(config, dataset_yaml)
+        print("[DRY RUN] config, dataset audit, and model all passed. No training performed.", flush=True)
         return 0
 
     import torch
@@ -217,18 +289,45 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "CUDA is not available. Training requires a CUDA GPU; CPU training is "
             "intentionally disabled. Use --dry-run to validate the configuration, or "
-            "run on a GPU host (Modal, Colab, Kaggle, RunPod, ...).",
+            "enable a GPU runtime (Colab T4/L4/A100, Kaggle T4/P100, Modal A10/L4).",
             file=sys.stderr,
         )
         return 1
 
-    from tinydet.training.trainer import train
+    print(
+        f"[preflight] CUDA GPU: {torch.cuda.get_device_name(0)} "
+        f"(torch {torch.__version__}, CUDA {torch.version.cuda})",
+        flush=True,
+    )
+
+    if config.output.get("wandb_project"):
+        key = ensure_wandb_auth()
+        status = "authenticated" if key else "no WANDB_API_KEY found (W&B may disable itself)"
+        print(f"[preflight] W&B: {status}", flush=True)
 
     _check_output_root(config)
+
+    from tinydet.training.finalize import finalize
+    from tinydet.training.trainer import train
+
     with tempfile.TemporaryDirectory(prefix="tinydet-cfg-") as temporary:
         config_file = Path(temporary) / "experiment.yaml"
         config_file.write_text(yaml.safe_dump(asdict(config), sort_keys=False))
-        run = train(config_file, dataset_config=dataset_yaml, run_id=args.run_id)
+        run = train(
+            config_file,
+            dataset_config=dataset_yaml,
+            wandb_group=args.wandb_group,
+            dataset_audit=dataset_audit,
+            run_id=effective_run_id,
+        )
+
+    if not args.no_finalize:
+        try:
+            finalize(run)
+            print(f"[finalize] Published checkpoints & curves in: {run}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - keep trained artifacts even if plot fails
+            print(f"[finalize] Warning: {exc}", flush=True)
+
     print(f"Run directory: {run}", flush=True)
     return 0
 

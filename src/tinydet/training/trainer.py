@@ -11,6 +11,7 @@ from tinydet.models.registry import build_model
 from tinydet.modules.gauss import configure_gauss_control_param_group
 from tinydet.training.epoch_metrics import register_epoch_metrics, register_size_stratified_metrics
 from tinydet.training.gauss_gate import register_gauss_gate
+from tinydet.training.gauss_split_callbacks import register_gauss_split_callbacks
 from tinydet.training.iou_logging import log_ap_by_iou
 from tinydet.training.module_diagnostics import register_p2refine_callbacks
 from tinydet.training.wandb_media import WandbMediaCallback
@@ -18,23 +19,34 @@ from tinydet.utils.atomic import atomic_write_text
 from tinydet.utils.config import load_config
 from tinydet.utils.dataset import resolve_dataset_yaml
 from tinydet.utils.experiment import create_run, metadata, update_status, write_json
+from tinydet.utils.runtime import (
+    detect_host,
+    deterministic_wandb_id,
+    ensure_wandb_auth,
+    runtime_wandb_metadata,
+)
 from tinydet.utils.seed import set_seed
 
 
 def _init_wandb(project: str, name: str, group: str | None, config: dict):
     try:
+        ensure_wandb_auth()
         import wandb
 
+        host = detect_host()
+        run_id = deterministic_wandb_id(project, name)
         run = wandb.init(
             project=project,
+            id=run_id,
+            resume="allow",
             name=name,
             group=group,
-            tags=["latest"],
+            tags=["latest", f"host:{host}"],
             job_type="train",
-            config=config,
+            config={**config, **runtime_wandb_metadata()},
             dir="/tmp",
         )
-        print(f"W&B: {run.url}", flush=True)
+        print(f"W&B ({host}): {run.url}", flush=True)
         return run
     except Exception as exc:  # noqa: BLE001 - W&B is optional logging
         print(f"W&B disabled after init failure: {exc}", flush=True)
@@ -160,7 +172,7 @@ def train(
     # Ultralytics' Albumentations hook consumes (see build_transforms). The preset
     # key itself must not leak into model.train(), which rejects unknown args.
     preset = train_args_s1.pop("augmentations_preset", None)
-    augmentations = resolve_augmentations(preset)
+    augmentations = resolve_augmentations(preset, int(config.train["imgsz"]))
     if augmentations is not None:
         train_args_s1["augmentations"] = augmentations
     # GauSS control-group LR multiplier (v3.2): sigma gradients are
@@ -238,6 +250,7 @@ def train(
                 model.callbacks["on_train_start"].insert(0, _log_active_head)
                 model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
                 register_gauss_gate(model, gauss_gate_cfg)
+                register_gauss_split_callbacks(model, wandb_enabled=bool(project))
                 _register_time_budget(model, time_budget_hours, started)
                 if on_epoch_end_callback is not None:
                     model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
@@ -343,6 +356,7 @@ def train(
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
             register_gauss_gate(model, gauss_gate_cfg)
+            register_gauss_split_callbacks(model, wandb_enabled=bool(project))
             _register_time_budget(model, time_budget_hours, started)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
@@ -396,6 +410,7 @@ def train(
             model.callbacks["on_train_start"].insert(0, _log_active_head)
             model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
             register_gauss_gate(model, gauss_gate_cfg)
+            register_gauss_split_callbacks(model, wandb_enabled=bool(project))
             _register_time_budget(model, time_budget_hours, started)
             if on_epoch_end_callback is not None:
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
