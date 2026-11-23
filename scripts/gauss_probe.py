@@ -291,7 +291,7 @@ def cmd_minitrain(args: argparse.Namespace) -> None:
                 trace["s1_std"].append(float(s1v.std()))
                 trace["s2_std"].append(float(s2v.std()))
                 trace["alpha"].append(
-                    float(0.5 * torch.tanh(named["model.20.alpha_raw"].detach())))
+                    float(0.5 * torch.tanh(next(v for k, v in named.items() if k.endswith("alpha_raw")).detach())))
                 trace["loss"].append(float(l.sum()))
         print(f"\n== lr_mult={mult} ==")
         for i, st in enumerate(trace["step"]):

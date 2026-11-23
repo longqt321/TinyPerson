@@ -22,7 +22,7 @@ def _parse_configs(configs: str) -> list[str]:
 
 
 @app.local_entrypoint()
-def main(configs: str = "", detach: bool = True, wait: bool = False):
+def main(configs: str = "", detach: bool = True, wait: bool = False, evaluate: bool = True):
     """Launch a training campaign detached by default.
 
     The whole chain (audit -> parallel training -> finalize -> tiled + full
@@ -40,6 +40,9 @@ def main(configs: str = "", detach: bool = True, wait: bool = False):
         modal app logs <app-id>
     and fetch results with:
         modal run launch_campaign.py::fetch
+
+    Pass --no-evaluate to stop after train + finalize (for protocols that
+    score test once, with a threshold selected on val).
     """
     from tinydet.utils.experiment import git_info
 
@@ -50,7 +53,7 @@ def main(configs: str = "", detach: bool = True, wait: bool = False):
         print("[WARN] Working tree is dirty; commit/dirty will be recorded in run metadata.", flush=True)
 
     if detach and not wait:
-        handle = modal_app_module._orchestrate_campaign.spawn(selected, commit, dirty)
+        handle = modal_app_module._orchestrate_campaign.spawn(selected, commit, dirty, evaluate=evaluate)
         print("=" * 70, flush=True)
         print("DETACHED LAUNCH — the campaign now runs inside Modal.", flush=True)
         print(f"  Call ID : {handle.object_id}", flush=True)
@@ -63,7 +66,7 @@ def main(configs: str = "", detach: bool = True, wait: bool = False):
 
     # Attached mode: still executes remotely; a local drop only loses the
     # final printout, never the training itself.
-    summary = modal_app_module._orchestrate_campaign.remote(selected, commit, dirty)
+    summary = modal_app_module._orchestrate_campaign.remote(selected, commit, dirty, evaluate=evaluate)
     print(json.dumps(summary, indent=2), flush=True)
 
 

@@ -15,6 +15,31 @@ from PIL import Image
 from torchvision.ops import nms
 from ultralytics import YOLO
 
+# Canonical tile grid shared by every tiled evaluation / training entry point
+# (must match the protocol that produced the 0.3540 tiled baseline).
+TILE_W, TILE_H, TILE_OVERLAP = 640, 512, 100
+NMS_IOU = 0.50
+
+
+def tile_origins(width: int, height: int) -> list[tuple[int, int]]:
+    """Top-left (x, y) corners of the canonical tile grid for a WxH image.
+
+    Same rule as :func:`get_image_slices`, expressed as origins.
+    """
+    return [(x1, y1) for x1, y1, _, _ in get_image_slices(width, height)]
+
+
+def batched_nms(boxes: np.ndarray, scores: np.ndarray, iou_thr: float = NMS_IOU) -> np.ndarray:
+    """Greedy NMS over all boxes via torchvision; returns keep indices sorted by score."""
+    if len(boxes) == 0:
+        return np.array([], dtype=np.int64)
+    keep = nms(
+        torch.from_numpy(boxes).float(),
+        torch.from_numpy(scores).float(),
+        iou_thr,
+    ).numpy()
+    return np.array(sorted(keep, key=lambda k: -scores[k]), dtype=np.int64)
+
 
 def get_image_slices(img_w: int, img_h: int, tile_w: int = 640, tile_h: int = 512, overlap: int = 100) -> list[tuple[int, int, int, int]]:
     """Generate (x1, y1, x2, y2) bounding slices covering the entire image with overlap."""

@@ -1,4 +1,8 @@
 # YOLO26n-P2 GauSS v3.2 model for TinyPerson (official protocol: single 'person' class)
+# Topology note: the dead P2 branch (Upsample->Concat->C3k2 that only fed the
+# removed layer 19) is gone; GauSS itself supplies the stride-4 P2 features.
+# The v3.1 150e run used the original topology, archived in
+# yolo26n_tiny_A2_p2_gauss_v31_tinyperson.yaml.
 nc: 1
 end2end: True
 reg_max: 1
@@ -32,17 +36,14 @@ head:
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 14 (from 13)
   - [[-1, 4], 1, Concat, [1]]       # 15 (14 + 4)
   - [-1, 2, C3k2, [256, True]]      # 16 - P3 (64 ch)
-  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 17 (from 16)
-  - [[-1, 2], 1, Concat, [1]]       # 18 (17 + 2)
-  - [-1, 2, C3k2, [128, True]]      # 19 - P2 intermediate (32 ch)
-  - [[2, 16, 13], 1, GauSS, [32]]   # 20 - GauSS v3.2 (C2=64, P3=64, P4=128 -> 32 ch)
-  - [-1, 1, Conv, [128, 3, 2]]      # 21 - downsample GauSS output (32 -> 32 ch)
-  - [[-1, 16], 1, Concat, [1]]      # 22 (21 + 16 -> 32+64=96 ch)
-  - [-1, 2, C3k2, [256, True]]      # 23 (64 ch)
-  - [-1, 1, Conv, [256, 3, 2]]      # 24 (64 -> 64 ch)
-  - [[-1, 13], 1, Concat, [1]]      # 25 (24 + 13 -> 64+128=192 ch)
-  - [-1, 2, C3k2, [512, True]]      # 26 (128 ch)
-  - [-1, 1, Conv, [512, 3, 2]]      # 27 (128 -> 128 ch)
-  - [[-1, 10], 1, Concat, [1]]      # 28 (27 + 10 -> 128+256=384 ch)
-  - [-1, 1, C3k2, [1024, True, 0.5, True]] # 29 (256 ch)
-  - [[20, 23, 26, 29], 1, Detect, [nc]]    # 30 - Detect head over [P2_GauSS, P3, P4, P5]
+  - [[2, 16, 13], 1, GauSS, [32]]   # 17 - GauSS v3.2 (C2=64, P3=64, P4=128 -> 32 ch)
+  - [-1, 1, Conv, [128, 3, 2]]      # 18 - downsample GauSS output (32 -> 32 ch)
+  - [[-1, 16], 1, Concat, [1]]      # 19 (18 + 16 -> 32+64=96 ch)
+  - [-1, 2, C3k2, [256, True]]      # 20 (64 ch)
+  - [-1, 1, Conv, [256, 3, 2]]      # 21 (64 -> 64 ch)
+  - [[-1, 13], 1, Concat, [1]]      # 22 (21 + 13 -> 64+128=192 ch)
+  - [-1, 2, C3k2, [512, True]]      # 23 (128 ch)
+  - [-1, 1, Conv, [512, 3, 2]]      # 24 (128 -> 128 ch)
+  - [[-1, 10], 1, Concat, [1]]      # 25 (24 + 10 -> 128+256=384 ch)
+  - [-1, 1, C3k2, [1024, True, 0.5, True]] # 26 (256 ch)
+  - [[17, 20, 23, 26], 1, Detect, [nc]]    # 27 - Detect head over [P2_GauSS, P3, P4, P5]

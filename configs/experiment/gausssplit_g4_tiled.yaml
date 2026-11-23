@@ -1,0 +1,63 @@
+# GaussSplit G4 (DoG-gated split head, NWD target) trained on 1:1 tiles — the ADR-027 fallback.
+#
+# Why tiles (BL-045): the head is evaluated by `evaluate_tiled` on 640x512 crops at
+# 1:1 pixel scale, but B0 trained it on full-frame 1280 letterboxes where a 10 px
+# pair (tile space) shrinks to ~1.7 px — under one P2 cell — so the head cannot
+# learn the offset and its extra boxes are false positives. Training on 640x640
+# native windows keeps the head, the `max_dist_px=10` target and the evaluation
+# in the same pixel space.
+#
+# Val stays full-frame 1280 (the `_install_tile_train_only_hook` applies `tile`
+# to the train loader only), so every per-epoch TinyPerson metric is unchanged.
+#
+# Hyper-parameters are the pre-registered ones (AdamW, lr 1e-3, freeze 29);
+# epochs are halved to 20 because a 640-px epoch has ~8x more steps than a
+# 1280-px full-frame epoch (~320 steps vs 41).
+seed: 42
+data:
+  config: /mnt/data/tinyperson-yolo-v2/data.yaml
+train:
+  epochs: 20
+  patience: 20
+  val: true
+  imgsz: 640
+  tile: 640
+  batch: 16
+  workers: 8
+  optimizer: AdamW
+  lr0: 0.001
+  lrf: 0.1
+  cos_lr: true
+  warmup_epochs: 1.0
+  amp: true
+  deterministic: false
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  augmentations_preset: tinyperson_b
+  multi_scale: 0.0
+  compile: false
+  freeze: 29
+hardware:
+  gpu: A10
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+name: gausssplit_g4_tiled
+model:
+  config: configs/model/yolo26n_tiny_A2_p2_gauss_split_g4.yaml
+  pretrained: /mnt/runs/baseline_tinyperson_wacv_150e/20261109-182052-a20f7b6-seed42/training/weights/best.pt

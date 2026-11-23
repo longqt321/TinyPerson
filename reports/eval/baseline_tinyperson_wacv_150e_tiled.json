@@ -1,0 +1,236 @@
+{
+  "checkpoint": "/mnt/runs/baseline_tinyperson_wacv_150e/20261109-182052-a20f7b6-seed42/training/weights/best.pt",
+  "name": "baseline_tinyperson_wacv_150e_tiled",
+  "protocol": "Tiled crop 640x512 + NMS merge 0.50",
+  "benchmark": {
+    "all": {
+      "AP@0.25": 0.6113072845131962,
+      "MR@0.25": 0.8503364912366155,
+      "AP@0.50": 0.40628207279943074,
+      "MR@0.50": 0.9272951624818359,
+      "AP@0.75": 0.04988957136906166,
+      "MR@0.75": 0.9891624655999611,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.3558263095605629,
+      "positive_ground_truths": 13687,
+      "per_category": {
+        "0": {
+          "AP@0.25": 0.6113072845131962,
+          "MR@0.25": 0.8503364912366155,
+          "AP@0.50": 0.40628207279943074,
+          "MR@0.50": 0.9272951624818359,
+          "AP@0.75": 0.04988957136906166,
+          "MR@0.75": 0.9891624655999611,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.3558263095605629,
+          "positive_ground_truths": 13687
+        }
+      }
+    },
+    "tiny": {
+      "AP@0.25": 0.5800404019010752,
+      "MR@0.25": 0.8176891692323096,
+      "AP@0.50": 0.3756752754397835,
+      "MR@0.50": 0.9062851993692274,
+      "AP@0.75": 0.03834790439144618,
+      "MR@0.75": 0.989274361092338,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.33135452724410164,
+      "positive_ground_truths": 8878,
+      "per_category": {
+        "0": {
+          "AP@0.25": 0.5800404019010752,
+          "MR@0.25": 0.8176891692323096,
+          "AP@0.50": 0.3756752754397835,
+          "MR@0.50": 0.9062851993692274,
+          "AP@0.75": 0.03834790439144618,
+          "MR@0.75": 0.989274361092338,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.33135452724410164,
+          "positive_ground_truths": 8878
+        }
+      }
+    },
+    "tiny1": {
+      "AP@0.25": 0.39545385464905264,
+      "MR@0.25": 0.8124493975329808,
+      "AP@0.50": 0.22297477236127894,
+      "MR@0.50": 0.891555936562366,
+      "AP@0.75": 0.01988733140251114,
+      "MR@0.75": 0.9841405915130732,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.21277198613761425,
+      "positive_ground_truths": 2333,
+      "per_category": {
+        "0": {
+          "AP@0.25": 0.39545385464905264,
+          "MR@0.25": 0.8124493975329808,
+          "AP@0.50": 0.22297477236127894,
+          "MR@0.50": 0.891555936562366,
+          "AP@0.75": 0.01988733140251114,
+          "MR@0.75": 0.9841405915130732,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.21277198613761425,
+          "positive_ground_truths": 2333
+        }
+      }
+    },
+    "tiny2": {
+      "AP@0.25": 0.5849627763455768,
+      "MR@0.25": 0.7421406287496999,
+      "AP@0.50": 0.3692430725836868,
+      "MR@0.50": 0.8509719222462203,
+      "AP@0.75": 0.034337698046224836,
+      "MR@0.75": 0.974882009439245,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.32951451565849615,
+      "positive_ground_truths": 2778,
+      "per_category": {
+        "0": {
+          "AP@0.25": 0.5849627763455768,
+          "MR@0.25": 0.7421406287496999,
+          "AP@0.50": 0.3692430725836868,
+          "MR@0.50": 0.8509719222462203,
+          "AP@0.75": 0.034337698046224836,
+          "MR@0.75": 0.974882009439245,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.32951451565849615,
+          "positive_ground_truths": 2778
+        }
+      }
+    },
+    "tiny3": {
+      "AP@0.25": 0.7022153002870672,
+      "MR@0.25": 0.6563430964811374,
+      "AP@0.50": 0.48143976000893807,
+      "MR@0.50": 0.8096628616936554,
+      "AP@0.75": 0.05050346172497803,
+      "MR@0.75": 0.9760493171695721,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.41138617400699445,
+      "positive_ground_truths": 3767,
+      "per_category": {
+        "0": {
+          "AP@0.25": 0.7022153002870672,
+          "MR@0.25": 0.6563430964811374,
+          "AP@0.50": 0.48143976000893807,
+          "MR@0.50": 0.8096628616936554,
+          "AP@0.75": 0.05050346172497803,
+          "MR@0.75": 0.9760493171695721,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.41138617400699445,
+          "positive_ground_truths": 3767
+        }
+      }
+    },
+    "small": {
+      "AP@0.25": 0.7165734651666505,
+      "MR@0.25": 0.581757209926224,
+      "AP@0.50": 0.5162583364763504,
+      "MR@0.50": 0.7631120053655266,
+      "AP@0.75": 0.08089034929109692,
+      "MR@0.75": 0.9532752067963336,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.4379073836446992,
+      "positive_ground_truths": 2485,
+      "per_category": {
+        "0": {
+          "AP@0.25": 0.7165734651666505,
+          "MR@0.25": 0.581757209926224,
+          "AP@0.50": 0.5162583364763504,
+          "MR@0.50": 0.7631120053655266,
+          "AP@0.75": 0.08089034929109692,
+          "MR@0.75": 0.9532752067963336,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.4379073836446992,
+          "positive_ground_truths": 2485
+        }
+      }
+    },
+    "reasonable": {
+      "AP@0.25": 0.6576460688833269,
+      "MR@0.25": 0.6827309236947792,
+      "AP@0.50": 0.44142532248756067,
+      "MR@0.50": 0.805077452667814,
+      "AP@0.75": 0.07486481082750411,
+      "MR@0.75": 0.9523331420921782,
+      "AP_mean_IoU_0.25_0.50_0.75": 0.3913120673994639,
+      "positive_ground_truths": 2324,
+      "per_category": {
+        "0": {
+          "AP@0.25": 0.6576460688833269,
+          "MR@0.25": 0.6827309236947792,
+          "AP@0.50": 0.44142532248756067,
+          "MR@0.50": 0.805077452667814,
+          "AP@0.75": 0.07486481082750411,
+          "MR@0.75": 0.9523331420921782,
+          "AP_mean_IoU_0.25_0.50_0.75": 0.3913120673994639,
+          "positive_ground_truths": 2324
+        }
+      }
+    },
+    "protocol": {
+      "name": "TinyPerson documented protocol; standalone implementation",
+      "annotation_file": "/__modal/volumes/vo-Nff0A2GRIFcBWTzKoNmCk2/eval/baseline_tinyperson_wacv_150e_tiled/annotations_test.json",
+      "predictions_file": "/__modal/volumes/vo-Nff0A2GRIFcBWTzKoNmCk2/eval/baseline_tinyperson_wacv_150e_tiled/predictions_tiled.json",
+      "source_images": 786,
+      "dense_images_excluded": 0,
+      "images_evaluated": 786,
+      "max_detections_per_image": 200,
+      "iou_thresholds": [
+        0.25,
+        0.5,
+        0.75
+      ],
+      "size_ranges_sqrt_area_px_inclusive": {
+        "all": [
+          2.0,
+          100000.0,
+          true,
+          true
+        ],
+        "tiny": [
+          2.0,
+          20.0,
+          true,
+          true
+        ],
+        "tiny1": [
+          2.0,
+          8.0,
+          true,
+          false
+        ],
+        "tiny2": [
+          8.0,
+          12.0,
+          true,
+          false
+        ],
+        "tiny3": [
+          12.0,
+          20.0,
+          true,
+          true
+        ],
+        "small": [
+          20.0,
+          32.0,
+          false,
+          true
+        ],
+        "reasonable": [
+          32.0,
+          100000.0,
+          false,
+          true
+        ]
+      },
+      "ignored_annotations": {
+        "uncertain": 2832,
+        "ignore": 1989
+      },
+      "class_mode": "merge",
+      "categories": [
+        1,
+        2
+      ],
+      "matching": {
+        "normal_positive": "IoU",
+        "class": "all categories collapsed into one class",
+        "ignore_uncertain": "IoU match or intersection over detection (IoD)",
+        "out_of_size_range": "neutral by IoU for size-specific AP; unmatched detections outside the range are ignored"
+      },
+      "ap_interpolation": "101-point precision envelope",
+      "warning": "Validate this standalone evaluator against the pinned TinyBenchmark reference before using its scores as publication results."
+    }
+  }
+}

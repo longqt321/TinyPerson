@@ -1,0 +1,61 @@
+# GaussSplit B0 (PairSplit head, L1 geometry) on the frozen 150e baseline.
+#
+# Design (docs/CRITERIA_PAIRSPLIT_PREREG.md, amendment §13):
+#   * the detector is the frozen 150e baseline checkpoint; only the 23,690-param
+#     head trains (the on_train_start callback freezes everything except
+#     model.29.head.* and forces BN to eval every epoch);
+#   * targets: nearest GT within min(1.5*max(w,h), 10 px) of the matched GT;
+#   * patch 7 at stride 4 = +-12 px, so every <=10 px target is visible;
+#   * the auxiliary loss is computed on the detections the detector actually
+#     emits (same NMS path as inference), added to the detector loss as
+#     "gs_loss" in results.csv and W&B.
+#
+# Hyper-parameters are the pre-registered ones (AdamW, lr 1e-3); epochs are
+# scaled to the pipeline's step size (41 steps/epoch at imgsz 1280, batch 16).
+seed: 42
+data:
+  config: /mnt/data/tinyperson-yolo-v2/data.yaml
+train:
+  epochs: 40
+  patience: 40
+  val: true
+  imgsz: 1280
+  batch: 16
+  workers: 8
+  optimizer: AdamW
+  lr0: 0.001
+  lrf: 0.1
+  cos_lr: true
+  warmup_epochs: 1.0
+  amp: true
+  deterministic: false
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  augmentations_preset: tinyperson_b
+  multi_scale: 0.0
+  compile: false
+  freeze: 29
+hardware:
+  gpu: A10
+output:
+  root: /mnt/runs
+  wandb_project: tiny-person-research
+name: gausssplit_b0_tinyperson
+model:
+  config: configs/model/yolo26n_tiny_A2_p2_gauss_split.yaml
+  pretrained: /mnt/runs/baseline_tinyperson_wacv_150e/20261109-182052-a20f7b6-seed42/training/weights/best.pt

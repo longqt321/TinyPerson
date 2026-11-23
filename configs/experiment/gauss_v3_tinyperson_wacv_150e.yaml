@@ -46,4 +46,4 @@ output:
   wandb_project: tiny-person-research
 name: gauss_v3_tinyperson_wacv_150e
 model:
-  config: configs/model/yolo26n_tiny_A2_p2_gauss_tinyperson.yaml
+  config: configs/model/yolo26n_tiny_A2_p2_gauss_v31_tinyperson.yaml

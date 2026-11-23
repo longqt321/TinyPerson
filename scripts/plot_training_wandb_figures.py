@@ -56,12 +56,11 @@ def plot_training_loss_curves():
     df_gauss = pd.read_csv("reports/data/gauss_results.csv")
     df_gauss.columns = [c.strip() for c in df_gauss.columns]
 
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.4))
+    fig, axes = plt.subplots(1, 3, figsize=(3.10, 1.46))
 
     metrics = [
-        ("train/box_loss", "Bounding Box Loss", axes[0]),
+        ("train/box_loss", "Box Loss", axes[0]),
         ("train/cls_loss", "Classification Loss", axes[1]),
-        ("train/l1_loss", "Regression L1 Loss", axes[2]),
     ]
 
     for col, title, ax in metrics:
@@ -83,10 +82,12 @@ def plot_training_loss_curves():
             alpha=0.9,
         )
 
-        ax.set_title(title, fontsize=9.5)
-        ax.set_xlabel("Epoch", fontsize=8.5)
-        ax.set_ylabel("Loss Value", fontsize=8.5)
-        ax.legend(frameon=True, edgecolor="none", facecolor="#f8f9fa", loc="upper right", fontsize=7.2)
+        ax.set_title(title.replace("Bounding Box", "Box"), fontsize=7.0, pad=2)
+        ax.set_xlabel("Epoch", fontsize=6.5, labelpad=1)
+        ax.set_ylabel("Loss", fontsize=6.5, labelpad=1)
+        ax.tick_params(axis="both", labelsize=6.2, length=2, pad=1)
+        if col == "train/box_loss":
+            ax.legend(frameon=False, loc="upper right", fontsize=6.0, handlelength=1.2, labelspacing=0.2)
 
     save_dual(fig, "07_training_loss_convergence")
 
