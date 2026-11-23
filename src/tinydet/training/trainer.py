@@ -30,7 +30,16 @@ from tinydet.utils.seed import set_seed
 
 def _init_wandb(project: str, name: str, group: str | None, config: dict):
     try:
-        ensure_wandb_auth()
+        key = ensure_wandb_auth()
+        netrc = Path.home() / ".netrc"
+        has_netrc = netrc.is_file() and "api.wandb.ai" in netrc.read_text(errors="ignore")
+        if not key and not has_netrc:
+            print(
+                "[W&B] No WANDB_API_KEY found -> disabled (non-interactive). "
+                "All metrics continue logging to stdout and run/metrics/*.csv.",
+                flush=True,
+            )
+            return None
         import wandb
 
         host = detect_host()

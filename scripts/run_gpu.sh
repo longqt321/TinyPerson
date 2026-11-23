@@ -11,6 +11,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Stream Python/Ultralytics logs directly to Colab/Kaggle notebook cells without buffering
+export PYTHONUNBUFFERED=1
+
 # 1. Ensure uv is installed and on PATH (standard Astral installer)
 if ! command -v uv >/dev/null 2>&1; then
   echo "[setup] Installing uv..."
