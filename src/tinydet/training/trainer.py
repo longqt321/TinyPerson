@@ -138,8 +138,15 @@ def train(
     config = load_config(config_path)
     effective_dataset_config = resolve_dataset_yaml(dataset_config or config.data["config"])
     # Official TinyPerson annotations for size-stratified per-epoch metrics.
-    # Absent for other datasets (e.g. VisDrone); the callback then disables itself.
-    val_annotation_source = Path(effective_dataset_config).parent / "annotations" / "tiny_set_train.json"
+    # Resolve via the `path` key inside data.yaml because normalize_dataset_yaml()
+    # writes the normalized YAML to /tmp while images/annotations stay in `path`.
+    import yaml as _yaml
+
+    _ds_meta = _yaml.safe_load(Path(effective_dataset_config).read_text()) or {}
+    _ds_root = Path(_ds_meta.get("path", Path(effective_dataset_config).parent))
+    if not _ds_root.is_absolute():
+        _ds_root = (Path(effective_dataset_config).parent / _ds_root).resolve()
+    val_annotation_source = _ds_root / "annotations" / "tiny_set_train.json"
     if config.model.get("pretrained"):
         pretrained_path = Path(config.model["pretrained"])
         if not pretrained_path.is_file():
