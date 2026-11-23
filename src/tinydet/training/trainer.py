@@ -88,6 +88,33 @@ def _setup_gauss_optimizer(trainer, lr_mult: float = 1.0) -> None:
             sched.base_lrs.append(trainer.optimizer.param_groups[idx].get("initial_lr", trainer.optimizer.param_groups[idx]["lr"]))
 
 
+def _install_gauss_resume_hook(lr_mult: float) -> None:
+    """Ensure GauSS's 4th optimizer param group exists BEFORE Ultralytics loads ckpt["optimizer"].
+
+    Ultralytics runs ``resume_training(ckpt)`` before ``on_pretrain_routine_end``.
+    Without creating the GauSS control group first, resuming a GauSS checkpoint
+    raises ``ValueError: loaded state dict has a different number of parameter groups``
+    (3 built groups vs 4 saved groups).
+    """
+    from ultralytics.engine.trainer import BaseTrainer
+
+    orig = getattr(BaseTrainer, "_tinydet_orig_load_ckpt_state", BaseTrainer._load_checkpoint_state)
+    BaseTrainer._tinydet_orig_load_ckpt_state = orig
+    BaseTrainer._tinydet_gauss_lr_mult = lr_mult
+
+    def _wrapped(self, ckpt):
+        opt_state = ckpt.get("optimizer") if isinstance(ckpt, dict) else None
+        if (
+            opt_state is not None
+            and hasattr(self, "optimizer")
+            and len(opt_state.get("param_groups", ())) > len(self.optimizer.param_groups)
+        ):
+            _setup_gauss_optimizer(self, lr_mult=BaseTrainer._tinydet_gauss_lr_mult)
+        return orig(self, ckpt)
+
+    BaseTrainer._load_checkpoint_state = _wrapped
+
+
 
 class _TimeBudgetGuard:
     """Hard wall-clock stop: kill the run when the training exceeds the budget.
@@ -203,6 +230,7 @@ def train(
     # Wall-clock budget for unattended runs: pop so model.train() never sees it.
     time_budget_hours = float(train_args_s1.pop("time_budget_hours", 4.0))
     gauss_setup = partial(_setup_gauss_optimizer, lr_mult=gauss_lr_mult)
+    _install_gauss_resume_hook(gauss_lr_mult)
 
     training_done_flag = run / "training" / "completed.flag"
     training_best_pt = run / "training" / "weights" / "best.pt"
