@@ -28,7 +28,7 @@ from tinydet.evaluation.tinyperson_benchmark import (
     _in_range,
 )
 from tinydet.utils.experiment import git_info
-from tinydet.utils.geometry import best_first_max, best_last_max, iod, iou
+from tinydet.utils.geometry import best_first_max, best_last_max, iod, iou, xywh_to_xyxy
 
 SCHEMA_VERSION = 1
 IMPLEMENTATION_VERSION = "tinydet-error-analysis-v1"
@@ -149,11 +149,8 @@ class AnalysisResult:
 
 
 def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _issue(code: str, message: str, **extra: Any) -> dict[str, Any]:
@@ -161,14 +158,7 @@ def _issue(code: str, message: str, **extra: Any) -> dict[str, Any]:
 
 
 def _xywh_to_xyxy(box: list[float] | tuple[float, ...]) -> tuple[float, float, float, float]:
-    if len(box) != 4:
-        raise ValueError(f"bbox must have four values: {box}")
-    x, y, width, height = (float(value) for value in box)
-    if not all(math.isfinite(value) for value in (x, y, width, height)):
-        raise ValueError(f"bbox values must be finite: {box}")
-    if width <= 0 or height <= 0:
-        raise ValueError(f"non-positive COCO bbox: {box}")
-    return x, y, x + width, y + height
+    return xywh_to_xyxy(box, validate=True)
 
 
 def _xyxy(box: list[float] | tuple[float, ...], context: str) -> tuple[float, float, float, float]:

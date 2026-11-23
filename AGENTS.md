@@ -14,7 +14,7 @@ uv run --extra cpu --group dev ruff check .
 
 Before changing experiments or results, read:
 
-- `README.md` and `reports/gauss_final_report.md` for research questions and the GauSS mechanisms.
+- `README.md`, `docs/report/00_state.md`, and `docs/report/course_report_vi.md` for research questions, latest verified results, and the GauSS mechanisms.
 - `docs/agents/DATA_EVALUATION.md` for dataset and metric rules.
 - `docs/agents/CODE.md` for code, lint, and checkpoint compatibility.
 - `docs/agents/OPERATIONS.md` for Modal training and artifact lifecycle.

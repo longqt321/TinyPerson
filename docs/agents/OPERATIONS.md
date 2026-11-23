@@ -54,7 +54,7 @@ training-sized resources:
 
 | Tier | cpu (request, limit) | memory MB (request, limit) | Used by |
 | --- | --- | --- | --- |
-| `CPU_LIMIT` / `MEMORY_LIMIT_MB` | (4, 8) | (12288, 24576) | `_train`, `_evaluate`, `_benchmark`, `_analyze_geometry`, `_run_comparison_report`, `_run_checkpoint_evaluation`, `_run_tiled_checkpoint_evaluation`, `_run_visdrone_val` |
+| `CPU_LIMIT` / `MEMORY_LIMIT_MB` | (4, 8) | (12288, 24576) | `_train`, `_evaluate`, `_benchmark`, `_run_checkpoint_evaluation`, `_run_tiled_checkpoint_evaluation`, `_run_visdrone_val` |
 | `AUDIT_CPU` / `AUDIT_MEMORY_MB` | (4, 8) | (8192, 16384) | `_audit_original_dataset` (24 decode threads) |
 | `POSTPROCESS_CPU` / `POSTPROCESS_MEMORY_MB` | (2, 4) | (4096, 8192) | `_finish_evaluation` (loads prediction artifacts, computes AP on CPU) |
 | `LIGHT_CPU` / `LIGHT_MEMORY_MB` | (1, 2) | (1024, 2048) | `_finalize`, `_orchestrate_campaign`, `run_comparison`, `_preflight` |

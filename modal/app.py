@@ -328,7 +328,7 @@ def _collect(handle_map: dict, label: str) -> dict:
     retries=1,
     secrets=[wandb_secret],
 )
-def _orchestrate_campaign(configs: list[str], commit: str, dirty: bool):
+def _orchestrate_campaign(configs: list[str], commit: str, dirty: bool, evaluate: bool = True):
     """Detached orchestrator: the full train -> finalize -> eval chain runs
     inside Modal, so a dropped local connection cannot kill the campaign.
 
@@ -420,36 +420,42 @@ def _orchestrate_campaign(configs: list[str], commit: str, dirty: bool):
             print(f"[FAILED] FINALIZE for {run_full_path}: {exc}", flush=True)
 
     # 4. Tiled evaluation (640x512) per finalized run.
+    #    Skipped with evaluate=False: a protocol that scores test once, with a
+    #    threshold selected on val, must not consume the test split here.
     tiled_handles = {}
-    for rel_run in run_paths.values():
-        run_name = rel_run.split("/")[0]
-        name = f"{run_name}_tiled"
-        ckpt = f"{rel_run}/training/weights/best.pt"
-        print(f"--> Spawning tiled evaluation for {name} ({ckpt})...", flush=True)
-        try:
-            tiled_handles[name] = _run_tiled_checkpoint_evaluation.spawn(
-                relative_checkpoint=ckpt, name=name
-            )
-        except Exception as exc:  # noqa: BLE001 - isolate per-run failures
-            failed_evals.append(name)
-            print(f"[FAILED] TILED EVAL spawn for {name}: {exc}", flush=True)
-    tiled_results = _collect(tiled_handles, "TILED EVAL")
-
-    # 5. Full-frame test evaluation (1280px) per finalized run.
     full_handles = {}
-    for rel_run in run_paths.values():
-        run_name = rel_run.split("/")[0]
-        name = f"{run_name}_full"
-        ckpt = f"{rel_run}/training/weights/best.pt"
-        print(f"--> Spawning full-frame evaluation for {name} ({ckpt})...", flush=True)
-        try:
-            full_handles[name] = _run_checkpoint_evaluation.spawn(
-                relative_checkpoint=ckpt, name=name, split="test"
-            )
-        except Exception as exc:  # noqa: BLE001 - isolate per-run failures
-            failed_evals.append(name)
-            print(f"[FAILED] FULL EVAL spawn for {name}: {exc}", flush=True)
-    full_results = _collect(full_handles, "FULL EVAL")
+    if evaluate:
+        for rel_run in run_paths.values():
+            run_name = rel_run.split("/")[0]
+            name = f"{run_name}_tiled"
+            ckpt = f"{rel_run}/training/weights/best.pt"
+            print(f"--> Spawning tiled evaluation for {name} ({ckpt})...", flush=True)
+            try:
+                tiled_handles[name] = _run_tiled_checkpoint_evaluation.spawn(
+                    relative_checkpoint=ckpt, name=name
+                )
+            except Exception as exc:  # noqa: BLE001 - isolate per-run failures
+                failed_evals.append(name)
+                print(f"[FAILED] TILED EVAL spawn for {name}: {exc}", flush=True)
+        tiled_results = _collect(tiled_handles, "TILED EVAL")
+
+        # 5. Full-frame test evaluation (1280px) per finalized run.
+        for rel_run in run_paths.values():
+            run_name = rel_run.split("/")[0]
+            name = f"{run_name}_full"
+            ckpt = f"{rel_run}/training/weights/best.pt"
+            print(f"--> Spawning full-frame evaluation for {name} ({ckpt})...", flush=True)
+            try:
+                full_handles[name] = _run_checkpoint_evaluation.spawn(
+                    relative_checkpoint=ckpt, name=name, split="test"
+                )
+            except Exception as exc:  # noqa: BLE001 - isolate per-run failures
+                failed_evals.append(name)
+                print(f"[FAILED] FULL EVAL spawn for {name}: {exc}", flush=True)
+        full_results = _collect(full_handles, "FULL EVAL")
+    else:
+        tiled_results, full_results = {}, {}
+        print("[SKIP] Evaluation phases disabled (evaluate=False).", flush=True)
 
     # 6. Persist the summary on the Volume so it survives local disconnects.
     succeeded = [Path(c).stem for c, r in train_results.items() if r is not None]
@@ -504,60 +510,6 @@ def _benchmark(run: str):
     result = benchmark(resolve_run(RUN_ROOT, run))
     runs.commit()
     return result
-
-
-@app.function(image=image, gpu="A10", min_containers=0, buffer_containers=0,
-              scaledown_window=2, cpu=CPU_LIMIT, memory=MEMORY_LIMIT_MB,
-              max_containers=4, volumes=mounts, timeout=3600)
-def _analyze_geometry(run: str, split: str = "val", iou: float = 0.5):
-    """Measure per-GT center and size errors without using local RAM."""
-    import subprocess
-    import sys
-
-    from tinydet.utils.dataset import normalize_dataset_yaml
-    from tinydet.utils.experiment import resolve_run
-
-    if split not in {"val", "test"}:
-        raise ValueError("split must be val or test")
-    if not 0.0 < iou <= 1.0:
-        raise ValueError("iou must be in (0, 1]")
-    runs.reload()
-    data.reload()
-    run_dir = resolve_run(RUN_ROOT, run)
-    config = yaml.safe_load((run_dir / "config.yaml").read_text())
-    dataset_yaml = normalize_dataset_yaml(config["data"]["config"])
-    dataset = yaml.safe_load(dataset_yaml.read_text())
-    root = Path(dataset["path"])
-    checkpoint = run_dir / "checkpoints" / "best.pt"
-    if not checkpoint.is_file():
-        checkpoint = run_dir / "training" / "weights" / "best.pt"
-    if not checkpoint.is_file():
-        raise FileNotFoundError(f"No best.pt under {run_dir}")
-    output = RUN_ROOT / "error_analysis" / run.replace("/", "__") / f"geometry-{split}"
-    if not (output / "geometry_summary.csv").is_file():
-        env = os.environ.copy()
-        env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-        subprocess.run(
-            [
-                sys.executable, "/root/scripts/analyze_msr_validation.py",
-                "--images", str(root / f"images/{split}"),
-                "--labels", str(root / f"labels/{split}"),
-                "--checkpoint", f"A2={checkpoint}", "--output", str(output),
-                "--imgsz", str(config["train"]["imgsz"]), "--device", "cuda:0",
-                "--cpu-threads", "4", "--iou", str(iou),
-            ],
-            env=env,
-            check=True,
-        )
-        runs.commit()
-
-    return {
-        "output": str(output),
-        "geometry_summary_csv": (output / "geometry_summary.csv").read_text() if (output / "geometry_summary.csv").is_file() else "",
-        "size_summary_csv": (output / "size_summary.csv").read_text() if (output / "size_summary.csv").is_file() else "",
-        "error_summary_csv": (output / "error_summary.csv").read_text() if (output / "error_summary.csv").is_file() else "",
-        "report_json": (output / "report.json").read_text() if (output / "report.json").is_file() else "{}",
-    }
 
 
 @app.function(image=image, cpu=1.0, memory=1024, max_containers=1, volumes={str(RUN_ROOT): runs}, timeout=300)
@@ -820,26 +772,11 @@ def compare(
     reuse: bool = False,
     smoke: bool = False,
     two_stage: bool = False,
-    kitty: bool = False,
-    kitty_mode: str = "auto",
     preflight_only: bool = False,
     strict_resolution: bool = False,
     require_source_metadata: bool = False,
 ):
-    """Audit original data first, then compare models; supports spawning Kitty terminals with --kitty."""
-    if kitty:
-        import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-        from launch_parallel_kitty import launch_kitty_terminals
-
-        launch_kitty_terminals(
-            config=config,
-            mode=kitty_mode,
-            smoke=smoke,
-            two_stage=two_stage,
-        )
-        return
-
+    """Audit original data first, then compare models on Modal."""
     from tinydet.utils.experiment import git_info
 
     config_path = Path(config)
@@ -974,26 +911,6 @@ def benchmark(run: str):
     print(_benchmark.remote(run))
 
 
-@app.local_entrypoint()
-def analyze_geometry(run: str, split: str = "val", iou: float = 0.5):
-    res = _analyze_geometry.remote(run, split, iou)
-    out_dir = Path("reports/geometry") / run.replace("/", "__")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if res.get("geometry_summary_csv"):
-        (out_dir / "geometry_summary.csv").write_text(res["geometry_summary_csv"])
-    if res.get("size_summary_csv"):
-        (out_dir / "size_summary.csv").write_text(res["size_summary_csv"])
-    if res.get("error_summary_csv"):
-        (out_dir / "error_summary.csv").write_text(res["error_summary_csv"])
-    if res.get("report_json"):
-        (out_dir / "report.json").write_text(res["report_json"])
-    print(f"Artifacts successfully saved locally to {out_dir}")
-    print("\n" + "=" * 35 + " GEOMETRY SUMMARY " + "=" * 35)
-    print(res.get("geometry_summary_csv", ""))
-    print("\n" + "=" * 35 + " SIZE SUMMARY " + "=" * 35)
-    print(res.get("size_summary_csv", ""))
-
-
 @app.function(image=image, cpu=1.0, memory=1024, max_containers=1, scaledown_window=2, secrets=[wandb_secret], timeout=300)
 def _organize_wandb(project: str):
     import wandb
@@ -1063,122 +980,6 @@ def _evaluate_pipeline(run: str, split: str, reuse_training: bool = False):
         return existing
     artifact = _evaluate.remote(run, split)
     return _finish_evaluation.remote(run, artifact, split)
-
-
-@app.function(
-    image=image,
-    gpu="A10",
-    min_containers=0,
-    buffer_containers=0,
-    scaledown_window=2,
-    cpu=CPU_LIMIT,
-    memory=MEMORY_LIMIT_MB,
-    max_containers=1,
-    volumes=mounts,
-    timeout=3600,
-)
-def _run_comparison_report():
-    import subprocess
-    import sys
-
-    from ultralytics import YOLO
-
-    from tinydet.evaluation.iou_metrics import ap_by_iou
-    from tinydet.models.ultralytics import register_ultralytics_modules
-    from tinydet.utils.dataset import normalize_dataset_yaml
-
-    register_ultralytics_modules()
-    runs.reload()
-    data.reload()
-
-    ckpts = {
-        "QAC_v3_ep50": RUN_ROOT / "tiny_A2_p2_qac_v3" / "20261026-110551-6fceb3b-seed42" / "stage1" / "weights" / "best.pt",
-        "DFL16_ep50": RUN_ROOT / "tiny_A2_p2_dfl16" / "20261026-110551-6fceb3b-seed42" / "stage1" / "weights" / "best.pt",
-        "DFL16_ep100": RUN_ROOT / "tiny_A2_p2_dfl16" / "20261026-110551-6fceb3b-seed42" / "checkpoints" / "best.pt",
-    }
-    for name, p in ckpts.items():
-        if not p.is_file():
-            alt = RUN_ROOT / "tiny_A2_p2_dfl16" / "20261026-110551-6fceb3b-seed42" / "training" / "weights" / "best.pt"
-            if name == "DFL16_ep100" and alt.is_file():
-                ckpts[name] = alt
-            else:
-                raise FileNotFoundError(f"Missing checkpoint for {name}: {p}")
-
-    raw_data_yaml = DATA_ROOT / "tinyperson-yolo-v2" / "data.yaml"
-    if not raw_data_yaml.is_file():
-        raise FileNotFoundError(f"Data yaml not found: {raw_data_yaml}")
-    data_yaml = normalize_dataset_yaml(raw_data_yaml)
-
-    # 1. Measure official Ultralytics mAP metrics
-    map_results = {}
-    for name, p in ckpts.items():
-        print(f"--> Validating mAP for {name} from {p}...", flush=True)
-        model = YOLO(str(p))
-        val_res = model.val(
-            data=str(data_yaml),
-            split="val",
-            imgsz=1280,
-            batch=8,
-            device="cuda:0",
-            plots=False,
-            save_json=False,
-            verbose=False,
-        )
-        box = val_res.box
-        map_results[name] = {
-            "mAP50-95": float(box.map),
-            "mAP50": float(box.map50),
-            "mAP75": float(box.map75),
-            "precision": float(box.mp),
-            "recall": float(box.mr),
-            **ap_by_iou(box),
-        }
-        del model
-
-    # 2. Measure per-bin accuracy & geometry errors using analyze_msr_validation.py
-    out_dir = RUN_ROOT / "comparison_report_qac_v3_vs_dfl16"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    img_dir = DATA_ROOT / "tinyperson-yolo-v2" / "images" / "val"
-    lbl_dir = DATA_ROOT / "tinyperson-yolo-v2" / "labels" / "val"
-
-    cmd = [
-        sys.executable,
-        "/root/scripts/analyze_msr_validation.py",
-        "--images", str(img_dir),
-        "--labels", str(lbl_dir),
-        "--imgsz", "1280",
-        "--device", "cuda:0",
-        "--cpu-threads", "4",
-        "--output", str(out_dir),
-    ]
-    for name, p in ckpts.items():
-        cmd.extend(["--checkpoint", f"{name}={p}"])
-
-    print("--> Running size-bin & geometry analysis...", flush=True)
-    subprocess.run(cmd, check=True)
-    runs.commit()
-
-    return {
-        "map_results": map_results,
-        "size_summary_csv": (out_dir / "size_summary.csv").read_text(),
-        "geometry_summary_csv": (out_dir / "geometry_summary.csv").read_text(),
-        "error_summary_csv": (out_dir / "error_summary.csv").read_text(),
-        "model_comparison_csv": (out_dir / "model_comparison.csv").read_text() if (out_dir / "model_comparison.csv").is_file() else "",
-    }
-
-
-@app.local_entrypoint()
-def generate_comparison_report():
-    res = _run_comparison_report.remote()
-    local_dir = Path("reports/comparison_qac_v3_vs_dfl16")
-    local_dir.mkdir(parents=True, exist_ok=True)
-    (local_dir / "map_results.json").write_text(json.dumps(res["map_results"], indent=2))
-    (local_dir / "size_summary.csv").write_text(res["size_summary_csv"])
-    (local_dir / "geometry_summary.csv").write_text(res["geometry_summary_csv"])
-    (local_dir / "error_summary.csv").write_text(res["error_summary_csv"])
-    if res.get("model_comparison_csv"):
-        (local_dir / "model_comparison.csv").write_text(res["model_comparison_csv"])
-    print(f"Results successfully saved locally to {local_dir}")
 
 
 def _subset_annotations(
@@ -1296,6 +1097,8 @@ def evaluate_checkpoint(
     """Evaluate one checkpoint with the repository stack (benchmark + oracles + error analysis).
 
     `checkpoint` is a path inside the runs Volume, either absolute or relative to its root.
+    The GaussSplit second-instance threshold is not applied here: use
+    `evaluate_tiled --head-threshold` for threshold-sensitive scoring.
     """
     result = _run_checkpoint_evaluation.remote(checkpoint, name, split)
     output = Path("reports/eval")
@@ -1312,6 +1115,23 @@ def evaluate_checkpoint(
             if isinstance(value, dict) and "metrics" in value
         },
     }, indent=2))
+
+
+@app.local_entrypoint()
+def evaluate_tiled(checkpoint: str, name: str, head_threshold: float | None = None, split: str = "test"):
+    """Tiled (640x512, overlap 100) evaluation of one checkpoint.
+
+    `head_threshold` overrides the DetectGaussSplit second-instance threshold;
+    the pre-registered protocol selects it on the val split (`--split val`)
+    and then scores the test split once (default).
+    """
+    result = _run_tiled_checkpoint_evaluation.remote(
+        relative_checkpoint=checkpoint, name=name, head_threshold=head_threshold, split=split
+    )
+    output = Path("reports/eval")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps({"name": name, "benchmark": result["summary"]["benchmark"]}, indent=2))
 
 
 
@@ -1332,8 +1152,17 @@ def evaluate_checkpoint(
     volumes=mounts,
     timeout=3600,
 )
-def _run_tiled_checkpoint_evaluation(relative_checkpoint: str, name: str):
-    """Run tiled crop + merge evaluation (640x512, overlap 100) on test split."""
+def _run_tiled_checkpoint_evaluation(
+    relative_checkpoint: str, name: str, head_threshold: float | None = None, split: str = "test"
+):
+    """Run tiled crop + merge evaluation (640x512, overlap 100) on one split.
+
+    ``head_threshold`` overrides the second-instance threshold stored in the
+    checkpoint's DetectGaussSplit head. The pre-registered protocol selects that
+    threshold on the val split (``split="val"``) and then scores test once
+    (``split="test"``, the default), so the caller passes the chosen value here
+    instead of editing the checkpoint.
+    """
     import json
 
     from PIL import Image
@@ -1342,6 +1171,7 @@ def _run_tiled_checkpoint_evaluation(relative_checkpoint: str, name: str):
     from tinydet.evaluation.tiled_inference import predict_tiled_image
     from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
     from tinydet.models.ultralytics import register_ultralytics_modules
+    from tinydet.modules.gauss_split_detect import find_gauss_split_head
     from tinydet.utils.dataset import normalize_dataset_yaml
 
     register_ultralytics_modules()
@@ -1355,20 +1185,29 @@ def _run_tiled_checkpoint_evaluation(relative_checkpoint: str, name: str):
         raise FileNotFoundError(checkpoint)
 
     model = YOLO(checkpoint)
-    # Use the filtered 786-image test annotations
+    head = find_gauss_split_head(model.model)
+    if head is not None and head_threshold is not None:
+        head.threshold = float(head_threshold)
+        print(f"--> GaussSplit head threshold = {head.threshold}", flush=True)
+    # Use the filtered official annotations for the requested split
     data_yaml = normalize_dataset_yaml(DATA_ROOT / "tinyperson-yolo-v2" / "data.yaml")
-    raw_annotation_source = DATA_ROOT / "tinyperson-yolo-v2" / "annotations" / "tiny_set_test.json"
+    if split == "test":
+        raw_annotation_source = DATA_ROOT / "tinyperson-yolo-v2" / "annotations" / "tiny_set_test.json"
+    else:
+        # The val split is carved out of the train JSON (same rule as
+        # _run_checkpoint_evaluation), which already has ignore regions painted out.
+        raw_annotation_source = DATA_ROOT / "tinyperson-yolo-v2" / "annotations" / "tiny_set_train.json"
     if not raw_annotation_source.is_file():
         raise FileNotFoundError(raw_annotation_source)
 
     output_dir = RUN_ROOT / "eval" / name
     output_dir.mkdir(parents=True, exist_ok=True)
     annotation_source = _subset_annotations(
-        raw_annotation_source, data_yaml, "test", output_dir / "annotations_test.json"
+        raw_annotation_source, data_yaml, split, output_dir / f"annotations_{split}.json"
     )
 
     data_payload = json.loads(annotation_source.read_text())
-    image_dir = DATA_ROOT / "tinyperson-yolo-v2" / "images" / "test"
+    image_dir = DATA_ROOT / "tinyperson-yolo-v2" / "images" / split
 
     predictions = []
     print(f"--> Starting tiled inference for {len(data_payload['images'])} images...", flush=True)

@@ -571,7 +571,7 @@ def evaluate_all():
 
     Writes reports/eval/ablation/{name}.json (eval payload) and
     reports/eval/ablation/{name}.train.json (run metadata) for
-    scripts/aggregate_ablation.py to consume.
+    summary JSON files under ``reports/eval/ablation/``.
     """
     out_dir = Path("reports/eval/ablation")
     out_dir.mkdir(parents=True, exist_ok=True)

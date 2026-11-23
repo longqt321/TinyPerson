@@ -201,10 +201,9 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
 
 
 def _xywh_to_xyxy(box: list[float]) -> list[float]:
-    x, y, width, height = map(float, box)
-    if width <= 0 or height <= 0:
-        raise ValueError(f"Non-positive COCO bbox: {box}")
-    return [x, y, x + width, y + height]
+    from tinydet.utils.geometry import xywh_to_xyxy
+
+    return list(xywh_to_xyxy(box, validate=True))
 
 
 def _sqrt_area(box: list[float]) -> float:

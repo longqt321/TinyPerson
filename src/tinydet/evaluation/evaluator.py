@@ -32,12 +32,9 @@ CHECKPOINT_LOCATIONS = (
 )
 
 
-def sha256(path: Path, chunk: int = 8 << 20) -> str:
-    digest = hashlib.sha256()
+def sha256(path: Path) -> str:
     with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(chunk), b""):
-            digest.update(block)
-    return digest.hexdigest()
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def resolve_checkpoint(run: Path, checkpoint: str | Path | None = None) -> Path:

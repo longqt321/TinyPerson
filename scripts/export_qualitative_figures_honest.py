@@ -31,11 +31,17 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import sys
+
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from tinydet.evaluation.tiled_inference import batched_nms
 
 plt.rcParams.update({
     "font.family": "serif",
@@ -56,29 +62,12 @@ COLOR_GT = "#27AE60"
 
 
 def xywh_to_xyxy(b: list[float]) -> np.ndarray:
-    x, y, w, h = b
-    return np.array([x, y, x + w, y + h], dtype=np.float64)
+    from tinydet.utils.geometry import xywh_to_xyxy as _convert
+
+    return np.array(_convert(b, validate=False), dtype=np.float64)
 
 
-def batched_nms(boxes: np.ndarray, scores: np.ndarray, iou_thr: float) -> np.ndarray:
-    """Plain NMS over all boxes; returns keep indices sorted by score."""
-    if len(boxes) == 0:
-        return np.array([], dtype=np.int64)
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = np.maximum(0.0, x2 - x1) * np.maximum(0.0, y2 - y1)
-    order = scores.argsort()[::-1]
-    keep: list[int] = []
-    while order.size > 0:
-        i = int(order[0])
-        keep.append(i)
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
-        iou = inter / np.maximum(areas[i] + areas[order[1:]] - inter, 1e-9)
-        order = order[1:][iou <= iou_thr]
-    return np.array(keep, dtype=np.int64)
+
 
 
 def tiled_predict(model, pil_img: Image.Image, conf: float, device: str) -> dict:

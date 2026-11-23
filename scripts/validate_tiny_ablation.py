@@ -20,7 +20,7 @@ def validate(path: Path, imgsz: int) -> None:
     if config.get("nc") != 1 or config.get("scale") != "n":
         raise ValueError(f"Expected nc=1 and scale=n: {path}")
 
-    if any(tag in path.stem for tag in ("_msr", "_btrm", "_p2refine")):
+    if any(tag in path.stem for tag in ("_gauss", "_p2refine")):
         from tinydet.models.ultralytics import register_ultralytics_modules
 
         register_ultralytics_modules()

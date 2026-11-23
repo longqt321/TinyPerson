@@ -1,20 +1,19 @@
 """Box geometry shared by the evaluator, error analysis and report scripts.
 
-The scalar helpers keep the exact float64 arithmetic the TinyPerson protocol was
-validated with. The vectorised helpers batch the same operations in numpy so the
-per-detection matching loops stop paying a Python call per candidate box
-(measured 7x faster on the 200 detections x 50 ground-truth profile, bit-exact
-against the scalar path).
-
-Tie-breaking is part of the protocol: callers must keep using the same "first
-maximum" / "last maximum" rules they used with the scalar loops.
+Delegates standard IoU and box-format conversion to ``torchvision.ops`` while
+preserving float64 arithmetic for TinyPerson protocol reproducibility.
+Intersection-over-detection (IoD) is kept here because it is TinyPerson-specific
+(ignore-region matching) and has no equivalent in ``torchvision.ops``.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Sequence
 
 import numpy as np
+import torch
+from torchvision.ops import box_convert, box_iou
 
 Box = Sequence[float]
 
@@ -27,75 +26,44 @@ def as_boxes(boxes: Iterable[Box] | np.ndarray) -> np.ndarray:
     return array.reshape(-1, 4)
 
 
-def iou(box: Box, boxes: Iterable[Box] | np.ndarray) -> np.ndarray:
-    """Intersection-over-union of one box against every box in ``boxes``."""
-    candidates = as_boxes(boxes)
-    if candidates.shape[0] == 0:
-        return np.zeros(0, dtype=np.float64)
-    first = np.asarray(box, dtype=np.float64)
-    left = np.maximum(first[0], candidates[:, 0])
-    top = np.maximum(first[1], candidates[:, 1])
-    right = np.minimum(first[2], candidates[:, 2])
-    bottom = np.minimum(first[3], candidates[:, 3])
-    intersection = np.maximum(right - left, 0.0) * np.maximum(bottom - top, 0.0)
-    area = max(first[2] - first[0], 0.0) * max(first[3] - first[1], 0.0)
-    widths = np.maximum(candidates[:, 2] - candidates[:, 0], 0.0)
-    heights = np.maximum(candidates[:, 3] - candidates[:, 1], 0.0)
-    union = area + widths * heights - intersection
-    overlaps = np.zeros_like(intersection)
-    positive = union > 0
-    overlaps[positive] = intersection[positive] / union[positive]
-    return overlaps
-
-
-def iod(detection: Box, ignored: Iterable[Box] | np.ndarray) -> np.ndarray:
-    """Intersection-over-detection-area of one box against every ignored box."""
-    candidates = as_boxes(ignored)
-    if candidates.shape[0] == 0:
-        return np.zeros(0, dtype=np.float64)
-    first = np.asarray(detection, dtype=np.float64)
-    left = np.maximum(first[0], candidates[:, 0])
-    top = np.maximum(first[1], candidates[:, 1])
-    right = np.minimum(first[2], candidates[:, 2])
-    bottom = np.minimum(first[3], candidates[:, 3])
-    intersection = np.maximum(right - left, 0.0) * np.maximum(bottom - top, 0.0)
-    area = max(first[2] - first[0], 0.0) * max(first[3] - first[1], 0.0)
-    overlaps = np.zeros_like(intersection)
-    if area > 0:
-        overlaps = intersection / area
-    return overlaps
+def xywh_to_xyxy(box: Sequence[float], *, validate: bool = True) -> tuple[float, float, float, float]:
+    """Convert a single ``[x, y, w, h]`` COCO box to ``(x1, y1, x2, y2)`` via ``torchvision.ops``."""
+    if len(box) != 4:
+        raise ValueError(f"bbox must have four values: {box}")
+    vals = [float(v) for v in box]
+    if validate:
+        if not all(math.isfinite(v) for v in vals):
+            raise ValueError(f"bbox values must be finite: {box}")
+        if vals[2] <= 0 or vals[3] <= 0:
+            raise ValueError(f"non-positive COCO bbox: {box}")
+    converted = box_convert(
+        torch.tensor(vals, dtype=torch.float64), in_fmt="xywh", out_fmt="xyxy"
+    ).tolist()
+    return (converted[0], converted[1], converted[2], converted[3])
 
 
 def iou_matrix(boxes: Iterable[Box] | np.ndarray, gt: Iterable[Box] | np.ndarray) -> np.ndarray:
-    """Full ``(n, m)`` IoU matrix between two box sets (single vectorised pass)."""
+    """Full ``(n, m)`` IoU matrix between two box sets via ``torchvision.ops.box_iou``."""
     first = as_boxes(boxes)
     second = as_boxes(gt)
     if first.shape[0] == 0 or second.shape[0] == 0:
         return np.zeros((first.shape[0], second.shape[0]), dtype=np.float64)
-    left = np.maximum(first[:, None, 0], second[None, :, 0])
-    top = np.maximum(first[:, None, 1], second[None, :, 1])
-    right = np.minimum(first[:, None, 2], second[None, :, 2])
-    bottom = np.minimum(first[:, None, 3], second[None, :, 3])
-    intersection = np.maximum(right - left, 0.0) * np.maximum(bottom - top, 0.0)
-    first_area = (
-        np.maximum(first[:, 2] - first[:, 0], 0.0)
-        * np.maximum(first[:, 3] - first[:, 1], 0.0)
-    )[:, None]
-    second_area = (
-        np.maximum(second[:, 2] - second[:, 0], 0.0)
-        * np.maximum(second[:, 3] - second[:, 1], 0.0)
-    )[None, :]
-    union = first_area + second_area - intersection
-    overlaps = np.zeros_like(intersection)
-    positive = union > 0
-    overlaps[positive] = intersection[positive] / union[positive]
-    return overlaps
+    overlaps = box_iou(
+        torch.from_numpy(np.ascontiguousarray(first)),
+        torch.from_numpy(np.ascontiguousarray(second)),
+    )
+    return torch.nan_to_num(overlaps, nan=0.0).numpy()
+
+
+def iou(box: Box, boxes: Iterable[Box] | np.ndarray) -> np.ndarray:
+    """Intersection-over-union of one box against every box in ``boxes``."""
+    return iou_matrix([box], boxes)[0]
 
 
 def iod_matrix(
     detections: Iterable[Box] | np.ndarray, ignored: Iterable[Box] | np.ndarray
 ) -> np.ndarray:
-    """Full ``(n, m)`` intersection-over-detection matrix."""
+    """Full ``(n, m)`` intersection-over-detection matrix (TinyPerson ignore matching)."""
     first = as_boxes(detections)
     second = as_boxes(ignored)
     if first.shape[0] == 0 or second.shape[0] == 0:
@@ -115,24 +83,9 @@ def iod_matrix(
     return overlaps
 
 
-def iou_scalar(first: Box, second: Box) -> float:
-    """Single-pair IoU, identical arithmetic to the original scalar helper."""
-    left, top = max(first[0], second[0]), max(first[1], second[1])
-    right, bottom = min(first[2], second[2]), min(first[3], second[3])
-    intersection = max(right - left, 0.0) * max(bottom - top, 0.0)
-    first_area = max(first[2] - first[0], 0.0) * max(first[3] - first[1], 0.0)
-    second_area = max(second[2] - second[0], 0.0) * max(second[3] - second[1], 0.0)
-    union = first_area + second_area - intersection
-    return intersection / union if union > 0 else 0.0
-
-
-def iod_scalar(detection: Box, ignored: Box) -> float:
-    """Single-pair intersection-over-detection, identical to the original helper."""
-    left, top = max(detection[0], ignored[0]), max(detection[1], ignored[1])
-    right, bottom = min(detection[2], ignored[2]), min(detection[3], ignored[3])
-    intersection = max(right - left, 0.0) * max(bottom - top, 0.0)
-    area = max(detection[2] - detection[0], 0.0) * max(detection[3] - detection[1], 0.0)
-    return intersection / area if area > 0 else 0.0
+def iod(detection: Box, ignored: Iterable[Box] | np.ndarray) -> np.ndarray:
+    """Intersection-over-detection-area of one box against every ignored box."""
+    return iod_matrix([detection], ignored)[0]
 
 
 def best_first_max(overlaps: np.ndarray, candidates: np.ndarray) -> int:
