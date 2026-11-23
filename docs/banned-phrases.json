@@ -1,0 +1,15 @@
+{
+  "description": "Cụm từ bị cấm trong phản hồi của agent. Mỗi mục: cụm từ, lý do, cách thay thế.",
+  "phrases": [
+    {
+      "phrase": "viết lại hàm NMS",
+      "reason": "L-019: torchvision.ops.nms và ultralytics.utils.metrics.box_iou đã có sẵn; viết tay là vi phạm quy tắc ưu tiên dùng lại codebase.",
+      "replacement": "import từ torchvision.ops / ultralytics.utils.metrics"
+    },
+    {
+      "phrase": "tự implement",
+      "reason": "L-019: phải grep codebase + thư viện đã cài trước khi viết bất kỳ helper nào.",
+      "replacement": "dùng lại hàm có sẵn (nêu rõ đường dẫn)"
+    }
+  ]
+}

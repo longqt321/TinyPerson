@@ -1,0 +1,124 @@
+% GauSS module architecture — drawn to match src/tinydet/modules/gauss.py
+% (commit a20f7b6, the code that produced the reported model).
+% Layout: band lane (top), context lane (bottom), router in the middle,
+% synthesis chain in a single right-hand column. All connectors are
+% axis-aligned; none crosses a node (verified geometrically).
+% Authored at final print width (<= 495 pt) so the type stays at true size.
+% Compile: pdflatex fig_gauss_module.tex
+\documentclass[tikz,border=2pt]{standalone}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\usetikzlibrary{positioning,fit,calc,arrows.meta,backgrounds}
+\definecolor{cIn}{HTML}{E8EEF5}
+\definecolor{cProj}{HTML}{D4E6F1}
+\definecolor{cGauss}{HTML}{FCF3CF}
+\definecolor{cBand}{HTML}{EDBB99}
+\definecolor{cCtx}{HTML}{E8DAEF}
+\definecolor{cRouter}{HTML}{FADBD8}
+\definecolor{cRef}{HTML}{D6EAF8}
+\definecolor{cOut}{HTML}{D1F2EB}
+\definecolor{cEdge}{HTML}{2C3E50}
+\begin{document}
+\begin{tikzpicture}[
+  x=1cm, y=1cm,
+  font=\footnotesize,
+  blk/.style={draw=cEdge, fill=#1, thick, rounded corners=1.5pt,
+              align=center, inner sep=2.5pt, minimum height=7.5mm},
+  arr/.style={-{Stealth[length=1.9mm,width=1.2mm]}, cEdge, semithick},
+  lbl/.style={font=\scriptsize, inner sep=1.5pt, fill=white},
+  grp/.style={draw=cEdge, dashed, rounded corners=2.5pt, inner sep=4pt},
+  gtitle/.style={font=\scriptsize\bfseries, cEdge, fill=white, inner sep=1.5pt},
+]
+
+% ================= band lane (top) =================
+\node[blk=cIn]   (c2) at (0.00,5.40) {$\mathbf{C}_2$\\[-1pt]{\scriptsize $64{\times}320^2$}};
+\node[blk=cProj] (s2) at (1.95,5.40) {$\mathrm{Conv}\,1{\times}1$\\[-1pt]{\scriptsize $64{\to}32$}};
+\node[blk=cGauss] (x0) at (4.10,5.40) {$\mathbf{X}_0$\\[-1pt]{\scriptsize $\mathrm{SiLU}(\mathrm{BN}(\cdot))$}};
+\node[blk=cGauss] (gauss) at (6.40,5.40) {Lọc Gauss\\[-1pt]{\scriptsize $\sigma_1\,[0.4,0.9]$}\\[-1pt]{\scriptsize $\sigma_2\,[1.1,1.8]$}};
+\node[blk=cBand, minimum height=5.5mm] (bh) at (8.70,6.15) {$\mathbf{B}_{\mathrm{h}}{=}\mathbf{X}_0{-}\mathbf{L}_1$};
+\node[blk=cBand, minimum height=5.5mm] (bm) at (8.70,5.40) {$\mathbf{B}_{\mathrm{m}}{=}\mathbf{L}_1{-}\mathbf{L}_2$};
+\node[blk=cBand, minimum height=5.5mm] (bl) at (8.70,4.65) {$\mathbf{B}_{\mathrm{l}}{=}\mathbf{L}_2$};
+\node[blk=cBand] (enc) at (11.10,5.40) {Mã hóa dải $\times3$\\[-1pt]{\scriptsize $\mathrm{PU}(2){\to}1{\times}1$}\\[-1pt]{\scriptsize ${\to}\mathrm{DW}3{\times}3{\to}\mathrm{PW}1{\times}1$}};
+\node[blk=cBand, minimum height=5.5mm] (rh) at (13.30,6.15) {$\mathbf{R}_{\mathrm{h}}$};
+\node[blk=cBand, minimum height=5.5mm] (rm) at (13.30,5.40) {$\mathbf{R}_{\mathrm{m}}$};
+\node[blk=cBand, minimum height=5.5mm] (rl) at (13.30,4.65) {$\mathbf{R}_{\mathrm{l}}$};
+
+% ================= context lane (bottom) =================
+\node[blk=cIn]   (p3) at (0.00,2.45) {$\mathbf{P}_3$\\[-1pt]{\scriptsize $64{\times}160^2$}};
+\node[blk=cIn]   (p4) at (0.00,0.45) {$\mathbf{P}_4$\\[-1pt]{\scriptsize $128{\times}80^2$}};
+\node[blk=cProj] (s3) at (1.95,2.45) {$\mathrm{Conv}\,1{\times}1$\\[-1pt]{\scriptsize $64{\to}32$}};
+\node[blk=cProj] (s4) at (1.95,0.45) {$\mathrm{Conv}\,1{\times}1$\\[-1pt]{\scriptsize $128{\to}32$}};
+\node[blk=cCtx]  (c0) at (4.10,1.45) {$\mathbf{C}_0$\\[-1pt]{\scriptsize $\mathrm{SiLU}(\mathrm{BN}(\cdot))$}};
+\node[blk=cCtx, minimum height=5.5mm] (d1) at (6.40,2.20) {\scriptsize DW $r{=}1$};
+\node[blk=cCtx, minimum height=5.5mm] (d2) at (6.40,1.45) {\scriptsize DW $r{=}3$};
+\node[blk=cCtx, minimum height=5.5mm] (d3) at (6.40,0.70) {\scriptsize DW $r{=}5$};
+\node[blk=cCtx]  (cctx) at (8.70,1.45) {$\mathbf{C}_{\mathrm{ctx}}$\\[-1pt]{\scriptsize $\mathrm{SiLU}(\mathbf{C}_0{+}\Sigma\omega_i\mathbf{T}_i)$}};
+
+% ================= router =================
+\node[blk=cRouter] (router) at (11.10,2.85) {Router lai\\[-1pt]{\scriptsize $\mathbf{a}{=}\mathrm{softmax}(\log\bar{\mathbf{e}}{+}\mathbf{c})$}\\[-1pt]{\scriptsize $m{=}a_{\mathrm{h}}{+}a_{\mathrm{m}}$}};
+
+% ================= synthesis column =================
+\node[blk=cRef] (fband) at (15.60,5.40) {$\mathbf{F}_{\mathrm{band}}$\\[-1pt]{\scriptsize $\Sigma\,a_b\mathbf{R}_b$}};
+\node[blk=cRef] (refine) at (15.60,3.70) {Tinh chỉnh\\[-1pt]{\scriptsize $3{\times}3$ / $5{\times}5$ branches}};
+\node[blk=cRef] (recon) at (15.60,2.00) {Tái tạo\\[-1pt]{\scriptsize $1{\times}1{\to}4d$, PS$(2)$}};
+\node[blk=cOut] (out) at (15.60,0.30) {$\mathbf{P}_2^{\mathrm{aligned}}$\\[-1pt]{\scriptsize $\mathbf{X}_0{+}\alpha\mathbf{z}{+}\gamma_{\mathrm{out}}\mathbf{B}_{\mathrm{h}}$}};
+
+% ================= connectors =================
+\draw[arr] (c2) -- (s2);
+\draw[arr] (p3) -- (s3);
+\draw[arr] (p4) -- (s4);
+% S2 -> X0
+\draw[arr] (s2.east) -- ($(x0.west)+(0,0.18)$);
+% S3 -> X0 (up) ; S3 -> C0 (down) ; S4 -> C0
+\draw[arr] (s3.east) -- (3.05,2.45) -- (3.05,5.22) -- ($(x0.west)+(0,-0.18)$);
+\draw[arr] (s3.east) -- (3.25,2.45) -- (3.25,1.63) -- ($(c0.west)+(0,0.18)$);
+\draw[arr] (s4.east) -- (2.85,0.45) -- (2.85,1.27) -- ($(c0.west)+(0,-0.18)$);
+\node[lbl] at (3.30,3.30) {DySample};
+% X0 -> Gaussian
+\draw[arr] (x0) -- (gauss);
+% Gaussian -> bands
+\draw[arr] (gauss.east) -- (7.55,5.40) -- (7.55,6.15) -- (bh.west);
+\draw[arr] (gauss.east) -- (bm.west);
+\draw[arr] (gauss.east) -- (7.55,5.40) -- (7.55,4.65) -- (bl.west);
+% bands -> encoders
+\draw[arr] (bh.east) -- (9.90,6.15) -- (9.90,5.72) -- (enc.north west);
+\draw[arr] (bm.east) -- (enc.west);
+\draw[arr] (bl.east) -- (9.90,4.65) -- (9.90,5.08) -- (enc.south west);
+% encoders -> R
+\draw[arr] (enc.east) -- (12.45,5.40) -- (12.45,6.15) -- (rh.west);
+\draw[arr] (enc.east) -- (rm.west);
+\draw[arr] (enc.east) -- (12.45,5.40) -- (12.45,4.65) -- (rl.west);
+% C0 -> dilated
+\draw[arr] (c0.east) -- (5.25,1.45) -- (5.25,2.20) -- (d1.west);
+\draw[arr] (c0.east) -- (d2.west);
+\draw[arr] (c0.east) -- (5.25,1.45) -- (5.25,0.70) -- (d3.west);
+% dilated -> Cctx
+\draw[arr] (d1.east) -- (7.55,2.20) -- (7.55,1.63) -- (cctx.north west);
+\draw[arr] (d2.east) -- (cctx.west);
+\draw[arr] (d3.east) -- (7.55,0.70) -- (7.55,1.27) -- (cctx.south west);
+% Cctx -> router
+\draw[arr] (cctx.east) -- (9.95,1.45) -- (9.95,2.85) -- (router.west);
+% R -> F_band
+\draw[arr] (rh.east) -- (13.90,6.15) -- (13.90,5.58) -- ($(fband.west)+(0,0.18)$);
+\draw[arr] (rm.east) -- (13.90,5.40) -- (fband.west);
+\draw[arr] (rl.east) -- (13.90,4.65) -- (13.90,5.22) -- ($(fband.west)+(0,-0.18)$);
+% router -> F_band (band weights) and -> refine (mixing gate)
+\draw[arr] ([yshift=2.5pt]router.east) -- (14.10,2.93) -- (14.10,5.40) -- (fband.west);
+\draw[arr] ([yshift=-2.5pt]router.east) -- (14.28,2.77) -- (14.28,2.62) -- (15.60,2.62) -- (refine.south);
+\node[lbl] at (14.16,4.30) {$a_b$};
+\node[lbl] at (14.60,2.62) {$m$};
+% synthesis chain
+\draw[arr] (fband.south) -- (refine.north);
+\draw[arr] (refine.south) -- (recon.north);
+\draw[arr] (recon.south) -- (out.north);
+\node[lbl] at (15.72,1.15) {$\alpha\mathbf{z}$};
+
+% ================= group boxes =================
+\begin{scope}[on background layer]
+  \node[grp, fit=(d1)(d2)(d3)(c0)(cctx),
+        label={[gtitle, anchor=south west]north west:{Ngữ cảnh giãn, $r\in\{1,3,5\}$}}] {};
+  \node[grp, fit=(router),
+        label={[gtitle, anchor=south west]north west:{Router}}] {};
+\end{scope}
+\end{tikzpicture}
+\end{document}

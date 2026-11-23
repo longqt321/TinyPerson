@@ -620,3 +620,64 @@
   sách ⇒ `trainer.stop = True`. Chặn kịch bản container **treo** (không crash) đốt GPU tới
   timeout 6 h của Modal. Ultralytics 8.4.208 đã bỏ arg `time` nên phải tự viết.
 - Regression: `scripts/test_resume_and_gate.py` ALL PASS sau khi thêm guard.
+
+## ADR-026: Loại bỏ nhánh P2 chết trong model YAML GauSS
+
+- **Ngày:** 2026-11-10. **Trạng thái:** Accepted.
+- **Bối cảnh:** review độc lập của model ngoài (handoff package) chỉ ra layer 19
+  (C3k2 P2 intermediate) trong `yolo26n_tiny_A2_p2_gauss_tinyperson.yaml` không được
+  layer nào tiêu thụ: GauSS nhận input `[2, 16, 13]`, Detect nhận `[20, 23, 26, 29]`.
+  Kiểm chứng bằng cách build model thật (Ultralytics 8.4.208, CPU): baseline không có
+  orphan; config GauSS có đúng 1 orphan = layer 19 (C3k2, 8.7k params), và nhánh
+  17→18→19 (Upsample, Concat, C3k2) chỉ nuôi nhau nên **cả nhánh** là compute chết
+  (chạy ở stride 4 — resolution lớn nhất trong neck). Đây là confound topology trong
+  so sánh baseline ↔ GauSS.
+- **Quyết định:**
+  1. Xóa nhánh 17–19 khỏi `yolo26n_tiny_A2_p2_gauss_tinyperson.yaml` và renumber
+     (GauSS giờ là layer 17; Detect `[17, 20, 23, 26]`). Model: 31→28 layers,
+     2.553M→2.544M params, 0 orphan, forward OK.
+  2. Lưu topology v3.1 nguyên vẹn vào `yolo26n_tiny_A2_p2_gauss_v31_tinyperson.yaml`
+     và trỏ `gauss_v3_tinyperson_wacv_150e.yaml` vào đó — bảo toàn khả năng reproduce
+     run 150e v3.1 (checkpoint keys `model.20.*` phụ thuộc index).
+  3. `scripts/gauss_probe.py`: thay lookup cứng `model.20.alpha_raw` bằng tìm theo
+     suffix `alpha_raw`.
+- **Hệ quả:** checkpoint v3.1 cũ KHÔNG load được vào YAML mới (đổi index layer);
+  v3.2 train từ đầu nên không ảnh hưởng. Config VisDrone GauSS (v3.1) vẫn còn orphan
+  tương tự — chưa sửa vì có checkpoint đã train.
+- **Chưa xác minh:** chưa đo GFLOPs tiết kiệm được từ compute chết; chưa chạy smoke
+  GPU cho topology mới.
+
+## ADR-027: Train GaussSplit head trên full-frame 1280, không dùng tiling khi train
+
+- **Ngày:** 2026-11-12. **Trạng thái:** Accepted (đổi so với thiết kế script rời trước đó).
+- **Bối cảnh:** thiết kế cũ (`scripts/train_gauss_split.py`, đã xoá) train head trên
+  **tile 640×512 lấy mẫu ngẫu nhiên 2.000 tile/epoch** — cùng không gian pixel 1:1 với
+  tiled eval. Khi chuyển sang tích hợp pipeline-native (người dùng chọn option B: head nằm
+  trong model YAML + trainer chuẩn), train chuyển sang **full-frame letterbox 1280** như
+  mọi run khác. Người dùng hỏi vì sao bỏ tiling khi train.
+- **Lý do đổi:**
+  1. **Giữ nguyên phân phối input của detector đóng băng.** Detector 150e được train và
+     đo trên full-frame 1280; cho nó ăn tile 1:1 trong khi train head là thay đổi phân phối
+     đầu vào của một model đang đóng băng — làm nhiễu tiền đề "detector giữ nguyên, chỉ
+     head học". BN eval + full-frame giữ detector bit-identical với checkpoint.
+  2. **Cửa sổ head là superset của dải eval-critical.** Letterbox 1280 co ảnh 1920 xuống
+     ~0.667× ⇒ cửa sổ ±12 px (train) ≈ ±18 px (tile), phủ trùm dải ≤10 px tile mà eval
+     quan tâm. Không có target nằm ngoài cửa sổ (đã đo, L-020).
+- **ĐÍNH CHÍNH (2026-11-12):** lý do ban đầu ghi trong ADR này là "tiling đòi hỏi dataloader
+  tự viết" — **sai**. Ultralytics 8.4.208 có **hỗ trợ tiling native**:
+  `args.tile` (`bool | int`, mặc định `False`, `True` = dùng `imgsz`, int = cửa sổ theo pixel
+  ảnh gốc), `BaseDataset.tile_windows`, `source_index`/`source_shape`, và
+  `build_yolo_dataset(..., tile=cfg.tile)`. Tức có thể train trên tile **trong pipeline
+  chuẩn** bằng `tile: 640` trong experiment config, không cần code tự viết. Quyết định
+  full-frame ở trên vẫn giữ, nhưng lý do #1 (phân phối input của detector đóng băng) là lý
+  do **duy nhất** còn hiệu lực; nếu sau này muốn thu hẹp domain gap thì bật `tile` là đủ,
+  không phải viết dataloader.
+- **Đánh đổi được thừa nhận:** head học trên detections sinh ở scale 1280 nhưng được áp
+  dụng lúc eval trên detections sinh ở scale tile 1:1 — có domain gap về kích thước box
+  (box ở tile lớn hơn ~1.5×). Giảm nhẹ: đầu vào của head là patch đặc trưng + toạ độ tương
+  đối (dx, dy theo bề rộng box, ratio theo diện tích), không phải pixel tuyệt đối; và
+  domain gap này thuộc về *detector* (vốn cũng gặp cùng gap ở eval baseline) chứ không do
+  head tạo ra. Nếu kết quả K2/K3 bất thường, tile-train là phương án dự phòng — nhưng khi
+  đó phải viết dataloader riêng và cần phê duyệt riêng.
+- **Hệ quả:** `pos_rate` trong log train không so sánh được với 19.7% (đo ở không gian
+  tile); đã ghi cảnh báo ở prereg §13 và runbook §2/§6b.

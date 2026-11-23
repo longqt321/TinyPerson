@@ -1,0 +1,46 @@
+% Overall detector architecture — YOLO26n-P2 + GauSS, matching
+% configs/model/yolo26n_tiny_A2_p2_gauss_v31_tinyperson.yaml
+% (GauSS output feeds the P2 head directly and, after a stride-2 conv,
+% is concatenated into the P3 path that drives the P3/P4/P5 heads).
+% Compile: pdflatex fig_overall_pipeline.tex
+\documentclass[tikz,border=2pt]{standalone}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\usetikzlibrary{positioning,fit,calc,arrows.meta,backgrounds}
+\definecolor{cIn}{HTML}{E8EEF5}
+\definecolor{cBB}{HTML}{D4E6F1}
+\definecolor{cNeck}{HTML}{E8DAEF}
+\definecolor{cGauss}{HTML}{FCF3CF}
+\definecolor{cHead}{HTML}{D1F2EB}
+\definecolor{cEdge}{HTML}{2C3E50}
+\begin{document}
+\begin{tikzpicture}[
+  font=\scriptsize,
+  blk/.style={draw=cEdge, fill=#1, thick, rounded corners=1.5pt,
+              align=center, inner sep=2.5pt, minimum height=6.5mm},
+  arr/.style={-{Stealth[length=2.0mm,width=1.3mm]}, cEdge, semithick},
+  grp/.style={draw=cEdge, dashed, rounded corners=2pt, inner sep=3pt},
+]
+\node[blk=cIn] (img) at (0,0) {Ảnh vào\\[-1pt]{\tiny $1280^2$}};
+\node[blk=cBB] (bb) at (2.0,0.85) {Xương sống\\[-1pt]{\tiny C2: $64{\times}320^2$}};
+\node[blk=cNeck] (neck) at (2.0,-0.95) {Ghép đặc trưng\\[-1pt]{\tiny P3 $64{\times}160^2$}\\[-1pt]{\tiny P4 $128{\times}80^2$}};
+\node[blk=cGauss] (gauss) at (4.35,0.85) {GauSS\\[-1pt]{\tiny $36{,}878$ tham số}};
+\node[blk=cBB] (ds) at (4.35,-0.95) {Conv $3{\times}3$, $s{=}2$\\[-1pt]{\tiny $32{\to}32$}};
+\node[blk=cIn] (p2) at (6.45,1.55) {$\mathbf{P}_2'$\\[-1pt]{\tiny $32{\times}320^2$}};
+\node[blk=cIn] (p3p) at (6.45,-0.35) {$\mathbf{P}_3'$\\[-1pt]{\tiny nối $32{+}64$}};
+\node[blk=cHead] (det) at (6.45,-1.85) {Phát hiện\\[-1pt]{\tiny $P_2',P_3',P_4,P_5$}};
+\draw[arr] (img) -- (bb);
+\draw[arr] (img) -- (neck);
+\draw[arr] (bb.east) -- (gauss.west);
+\draw[arr] (neck.east) -- ++(0.25,0) |- ($(gauss.west)+(0,-0.18)$);
+\draw[arr] (neck.east) -- ++(0.25,0) |- ($(ds.west)+(0,-0.18)$);
+\draw[arr] (gauss.east) -- (5.45,0.85) -- (5.45,1.55) -- (p2.west);
+\draw[arr] (gauss.south) -- (ds.north);
+\draw[arr] (ds.east) -- ++(0.25,0) |- (p3p.west);
+\draw[arr] (p2.east) -- (7.35,1.55) -- (7.35,-1.85) -- (det.east);
+\draw[arr] (p3p.south) -- (det.north);
+\begin{scope}[on background layer]
+  \node[grp, fit=(gauss), label={[font=\scriptsize\bfseries, anchor=south]north:{tinh chỉnh stride 4}}] {};
+\end{scope}
+\end{tikzpicture}
+\end{document}

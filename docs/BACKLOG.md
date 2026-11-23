@@ -455,3 +455,161 @@ Việc phát hiện thêm trong lúc làm task, chưa nằm trong phạm vi đã
   abort ở epoch 1. Đã sửa: chỉ lặp qua `.values()` và bỏ qua phần tử không phải số.
 - **Ý nghĩa:** nếu launch G1 mà không test, run sẽ chết ngay epoch 1 và (trước ADR-025) retry
   train lại từ đầu.
+
+## BL-036: Orphan layer 19 trong config GauSS VisDrone (v3.1)
+
+- `configs/model/yolo26n_tiny_A2_p2_gauss_visdrone.yaml` có cùng nhánh P2 chết
+  (17→18→19) như TinyPerson trước ADR-026. Chưa sửa vì có checkpoint VisDrone đã
+  train phụ thuộc index layer cũ; sửa khi finetune VisDrone lần tới.
+
+## BL-037: `reports/gauss_final_report.md` trích số của evaluator đã ghi nhận là lỗi
+
+- **Phát hiện:** 2026-11-11 (vòng phản biện đêm). `reports/gauss_final_report.md` L80 công bố
+  `AP50_tiny` +0.69pp (9.071% → 9.758%) — đây là số của **evaluator legacy có lỗi lọc lớp**
+  (ADR-008: AP bị nén ~19pp). ADR-008 đã ghi rõ bảng legacy "không nên trích dẫn".
+- **Số của evaluator đúng** (`*_wacv_150e_*`, best.pt):
+  tiled tiny 0.375675 → 0.374036 = **−0.16pp**; full-frame 0.300240 → 0.302312 = **+0.21pp**.
+- **Ảnh hưởng:** mọi claim trong report dựa trên AP tuyệt đối (bao gồm "vượt FCOS WACV 2020
+  ở tiny1") đang dùng thế hệ số sai.
+- **Đề xuất:** sửa report dùng số wacv_150e; nếu cần giữ số legacy thì gắn nhãn rõ
+  "evaluator lỗi, không trích dẫn". Không sửa trong phiên nghiên cứu này.
+- **Ngoài phạm vi phiên:** đây là việc phát sinh, không thực hiện lúc này.
+
+## BL-038: Bootstrap B=120 không cluster theo video prefix
+
+- **Phát hiện:** 2026-11-11. CI [−1.32, +1.04] resample theo **ảnh**, nhưng split grouped
+  theo video prefix (`docs/agents/DATA_EVALUATION.md` L9-10) ⇒ variance bị đánh giá thấp,
+  CI hẹp giả tạo. B=120 cũng dưới chuẩn (1000–10000) cho ước lượng đuôi 2.5%.
+- **Đề xuất:** block bootstrap theo video prefix, B≥2000; báo cáo cả CI clustered.
+- **Ngoài phạm vi phiên:** ghi nhận, chưa thực hiện.
+
+## BL-039: `scripts/oracle_ap75.py` — AP xếp hạng theo IoU phụ thuộc "credit rule"
+
+- **Phát hiện:** 2026-11-11 (vòng phản biện đêm). Khi nhiều detection cùng phủ một GT, bộ
+  matcher tham lam phải chọn **một** detection để tính TP. Hai quy tắc tự nhiên cho kết quả
+  rất khác nhau (cùng 7 280 TP, cùng tập score):
+  - credit theo IoU giảm dần, xếp hạng theo IoU: AP@0.50 = **0.3892**
+  - credit theo score giảm dần, xếp hạng theo IoU: AP@0.50 = **0.2401**  (−14.9pp)
+  - credit theo IoU, xếp hạng theo score: **0.1290**  (baseline đúng là 0.2192)
+- **Lưu ý quan trọng (đã kiểm chứng):** score của model **gần như không trùng** —
+  144 668 giá trị phân biệt / 145 704 detection, chỉ 1 ảnh có trùng nội bộ. Vậy tie-break
+  theo score KHÔNG phải nguyên nhân; nguyên nhân là **quy tắc credit** giữa các detection
+  chồng lấn (tiled inference tạo ra nhiều hộp gần trùng quanh cùng một người).
+- **Hệ quả:** con số "score oracle +19.6pp" trong `reports/gauss_final_report.md` **không
+  xác định** (ill-defined) — nó phụ thuộc quy tắc credit chứ không phải một đo lường.
+  Đây là lỗi thứ hai của `oracle_ap75.py`, độc lập với lỗi "score = max IoU với GT".
+  Ngược lại, `box_oracle` xếp hạng theo score **ổn định** (0.4047 với cả hai credit rule).
+- **Đề xuất:** mọi oracle phải công bố rõ credit rule; dùng credit theo score (khớp
+  evaluator chính thức) và báo cáo thêm biến thể credit theo IoU như một bound.
+- **Ngoài phạm vi phiên:** ghi nhận, chưa sửa script.
+
+## BL-040: PairSplit chưa train/eval được — thiếu checkpoint frozen (ảnh thì CÓ local)
+
+- **Phát hiện:** 2026-11-11. Module `src/tinydet/modules/pair_split.py` đã có đủ
+  forward/decode/target builder/loss và self-test (22 test pass).
+- **Đính chính so với ghi chú trước:** ảnh dataset **có sẵn ở local**:
+  `datasets/derived/tinyperson-yolo-v2/images/{train,val}` (662/84 ảnh, đã resize về
+  1280×720) và ảnh gốc `datasets/TinyPerson_official/tiny/tiny_set/**` (2072 jpg,
+  median 1920×1080, max 3888×2592). Cái **thiếu** là **checkpoint frozen** — không có
+  file `.pt` nào trong repo, phải lấy từ Modal.
+- **Hệ quả:** chưa thể trích feature P2 + detection list của checkpoint đã dùng cho
+  probe R20–R22 ⇒ toàn bộ tiêu chí trong `docs/CRITERIA_PAIRSPLIT_PREREG.md` chưa kiểm
+  chứng được. Không được báo cáo bất kỳ con số AP nào cho PairSplit.
+- **Đề xuất:** `scripts/train_pair_split.py` chạy trên Modal A10/L4: load checkpoint,
+  trích P2 + detection list trên train split (tiled 640×512, overlap 100, 1:1), train
+  head 20 epoch, eval bằng `evaluate_tinyperson` (`class_mode="merge"`) trên val.
+- **Ngoài phạm vi phiên:** chưa viết script, chưa chạy Modal.
+
+## BL-041: Thí nghiệm single-pass native resolution (3.16×) chưa chạy
+
+- **Phát hiện:** 2026-11-11 (census chi phí trong `TINY_RESEARCH_FINAL.md`). Một lượt
+  inference ở native resolution tốn **3.16×** compute so với full-frame 1280, rẻ hơn
+  tiled 640×512 overlap 100 (**4.68×**) mà không mất pixel vào overlap.
+- **Vì sao chưa làm:** cần GPU + ảnh dataset; đồng thời đây là thí nghiệm *protocol*,
+  không phải module — nằm ngoài phạm vi "phải có module cải tiến".
+- **Đề xuất:** nếu báo cáo cần một baseline mạnh hơn tiling, chạy thí nghiệm này trước
+  khi so sánh PairSplit, để tránh bị bắt bẻ "tiling là baseline yếu".
+
+## BL-042: Train GaussSplit cần checkpoint frozen + GPU — pipeline đã sẵn sàng nhưng chưa chạy
+
+- **Trạng thái 2026-11-11:** đường train duy nhất là `modal/app.py::train` với
+  `configs/experiment/gausssplit_{smoke,b0_tinyperson}.yaml` (head `DetectGaussSplit` nằm
+  trong model YAML). `scripts/train_gauss_split.py` và `modal/gauss_split.py` **đã xoá**.
+  Tests: 54/54 pass; CPU end-to-end `model.train()` đã chạy thật ở local.
+- **Còn thiếu để chạy thật:** (1) checkpoint frozen của baseline A2-P2 dùng cho probe
+  R20–R22 (không có file `.pt` trong repo — lấy từ Modal); (2) GPU (A10).
+- **Lệnh chạy:** `docs/GAUSSSPLIT_RUNBOOK.md` §6.
+- **Bắt buộc:** chạy đúng bảng biến thể trong `docs/CRITERIA_PAIRSPLIT_PREREG.md` Phần 2
+  (B0, G4 tối thiểu; G1/G2/G3 nếu còn ngân sách). Không sửa module sau khi đã nhìn kết quả.
+- **Ngoài phạm vi phiên:** chưa chạy Modal.
+
+## BL-043: Chưa có experiment config cho nhánh G4 (GaussSplit: DoG + NWD)
+
+- **Phát hiện:** 2026-11-11. Chỉ có `gausssplit_b0_tinyperson.yaml` (PairSplit, L1). Nhánh
+  G4 cần một config riêng bật `geom: nwd` + DoG trong head, nếu không thì K5/K6 trong
+  `docs/GAUSSSPLIT_RUNBOOK.md` §4 không thể đo.
+- **Đề xuất:** copy `gausssplit_b0_tinyperson.yaml` → `gausssplit_g4_tinyperson.yaml`, đổi
+  `name`, và thêm tham số chọn geometry vào model YAML (`DetectGaussSplit [nc, "gauss"]`).
+  Chỉ làm **sau** khi B0 xong, để không đốt GPU vào nhánh chưa có mốc.
+- **Ngoài phạm vi phiên:** chưa tạo config.
+
+## BL-044 (ĐÃ RÚT LẠI): giả thuyết "hộp thứ hai dùng p(second) làm score" là SAI
+
+- **Rút lại 2026-11-12:** `PairSplit.decode` trả `score[keep] * p[keep]`, tức score hộp thứ hai
+  = **det_score × p(second)** ≤ det_score, nên nó luôn xếp *dưới* detection nguồn. Không có
+  chuyện hộp thứ hai nhảy lên đầu bảng xếp hạng. Kết luận trước đó (dựa trên đọc code không
+  kỹ) là sai; đã đính chính cho người dùng.
+- **Nguyên nhân thật của việc mAP tụt trong B0:** hộp thứ hai là **FP ở chế độ full-frame**,
+  vì ở 1280 letterbox hai người cách nhau ≤10 px (không gian tile 1:1) chỉ còn ~1.7 px — dưới
+  một ô P2 (stride 4) — nên head không thể định vị. Đây là lý do phải train head trên tile 1:1.
+- **Hành động:** xem BL-045.
+
+## BL-045: Train head trên tile 1:1 (fallback đã ghi trong ADR-027) — đang triển khai
+
+- **Bối cảnh:** B0 train full-frame 1280 (median người 2.24 px) trong khi eval là tile 1:1
+  (median 9.31 px). Ở 1280, cặp ≤10 px co lại ~1.7 px < 1 ô P2 ⇒ head không có tín hiệu để học;
+  hộp thứ hai sinh ra là FP, kéo mAP50 từ 0.2943 → 0.2770.
+- **Cách làm:** `tile: 640` + `imgsz: 640` (cửa sổ 1:1, không rescale) trong
+  `configs/experiment/gausssplit_b1_tiled.yaml`. `max_dist_px=10` khi đó đúng nghĩa pixel
+  tile — cùng định nghĩa với eval và prereg.
+- **Chặn kỹ thuật đã xử lý:** Ultralytics áp `tile` cho cả val ⇒ mỗi tile thành một "ảnh" và
+  benchmark per-epoch báo trùng ảnh. Đã thêm hook `_install_tile_train_only_hook` (chỉ train
+  loader dùng tile, val giữ full-frame 1280).
+- **Ngoài phạm vi phiên:** chưa chạy xong; kết quả sẽ ghi vào `docs/PAPER_OUTLINE.md` §5.
+
+## BL-046: PairSplit box thứ hai thất bại K2 trên val (precision 0.7%) — chuyển sang G4
+
+- **Đo được (val, B1b `gausssplit_b1b_tiled`, t=0.70):** 3608 GT, box thứ nhất bắt 3248 (90%).
+  Head sinh 906 box thứ hai → **6 cứu được GT mới (0.17%)**, 356 trùng GT đã bắt, 544 FP (60%).
+  Precision box thứ hai = **0.7%** ⇒ kill criterion K2 (<0.5) thất bại nặng.
+  Score của box cứu được (max 0.229) thấp hơn FP (max 0.586) ⇒ **không threshold nào tách được**.
+- **Diễn giải:** head PairSplit (patch thường trên P2) không phân biệt được "một blob" với
+  "hai người chồng lấn", nên nó dự đoán quanh chính người đã phát hiện (trùng) hoặc nhiễu.
+  gs_loss train 0.41 vs val 0.78 ⇒ overfit cặp trên train, không generalize.
+- **Hành động:** chạy G4 (GaussSplit: DoG scale-space + NWD) — nhánh bắt buộc tối thiểu của
+  prereg, và là tín hiệu đúng cho bài toán tách 2 cực trị trong blob nhỏ. Config
+  `configs/experiment/gausssplit_g4_tiled.yaml` + `configs/model/yolo26n_tiny_A2_p2_gauss_split_g4.yaml`.
+- **Chưa xác minh:** AP của G4 (đang train).
+
+## BL-047 (kết quả G4, 2026-11-12): DoG + NWD không sửa được K2 — precision 0.5%
+
+- **Số liệu val (G4 `gausssplit_g4_tiled`, 20e tile, detector bit-identical đã verify):**
+  head-off = 0.3559 (bằng baseline). Sweep p(second) 0.10–0.70: tốt nhất 0.3526 (t=0.30),
+  **không threshold nào vượt 0.3559**. Chẩn đoán box thứ hai tại t=0.30: 3971 box →
+  21 cứu GT mới (0.58% recall), 1079 trùng, 2871 FP (72%); precision **0.5%**.
+  Score box cứu được (max 0.163) thấp hơn FP (max 0.271) ⇒ không tách được bằng threshold.
+- **Kết luận chung cho cả 2 head (PairSplit B1b precision 0.7%, GaussSplit G4 0.5%):**
+  vấn đề nằm ở *cách học* — supervision chỉ đến từ GT-neighborhood heuristic
+  (`build_pair_targets`), head không có tín hiệu trực tiếp "2 cực trị trong blob".
+  gs_loss val luôn ~2x train (0.85 vs 0.48) ⇒ overfit heuristic, không generalize.
+- **Bài học thiết kế (để phiên sau):** cần supervision trực tiếp (ví dụ học từ
+  annotation đếm người trong box, hoặc pseudo-label 2-cực-tri từ heat-map P2),
+  hoặc đổi cơ chế: head dự đoán *số người trong box* + tách bằng local maximum,
+  thay vì dự đoán offset box thứ hai.
+- **Không test-eval G4** vì không threshold val nào tốt hơn head-off (prereg: chỉ
+  chấm test khi threshold val vượt head-off).
+
+- [2026-11-12] `ruff check .` toàn repo còn 16 lỗi trong file legacy ngoài phạm vi:
+  `launch_parallel_tinyperson.py` (I001, F401...) và `report-bundle/tools/*.py`.
+  Phạm vi chính (`src/ tests/ scripts/ modal/ launch_campaign.py`) sạch. Cần quyết định
+  xoá hoặc rà lint cho các file này — không tự sửa vì ngoài phạm vi đồ án.
