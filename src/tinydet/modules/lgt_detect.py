@@ -115,26 +115,20 @@ def gaussian_to_ltrb(mu: Tensor, sigma: Tensor) -> Tensor:
 
 
 class SpatialShiftStencil(nn.Module):
-    """Frozen depthwise ``3x3`` shift convolution extracting ``OFFSETS_3X3`` taps and valid masks."""
+    """Fixed depthwise ``3x3`` shift convolution extracting ``OFFSETS_3X3`` taps and valid masks.
+
+    Stored as a non-parameter buffer (``register_buffer``) rather than an ``nn.Parameter`` so
+    Ultralytics ``BaseTrainer`` never forces ``requires_grad=True`` on the Dirac shift stencil.
+    """
 
     def __init__(self, channels: int = 5) -> None:
         super().__init__()
         self.channels = int(channels)
-        conv = nn.Conv2d(
-            self.channels,
-            self.channels * NUM_SPATIAL,
-            kernel_size=3,
-            padding=1,
-            groups=self.channels,
-            bias=False,
-        )
-        weight = torch.zeros_like(conv.weight)
+        weight = torch.zeros((self.channels * NUM_SPATIAL, 1, 3, 3), dtype=torch.float32)
         for c in range(self.channels):
             for k, (dx, dy) in enumerate(OFFSETS_3X3):
                 weight[c * NUM_SPATIAL + k, 0, dy + 1, dx + 1] = 1.0
-        conv.weight.data.copy_(weight)
-        conv.weight.requires_grad_(False)
-        self.shift_conv = conv
+        self.register_buffer("shift_weight", weight, persistent=False)
 
         dx_t = torch.tensor([dx for dx, _ in OFFSETS_3X3], dtype=torch.float32).view(1, NUM_SPATIAL, 1, 1)
         dy_t = torch.tensor([dy for _, dy in OFFSETS_3X3], dtype=torch.float32).view(1, NUM_SPATIAL, 1, 1)
@@ -144,7 +138,10 @@ class SpatialShiftStencil(nn.Module):
     def forward(self, field: Tensor) -> tuple[Tensor, Tensor]:  # agy-allow-dup
         """Return shifted ``(B, C, 9, H, W)`` field and ``(1, 9, H, W)`` in-bounds boolean mask."""
         bsz, channels, height, width = field.shape
-        shifted = self.shift_conv(field).view(bsz, channels, NUM_SPATIAL, height, width)
+        weight = self.shift_weight.to(dtype=field.dtype)
+        shifted = F.conv2d(field, weight, padding=1, groups=self.channels).view(
+            bsz, channels, NUM_SPATIAL, height, width
+        )
 
         valid = torch.ones((1, NUM_SPATIAL, height, width), dtype=torch.bool, device=field.device)
         for k, (dx, dy) in enumerate(OFFSETS_3X3):

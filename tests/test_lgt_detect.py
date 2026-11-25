@@ -118,6 +118,7 @@ def test_yaml_build_param_budget_loss_backward_and_fuse():
     assert 0 < extra_params < 3000, f"Expected <3000 extra params, got {extra_params}"
 
     head = find_lgt_head(lgt.model)
+    assert list(head.lgt_stencil.parameters()) == [], "Shift stencil must be a buffer, not a trainable Parameter"
     assert head is not None
 
     # Train forward + E2ELoss (with Wasserstein TAL + Wasserstein BboxLoss + Dense Field Distillation)
