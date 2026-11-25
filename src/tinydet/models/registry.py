@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from ultralytics import YOLO
+from ultralytics.cfg import get_cfg
 
 from tinydet.models.ultralytics import register_ultralytics_modules
 
@@ -12,6 +13,10 @@ def build_model(config: dict):
         raise ValueError(f"Model config does not exist: {model_path}")
 
     model = YOLO(str(model_path))
+    if isinstance(getattr(model.model, "args", None), dict):
+        model.model.args = get_cfg(overrides=model.model.args)
+    if getattr(model.model, "yaml", {}).get("e2e_eval", False):
+        model.model.model[-1].end2end = True
 
     pretrained = config.get("pretrained")
     if pretrained:

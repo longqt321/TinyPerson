@@ -3,39 +3,105 @@
 import torch
 
 from tinydet.modules.gauss_split_detect import DetectGaussSplit, find_gauss_split_head
+from tinydet.modules.lgt_detect import (
+    LGTDetect,
+    find_lgt_head,
+    scale_invariant_wasserstein_xyxy,
+    wasserstein_similarity_xyxy,
+)
 
 
 def make_tiny_floor_forward(orig_fn, floor_val):
-    """Wrap a TAL assigner forward so tiny ground truths keep a score floor.
+    """Wrap a TAL assigner forward so tiny ground truths keep a score floor on their matched class only.
 
     ``orig_fn`` returns ``(target_labels, target_bboxes, target_scores, fg_mask,
     target_gt_idx)`` where ``target_bboxes`` is ``(b, h*w, 4)`` in pixel units
-    and ``fg_mask`` is ``(b, h*w)``. Anchors whose assigned box has a
-    sqrt-area below 8 px get ``target_scores`` clamped to ``floor_val`` so they
-    are not drowned out by the background.
+    and ``fg_mask`` is ``(b, h*w)``. Only positive class channels (``target_scores > 0``)
+    are floored so false classes in multi-class training remain strictly zero.
     """
 
     def patched_forward(pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs):
-        # **kwargs keeps this wrapper compatible with assigner variants that take
-        # extra arguments (e.g. anc_strides) instead of raising TypeError.
         target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx = orig_fn(
             pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs
         )
         if fg_mask.any():
             bw = (target_bboxes[..., 2] - target_bboxes[..., 0]).clamp(min=0)
             bh = (target_bboxes[..., 3] - target_bboxes[..., 1]).clamp(min=0)
-            sqrt_area = torch.sqrt(bw * bh + 1e-6)  # (b, h*w)
-            # fg_mask is (b, h*w); broadcast it against sqrt_area first, then
-            # lift to the class dimension of target_scores.
-            is_tiny = (sqrt_area < 8.0) & fg_mask
+            sqrt_area = torch.sqrt(bw * bh + 1e-6)
+            is_tiny_pos = ((sqrt_area < 8.0) & fg_mask).unsqueeze(-1) & (target_scores > 0)
             target_scores = torch.where(
-                is_tiny.unsqueeze(-1),
+                is_tiny_pos,
                 target_scores.clamp(min=floor_val),
                 target_scores,
             )
         return target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx
 
     return patched_forward
+
+
+def make_wasserstein_iou_calculation(orig_iou_fn, weight: float, ref_scale_px: float = 32.0):
+    """Blend CIoU with scale-invariant Wasserstein similarity smoothly for tiny/small GTs."""
+    ref_area = max(ref_scale_px * ref_scale_px, 1.0)
+
+    def patched_iou_calculation(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor) -> torch.Tensor:
+        ciou = orig_iou_fn(gt_bboxes, pd_bboxes)
+        if gt_bboxes.numel() == 0:
+            return ciou
+        gt_w = (gt_bboxes[..., 2] - gt_bboxes[..., 0]).clamp(min=0.0)
+        gt_h = (gt_bboxes[..., 3] - gt_bboxes[..., 1]).clamp(min=0.0)
+        alpha = float(weight) / (1.0 + (gt_w * gt_h) / ref_area)
+        alpha = alpha.to(dtype=ciou.dtype)
+        w_sim = wasserstein_similarity_xyxy(gt_bboxes, pd_bboxes).to(dtype=ciou.dtype)
+        return (1.0 - alpha) * ciou + alpha * w_sim
+
+    return patched_iou_calculation
+
+
+def make_wasserstein_bbox_forward(orig_bbox_forward, weight: float, ref_scale_px: float = 32.0):
+    """Augment ``BboxLoss.forward`` with bounded scale-invariant Wasserstein regression loss."""
+    ref_area = max(ref_scale_px * ref_scale_px, 1.0)
+
+    def patched_bbox_forward(
+        pred_dist,
+        pred_bboxes,
+        anchor_points,
+        target_bboxes,
+        target_scores,
+        target_scores_sum,
+        fg_mask,
+        imgsz,
+        stride,
+    ):
+        loss_iou, loss_dfl = orig_bbox_forward(
+            pred_dist,
+            pred_bboxes,
+            anchor_points,
+            target_bboxes,
+            target_scores,
+            target_scores_sum,
+            fg_mask,
+            imgsz,
+            stride,
+        )
+        fg_idx = fg_mask.nonzero(as_tuple=True)
+        if fg_idx[0].numel() == 0:
+            return loss_iou, loss_dfl
+        fg_pred = pred_bboxes[fg_idx]
+        fg_target = target_bboxes[fg_idx]
+        fg_stride = stride[fg_idx[1]]
+        gt_area_px = (
+            (fg_target[:, 2] - fg_target[:, 0]).clamp(min=0.0)
+            * (fg_target[:, 3] - fg_target[:, 1]).clamp(min=0.0)
+            * fg_stride.squeeze(-1).square()
+        )
+        scale_gate = (float(weight) / (1.0 + gt_area_px / ref_area)).unsqueeze(-1)
+        pos_weight = target_scores[fg_idx].sum(-1, keepdim=True)
+        dist = scale_invariant_wasserstein_xyxy(fg_pred, fg_target).unsqueeze(-1)
+        w_loss = ((dist / (1.0 + dist)) * scale_gate.to(dist.dtype) * pos_weight.to(dist.dtype)).sum()
+        loss_iou = loss_iou + (w_loss / target_scores_sum.to(dist.dtype)).to(loss_iou.dtype)
+        return loss_iou, loss_dfl
+
+    return patched_bbox_forward
 
 
 def _install_hooks() -> None:
@@ -52,6 +118,9 @@ def _install_hooks() -> None:
         criterion = original_criterion(self)
         beta = float(self.yaml.get("tal_beta", 6.0))
         tiny_floor = float(self.yaml.get("tal_tiny_floor", 0.0))
+        tal_wasserstein = float(self.yaml.get("tal_wasserstein", 0.0))
+        loss_wasserstein = float(self.yaml.get("loss_wasserstein", 0.0))
+        ref_scale_px = float(self.yaml.get("wasserstein_ref_px", 32.0))
         losses = (criterion.one2many, criterion.one2one) if hasattr(criterion, "one2many") else (criterion,)
         for loss in losses:
             if hasattr(loss, "assigner"):
@@ -60,11 +129,23 @@ def _install_hooks() -> None:
                 if tiny_floor > 0.0 and not getattr(assigner, "_tiny_floor_patched", False):
                     assigner.forward = make_tiny_floor_forward(assigner.forward, tiny_floor)
                     assigner._tiny_floor_patched = True
-        head = find_gauss_split_head(self)
+                if tal_wasserstein > 0.0 and not getattr(assigner, "_wasserstein_patched", False):
+                    assigner.iou_calculation = make_wasserstein_iou_calculation(
+                        assigner.iou_calculation, tal_wasserstein, ref_scale_px=ref_scale_px
+                    )
+                    assigner._wasserstein_patched = True
+            if loss_wasserstein > 0.0 and hasattr(loss, "bbox_loss"):
+                bbox_loss = loss.bbox_loss
+                if not getattr(bbox_loss, "_wasserstein_patched", False):
+                    bbox_loss.forward = make_wasserstein_bbox_forward(
+                        bbox_loss.forward, loss_wasserstein, ref_scale_px=ref_scale_px
+                    )
+                    bbox_loss._wasserstein_patched = True
+        head = find_gauss_split_head(self) or find_lgt_head(self)
         if head is not None:
             if not isinstance(criterion, E2ELoss):
                 raise TypeError(
-                    f"a model with DetectGaussSplit needs E2ELoss, got {type(criterion).__name__}; "
+                    f"a model with {type(head).__name__} needs E2ELoss, got {type(criterion).__name__}; "
                     "the auxiliary loss would silently not train otherwise"
                 )
             criterion._tinydet_head = head
@@ -72,9 +153,6 @@ def _install_hooks() -> None:
 
     DetectionModel.init_criterion = init_criterion
 
-    # The auxiliary loss is added at the criterion level (once, not per branch).
-    # The extra "gs_loss" key flows into results.csv and W&B automatically: the
-    # trainer derives `loss_names` from the criterion's loss dict on first batch.
     original_e2e_call = E2ELoss.__call__
 
     def e2e_call(self, preds, batch):
@@ -82,9 +160,15 @@ def _install_hooks() -> None:
         head = getattr(self, "_tinydet_head", None)
         if head is None:
             return total, items
+        if not getattr(head, "training", True):
+            return total, items
         raw = preds[1] if isinstance(preds, tuple) else preds
         aux = head.aux_loss(raw, batch)
-        return total.sum() + aux, {**items, "gs_loss": aux.detach()}
+        loss_key = "lgt_loss" if isinstance(head, LGTDetect) else "gs_loss"
+        if isinstance(head, LGTDetect):
+            bsz = max(raw["one2one"]["boxes"].shape[0], 1)
+            return total.sum() + aux, {**items, loss_key: aux.detach() / bsz}
+        return total.sum() + aux, {**items, loss_key: aux.detach()}
 
     E2ELoss.__call__ = e2e_call
 
@@ -158,18 +242,19 @@ def _install_tile_train_only_hook() -> None:
         tile = getattr(self.args, "tile", False)
         if mode == "train" or not tile:
             return original_build_dataset(self, img_path, mode, batch)
-        # `_setup_train` builds the train loader (tiled) before the val loader, so
-        # clearing `args.tile` here leaves every later consumer — the validator's
-        # `merge_tiles` branch included — in full-frame mode.
         self.args.tile = False
-        return original_build_dataset(self, img_path, mode, batch)
+        try:
+            return original_build_dataset(self, img_path, mode, batch)
+        finally:
+            # Keep validator in full-frame mode while preserving provenance on trainer._tiled_train
+            self._tiled_train = tile
 
     DetectionTrainer.build_dataset = build_dataset
     DetectionTrainer._tinydet_tile_hook = True
 
 
 def register_ultralytics_modules() -> None:
-    """Register TinyDet modules (GauSS, P2Refine, DetectGaussSplit) before Ultralytics parses a model YAML."""
+    """Register TinyDet modules (LGTDetect, GauSS, P2Refine, DetectGaussSplit) before YAML parsing."""
     from ultralytics.nn import tasks
 
     from tinydet.modules.gauss import (
@@ -180,6 +265,7 @@ def register_ultralytics_modules() -> None:
         LearnableGaussianScaleSpace,
         RefinementBranch,
     )
+    from tinydet.modules.lgt_detect import SpatialShiftStencil
     from tinydet.modules.p2_refine import P2Refine
 
     tasks.GauSS = GauSS
@@ -189,13 +275,8 @@ def register_ultralytics_modules() -> None:
     tasks.RefinementBranch = RefinementBranch
     tasks.P2Refine = P2Refine
     tasks.DetectGaussSplit = DetectGaussSplit
+    tasks.LGTDetect = LGTDetect
 
-    # Patch parse_model to support multi-input layers:
-    #   GauSS: [ [c2, p3, p4], 1, GauSS, [32] ]
-    #   P2Refine:     [ [c2, p3], 1, P2Refine, [32] ]
-    # and the Detect subclass (which needs the reg_max/end2end/ch detection args
-    # plus its own extra args after them):
-    #   DetectGaussSplit: [ [p2, p3, p4, p5], 1, DetectGaussSplit, [nc, "pair"] ]
     if not getattr(tasks, "_tinydet_gauss_patched", False):
         import inspect
 
@@ -209,20 +290,24 @@ def register_ultralytics_modules() -> None:
             c1 = [ch[x] for x in f]
             c2 = args[0] if len(args) > 0 else 32
             args = [c1, c2, *args[1:]]
-        elif m is DetectGaussSplit:
+        elif m in {DetectGaussSplit, LGTDetect}:
             args = [args[0], reg_max, end2end, [ch[x] for x in f], *args[1:]]
             m.legacy = legacy
         else:
             c2 = ch[f]"""
-        if target in src:
-            new_src = src.replace(target, replacement, 1)
-            glb = dict(tasks.__dict__)
-            glb["GauSS"] = GauSS
-            glb["P2Refine"] = P2Refine
-            glb["DetectGaussSplit"] = DetectGaussSplit
-            exec(new_src, glb)  # noqa: S102
-            tasks.parse_model = glb["parse_model"]
-            tasks._tinydet_gauss_patched = True
+        if target not in src:
+            raise RuntimeError(
+                "Ultralytics tasks.parse_model signature changed; expected branch 'else: c2 = ch[f]' not found."
+            )
+        new_src = src.replace(target, replacement, 1)
+        glb = dict(tasks.__dict__)
+        glb["GauSS"] = GauSS
+        glb["P2Refine"] = P2Refine
+        glb["DetectGaussSplit"] = DetectGaussSplit
+        glb["LGTDetect"] = LGTDetect
+        exec(new_src, glb)  # noqa: S102
+        tasks.parse_model = glb["parse_model"]
+        tasks._tinydet_gauss_patched = True
 
     if hasattr(torch.serialization, "add_safe_globals"):
         torch.serialization.add_safe_globals([
@@ -234,6 +319,8 @@ def register_ultralytics_modules() -> None:
             RefinementBranch,
             P2Refine,
             DetectGaussSplit,
+            LGTDetect,
+            SpatialShiftStencil,
         ])
 
     _install_hooks()
