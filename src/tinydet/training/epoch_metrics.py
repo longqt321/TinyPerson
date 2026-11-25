@@ -20,6 +20,8 @@ the correct step — the same pattern as `iou_logging.log_ap_by_iou`.
 import csv
 import json
 import math
+import os
+import sys
 import time
 from pathlib import Path
 from types import MethodType
@@ -49,6 +51,21 @@ class GaussDiagnosticsCallback:
         if model is None:
             return
         self.gauss_modules = [(name, m) for name, m in model.named_modules() if isinstance(m, GauSS)]
+        # Validation runs on the EMA copy; its diagnostics are never read, so
+        # silence them (otherwise they would sync on every val forward).
+        ema = getattr(getattr(trainer, "ema", None), "ema", None)
+        if ema is not None:
+            for module in ema.modules():
+                if isinstance(module, GauSS):
+                    module._diag_armed = False
+                    module.dy_up3._diag_armed = False
+                    module.dy_up4._diag_armed = False
+        self.on_train_epoch_start(trainer)
+
+    def on_train_epoch_start(self, trainer) -> None:
+        # Diagnostics need GPU->CPU syncs: sample the first batch of each epoch only.
+        for _, module in self.gauss_modules:
+            module.arm_diagnostics(once=True)
 
     def on_fit_epoch_end(self, trainer) -> None:
         if not self.gauss_modules or not self.enabled:
@@ -84,14 +101,18 @@ class SystemMetricsCallback:
 
     Ultralytics 8.4 fires no `on_before_optimizer_step` callback, so the
     gradient norm is captured by wrapping `trainer.optimizer_step` once at
-    train start. Gradients are still AMP-scaled at that point, so the raw norm
-    is divided by the scaler scale to recover the true gradient norm.
+    train start. To avoid per-batch GPU->CPU stream synchronizations and
+    duplicate full-model norm kernels, we sample a single detached device
+    tensor once per epoch and materialize `.item()` only at `on_fit_epoch_end`.
     """
 
     def __init__(self, wandb_enabled: bool = False) -> None:
         self.wandb_enabled = wandb_enabled
         self.enabled = True
         self._epoch_start: float | None = None
+        self._grad_armed: bool = False
+        self._grad_norm_tensor: torch.Tensor | None = None
+        self._grad_scale: float = 1.0
         self._grad_norm: float | None = None
         self._csv_state: dict = {}
 
@@ -103,22 +124,25 @@ class SystemMetricsCallback:
         callback = self
 
         def optimizer_step_with_grad_norm():
-            try:
-                scale = trainer.scaler.get_scale() if getattr(trainer, "scaler", None) else 1.0
-                grads = [p.grad for p in trainer.model.parameters() if p.grad is not None]
-                # torch's own total-norm helper (same routine clip_grad_norm_ uses
-                # internally, so no hand-rolled sum-of-squares).
-                callback._grad_norm = float(torch.nn.utils.get_total_norm(grads)) / max(
-                    float(scale), 1e-12
-                )
-            except Exception:  # noqa: BLE001 - metric capture must never break training
-                callback._grad_norm = None
+            if callback._grad_armed:
+                callback._grad_armed = False
+                try:
+                    scaler = getattr(trainer, "scaler", None)
+                    callback._grad_scale = float(scaler.get_scale()) if scaler is not None else 1.0
+                    grads = [p.grad.detach() for p in trainer.model.parameters() if p.grad is not None]
+                    if grads:
+                        callback._grad_norm_tensor = torch.nn.utils.get_total_norm(grads).detach()
+                    else:
+                        callback._grad_norm_tensor = None
+                except Exception:  # noqa: BLE001 - metric capture must never break training
+                    callback._grad_norm_tensor = None
             original_step()
 
         trainer.optimizer_step = optimizer_step_with_grad_norm
 
     def on_train_epoch_start(self, trainer) -> None:
         self._epoch_start = time.monotonic()
+        self._grad_armed = True
 
     def on_fit_epoch_end(self, trainer) -> None:
         try:
@@ -132,6 +156,9 @@ class SystemMetricsCallback:
         if self._epoch_start is not None:
             rows["system/epoch_time_s"] = time.monotonic() - self._epoch_start
             self._epoch_start = None
+        if self._grad_norm_tensor is not None:
+            self._grad_norm = float(self._grad_norm_tensor.item()) / max(self._grad_scale, 1e-12)
+            self._grad_norm_tensor = None
         if self._grad_norm is not None:
             rows["optim/grad_norm"] = self._grad_norm
             self._grad_norm = None
@@ -191,16 +218,21 @@ class SizeStratifiedValCallback:
         annotation_source: str | Path,
         split: str = "val",
         class_mode: str = "merge",
-        workers: int = 0,
+        workers: int | None = None,
         wandb_enabled: bool = False,
+        eval_interval: int = 5,
     ) -> None:
         self.dataset_config = Path(dataset_config)
         self.annotation_source = Path(annotation_source)
         self.split = split
         self.class_mode = class_mode
-        self.workers = workers
+        self.workers = (
+            min(6, max(1, os.cpu_count() or 1)) if workers is None else workers
+        )
         self.wandb_enabled = wandb_enabled
+        self.eval_interval = max(1, int(eval_interval))
         self.enabled = True
+        self._active = True
         self.rows: list[dict] = []
         self._fresh = False
         self._original_update_metrics = None
@@ -234,9 +266,21 @@ class SizeStratifiedValCallback:
         except Exception as exc:  # noqa: BLE001 - logging is optional
             self._disable(exc)
 
+    def _should_eval(self, trainer) -> bool:
+        epoch = int(getattr(trainer, "epoch", 0)) + 1
+        epochs = int(getattr(trainer, "epochs", 0) or 0)
+        if epoch == 1 or epoch % self.eval_interval == 0:
+            return True
+        if epochs > 0 and epoch >= epochs - 4:
+            return True
+        return bool(getattr(trainer, "stop", False))
+
+    def on_train_epoch_start(self, trainer) -> None:
+        self._active = self._should_eval(trainer)
+
     def _update_metrics(self, validator, preds, batch) -> None:
         original = self._original_update_metrics
-        if self.enabled:
+        if self.enabled and self._active:
             try:
                 if validator.seen == 0:
                     self.rows.clear()
@@ -313,15 +357,97 @@ class SizeStratifiedValCallback:
             print(f"Size-stratified val metrics disabled: {error}", flush=True)
 
 
+class RealtimeLogCallback:
+    """Emit newline-flushed progress lines when stdout is piped (Colab/Kaggle/Modal).
+
+    Notebook kernels and piped subprocesses buffer carriage-return (``\\r``) TQDM
+    updates until a newline arrives. Emitting throttled newline lines with
+    ``flush=True`` guarantees continuous live feedback in Google Colab cells
+    without adding per-step GPU synchronization overhead.
+    """
+
+    def __init__(self, min_interval_s: float = 8.0, force: bool | None = None) -> None:
+        is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+        env_force = os.environ.get("TINYDET_REALTIME_LOG", "").strip().lower() in {"1", "true", "yes"}
+        self.enabled = (not is_tty or env_force) if force is None else bool(force)
+        self.min_interval_s = max(1.0, float(min_interval_s))
+        self._epoch_start = 0.0
+        self._last_log = 0.0
+        self._batch_idx = 0
+        self._num_batches = 0
+
+    def on_train_epoch_start(self, trainer) -> None:
+        if not self.enabled:
+            return
+        now = time.monotonic()
+        self._epoch_start = now
+        self._last_log = now
+        self._batch_idx = 0
+        loader = getattr(trainer, "train_loader", None)
+        self._num_batches = len(loader) if loader is not None else 0
+
+    def on_train_batch_end(self, trainer) -> None:
+        if not self.enabled:
+            return
+        self._batch_idx += 1
+        now = time.monotonic()
+        is_first = self._batch_idx == 1
+        is_last = self._num_batches > 0 and self._batch_idx == self._num_batches
+        if not is_first and not is_last and (now - self._last_log) < self.min_interval_s:
+            return
+        self._last_log = now
+        elapsed = max(now - self._epoch_start, 1e-6)
+        rate = self._batch_idx / elapsed
+        epoch = int(getattr(trainer, "epoch", 0)) + 1
+        epochs = int(getattr(trainer, "epochs", 0) or 0)
+        loss_str = ""
+        tloss = getattr(trainer, "tloss", None)
+        if tloss is not None and torch.is_tensor(tloss):
+            vals = tloss.detach().float().view(-1).cpu().tolist()
+            names = getattr(trainer, "loss_names", ("box", "cls", "l1"))
+            loss_str = " | " + " ".join(f"{n}={v:.4f}" for n, v in zip(names, vals))
+        total_b = f"/{self._num_batches}" if self._num_batches else ""
+        print(
+            f"[live] epoch {epoch}/{epochs} | batch {self._batch_idx}{total_b} "
+            f"({rate:.2f} it/s, {elapsed:.1f}s){loss_str}",
+            flush=True,
+        )
+
+    def on_fit_epoch_end(self, trainer) -> None:
+        if not self.enabled:
+            return
+        epoch = int(getattr(trainer, "epoch", 0)) + 1
+        epochs = int(getattr(trainer, "epochs", 0) or 0)
+        elapsed = time.monotonic() - self._epoch_start if self._epoch_start else 0.0
+        metrics = getattr(trainer, "metrics", None) or {}
+        parts = []
+        for key, label in (
+            ("metrics/mAP50(B)", "mAP50"),
+            ("metrics/mAP50-95(B)", "mAP50-95"),
+            ("metrics/precision(B)", "P"),
+            ("metrics/recall(B)", "R"),
+        ):
+            if key in metrics:
+                parts.append(f"{label}={float(metrics[key]):.4f}")
+        summary = " | ".join(parts) if parts else "train-only"
+        print(f"[epoch {epoch}/{epochs}] done in {elapsed:.1f}s | {summary}", flush=True)
+
+
 def register_epoch_metrics(model, wandb_enabled: bool = False) -> None:
     """Attach the per-epoch metric callbacks to an Ultralytics model."""
     gauss = GaussDiagnosticsCallback(wandb_enabled)
     model.callbacks["on_train_start"].append(gauss.on_train_start)
+    model.callbacks["on_train_epoch_start"].append(gauss.on_train_epoch_start)
     model.callbacks["on_fit_epoch_end"].append(gauss.on_fit_epoch_end)
     system = SystemMetricsCallback(wandb_enabled)
     model.callbacks["on_train_start"].append(system.on_train_start)
     model.callbacks["on_train_epoch_start"].append(system.on_train_epoch_start)
     model.callbacks["on_fit_epoch_end"].append(system.on_fit_epoch_end)
+    live = RealtimeLogCallback()
+    if live.enabled:
+        model.callbacks["on_train_epoch_start"].append(live.on_train_epoch_start)
+        model.callbacks["on_train_batch_end"].append(live.on_train_batch_end)
+        model.callbacks["on_fit_epoch_end"].append(live.on_fit_epoch_end)
 
 
 def register_size_stratified_metrics(
@@ -343,5 +469,6 @@ def register_size_stratified_metrics(
         wandb_enabled=wandb_enabled,
     )
     model.callbacks["on_train_start"].append(callback.on_train_start)
+    model.callbacks["on_train_epoch_start"].append(callback.on_train_epoch_start)
     model.callbacks["on_fit_epoch_end"].append(callback.on_fit_epoch_end)
     return callback

@@ -188,6 +188,11 @@ def train(
         if not Path(config.model["pretrained"]).is_file():
             raise ValueError(f"Pretrained checkpoint does not exist: {config.model['pretrained']}")
     set_seed(config.seed, config.train["deterministic"])
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        if not config.train.get("deterministic", False):
+            torch.backends.cudnn.benchmark = True
     run = create_run(config, source_git, run_id=run_id)
     if dataset_audit is not None and not (run / "diagnostics" / "dataset_preflight_summary.json").is_file():
         write_json(run / "diagnostics" / "dataset_preflight_summary.json", dataset_audit)
@@ -300,12 +305,13 @@ def train(
                     model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
                 if project:
                     media = WandbMediaCallback(run, effective_dataset_config)
-                    for event, callback in (
-                        ("on_train_start", media.on_train_start),
-                        ("on_train_epoch_start", media.on_train_epoch_start),
-                        ("on_train_batch_end", media.on_train_batch_end),
-                        ("on_train_end", media.on_train_end),
-                    ):
+                    events = [("on_train_start", media.on_train_start), ("on_train_end", media.on_train_end)]
+                    if media._hook is not None:
+                        events.extend([
+                            ("on_train_epoch_start", media.on_train_epoch_start),
+                            ("on_train_batch_end", media.on_train_batch_end),
+                        ])
+                    for event, callback in events:
                         model.callbacks[event].insert(0, callback)
 
                 model.train(

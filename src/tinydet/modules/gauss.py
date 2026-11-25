@@ -272,6 +272,9 @@ class DySampleUp(nn.Module):
         nn.init.zeros_(self.offset.weight)
         nn.init.zeros_(self.offset.bias)
         self.last_diag: dict[str, float] = {}
+        # Diagnostics need a GPU->CPU sync (.item()); see GauSS.arm_diagnostics.
+        self._diag_armed = True
+        self._diag_once = False
 
     def forward(self, x: Tensor) -> Tensor:
         b, c, h, w = x.shape
@@ -285,8 +288,10 @@ class DySampleUp(nn.Module):
 
         # Detached diagnostics: offset magnitude relative to the bilinear
         # baseline grid. Zero-init offsets -> 0.0 (pure bilinear).
-        with torch.no_grad():
-            self.last_diag = {"offset_rms": float(off.float().square().mean().sqrt().item())}
+        if self._diag_armed:
+            with torch.no_grad():
+                self.last_diag = {"offset_rms": float(off.float().square().mean().sqrt().item())}
+            self._diag_armed = not self._diag_once
 
         # Base sampling grid in input-pixel units, align_corners=False convention:
         # output pixel J samples input at (J + 0.5)/s - 0.5. Computed in
@@ -510,6 +515,11 @@ class GauSS(nn.Module):
         # Non-detached router z-loss (ST-MoE); add to the training loss if
         # the hybrid correction is enabled: loss += 1e-3 * module.router_z_loss()
         self._z_loss: Tensor = torch.zeros((), dtype=torch.float32)
+        # Diagnostics cost ~30 GPU->CPU syncs per forward. Default: every forward
+        # (tests, probes). Training callbacks call arm_diagnostics(once=True) so
+        # only the first forward after each arming pays for them.
+        self._diag_armed = True
+        self._diag_once = False
 
         self._reset_parameters()
 
@@ -558,6 +568,16 @@ class GauSS(nn.Module):
     # ------------------------------------------------------------------ #
     # Bounded control gates (ReZero-exact at raw = 0)
     # ------------------------------------------------------------------ #
+    def arm_diagnostics(self, once: bool = True) -> None:
+        """Compute diagnostics (here and in the DySample children) on the next forward.
+
+        With ``once=True`` each module disarms itself after that forward, so
+        ``last_diag`` is refreshed once per arming instead of every batch.
+        """
+        for module in (self, self.dy_up3, self.dy_up4):
+            module._diag_once = once
+            module._diag_armed = True
+
     def compute_alpha(self) -> Tensor:
         """Bounded residual gain alpha = 0.5 * tanh(alpha_raw) in (-0.5, 0.5)."""
         return 0.5 * torch.tanh(self.alpha_raw.float())
@@ -756,60 +776,62 @@ class GauSS(nn.Module):
         y_p2 = x0 + alpha * z + gamma_out * b_h_eff + gamma_mid * b_m_eff
 
         # ---- 11. Detached Diagnostics ----
-        with torch.no_grad():
-            s1x, s1y, s2x, s2y = sigmas
-            sigma1 = torch.cat((s1x, s1y), dim=0)
-            sigma2 = torch.cat((s2x, s2y), dim=0)
-            m_f = m_gate.detach().float()
-            rms_res = (alpha * z).detach().float().square().mean().sqrt()
-            rms_in = x0.detach().float().square().mean().sqrt().clamp_min(1e-12)
-            rms_out = y_p2.detach().float().square().mean().sqrt().clamp_min(1e-12)
-            rms_anchor = (gamma_out * b_h_eff).detach().float().square().mean().sqrt()
-            rms_mid_anchor = (gamma_mid * b_m_eff).detach().float().square().mean().sqrt()
-            a_f = a.detach().float()
-            # torch.special.entr: -x*ln(x) per element, 0 at x==0 (no clamping bias).
-            entropy = torch.special.entr(a_f).sum(dim=1).mean()
-            energy_sum = (e_h.mean() + e_m.mean() + e_l.mean()).clamp_min(1e-12)
-
-            diag = {
-                "routing/mixing_mean": float(m_f.mean().item()),
-                "routing/mixing_std": float(m_f.std(unbiased=False).item()),
-                "routing/high_band_mean": float(a_h.detach().float().mean().item()),
-                "routing/mid_band_mean": float(a_m.detach().float().mean().item()),
-                "routing/low_band_mean": float(a_l.detach().float().mean().item()),
-                "routing/entropy_mean": float(entropy.item()),
-                "routing/energy_high_mean": float(e_h.mean().item()),
-                "routing/energy_mid_mean": float(e_m.mean().item()),
-                "routing/energy_low_mean": float(e_l.mean().item()),
-                "routing/high_band_share": float((e_h.mean() / energy_sum).item()),
-                "routing/z_loss": float(self._z_loss.item()),
-                "context/dilation_1_mean": float(pi1.detach().float().mean().item()),
-                "context/dilation_2_mean": float(pi2.detach().float().mean().item()),
-                "context/dilation_3_mean": float(pi3.detach().float().mean().item()),
-                "refinement/residual_ratio": float((rms_res / rms_in).item()),
-                "contribution/alpha_z_share": float((rms_res / rms_out).item()),
-                "contribution/anchor_share": float((rms_anchor / rms_out).item()),
-                "contribution/mid_anchor_share": float((rms_mid_anchor / rms_out).item()),
-                "contribution/identity_share": float((rms_in / rms_out).item()),
-                "gates/alpha": float(self.compute_alpha().item()),
-                "gates/gamma_in": float(self.compute_gamma_in().item()),
-                "gates/gamma_out": float(self.compute_gamma_out().item()),
-                "gates/gamma_mid": float(self.compute_gamma_mid().item()),
-                "gaussian/sigma1_mean": float(sigma1.mean().item()),
-                "gaussian/sigma2_mean": float(sigma2.mean().item()),
-                "gaussian/sigma1_std": float(sigma1.std(unbiased=False).item()),
-                "gaussian/sigma2_std": float(sigma2.std(unbiased=False).item()),
-                "gaussian/sigma1_min": float(sigma1.min().item()),
-                "gaussian/sigma1_max": float(sigma1.max().item()),
-                "gaussian/sigma2_min": float(sigma2.min().item()),
-                "gaussian/sigma2_max": float(sigma2.max().item()),
-            }
-            # Merge DySample offset diagnostics (0.0 == pure bilinear at init).
-            for dy_name in ("dy_up3", "dy_up4"):
-                dy_diag = getattr(getattr(self, dy_name, None), "last_diag", None)
-                if dy_diag:
-                    diag.update({f"dysample/{dy_name}/{k}": v for k, v in dy_diag.items()})
-            self.last_diag = diag
+        if self._diag_armed:
+            with torch.no_grad():
+                s1x, s1y, s2x, s2y = sigmas
+                sigma1 = torch.cat((s1x, s1y), dim=0)
+                sigma2 = torch.cat((s2x, s2y), dim=0)
+                m_f = m_gate.detach().float()
+                rms_res = (alpha * z).detach().float().square().mean().sqrt()
+                rms_in = x0.detach().float().square().mean().sqrt().clamp_min(1e-12)
+                rms_out = y_p2.detach().float().square().mean().sqrt().clamp_min(1e-12)
+                rms_anchor = (gamma_out * b_h_eff).detach().float().square().mean().sqrt()
+                rms_mid_anchor = (gamma_mid * b_m_eff).detach().float().square().mean().sqrt()
+                a_f = a.detach().float()
+                # torch.special.entr: -x*ln(x) per element, 0 at x==0 (no clamping bias).
+                entropy = torch.special.entr(a_f).sum(dim=1).mean()
+                energy_sum = (e_h.mean() + e_m.mean() + e_l.mean()).clamp_min(1e-12)
+    
+                diag = {
+                    "routing/mixing_mean": float(m_f.mean().item()),
+                    "routing/mixing_std": float(m_f.std(unbiased=False).item()),
+                    "routing/high_band_mean": float(a_h.detach().float().mean().item()),
+                    "routing/mid_band_mean": float(a_m.detach().float().mean().item()),
+                    "routing/low_band_mean": float(a_l.detach().float().mean().item()),
+                    "routing/entropy_mean": float(entropy.item()),
+                    "routing/energy_high_mean": float(e_h.mean().item()),
+                    "routing/energy_mid_mean": float(e_m.mean().item()),
+                    "routing/energy_low_mean": float(e_l.mean().item()),
+                    "routing/high_band_share": float((e_h.mean() / energy_sum).item()),
+                    "routing/z_loss": float(self._z_loss.item()),
+                    "context/dilation_1_mean": float(pi1.detach().float().mean().item()),
+                    "context/dilation_2_mean": float(pi2.detach().float().mean().item()),
+                    "context/dilation_3_mean": float(pi3.detach().float().mean().item()),
+                    "refinement/residual_ratio": float((rms_res / rms_in).item()),
+                    "contribution/alpha_z_share": float((rms_res / rms_out).item()),
+                    "contribution/anchor_share": float((rms_anchor / rms_out).item()),
+                    "contribution/mid_anchor_share": float((rms_mid_anchor / rms_out).item()),
+                    "contribution/identity_share": float((rms_in / rms_out).item()),
+                    "gates/alpha": float(self.compute_alpha().item()),
+                    "gates/gamma_in": float(self.compute_gamma_in().item()),
+                    "gates/gamma_out": float(self.compute_gamma_out().item()),
+                    "gates/gamma_mid": float(self.compute_gamma_mid().item()),
+                    "gaussian/sigma1_mean": float(sigma1.mean().item()),
+                    "gaussian/sigma2_mean": float(sigma2.mean().item()),
+                    "gaussian/sigma1_std": float(sigma1.std(unbiased=False).item()),
+                    "gaussian/sigma2_std": float(sigma2.std(unbiased=False).item()),
+                    "gaussian/sigma1_min": float(sigma1.min().item()),
+                    "gaussian/sigma1_max": float(sigma1.max().item()),
+                    "gaussian/sigma2_min": float(sigma2.min().item()),
+                    "gaussian/sigma2_max": float(sigma2.max().item()),
+                }
+                # Merge DySample offset diagnostics (0.0 == pure bilinear at init).
+                for dy_name in ("dy_up3", "dy_up4"):
+                    dy_diag = getattr(getattr(self, dy_name, None), "last_diag", None)
+                    if dy_diag:
+                        diag.update({f"dysample/{dy_name}/{k}": v for k, v in dy_diag.items()})
+                self.last_diag = diag
+            self._diag_armed = not self._diag_once
 
         return y_p2
 

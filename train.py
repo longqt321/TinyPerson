@@ -39,12 +39,14 @@ import yaml
 from tinydet.utils.config import ExperimentConfig, load_config
 from tinydet.utils.runtime import (
     DEFAULT_HF_DATASET_REPO,
+    default_drive_backup_root,
     default_output_root,
     detect_host,
     discover_dataset,
     ensure_wandb_auth,
     stable_run_id,
     stage_dataset_to_local_ssd,
+    sync_run_to_drive,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -164,8 +166,10 @@ def _resolve_config(
             train[key] = value
     if args.device is not None:
         train["device"] = args.device
-    if host in {"colab", "kaggle"} and args.workers is None:
-        train["workers"] = min(int(train.get("workers", 4)), os.cpu_count() or 2)
+    if host in {"colab", "kaggle"}:
+        if args.workers is None:
+            train["workers"] = min(int(train.get("workers", 4)), os.cpu_count() or 2)
+        train.setdefault("cache", "disk")
 
     seed = config.seed if args.seed is None else args.seed
     name = config.name if args.name is None else args.name
@@ -263,7 +267,17 @@ def _check_output_root(config: ExperimentConfig) -> None:
         ) from error
 
 
+def _stream_logs_unbuffered() -> None:
+    """Flush every line to the notebook cell immediately (Colab/Kaggle pipe stdout)."""
+    os.environ["PYTHONUNBUFFERED"] = "1"
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(line_buffering=True, write_through=True)
+
+
 def main(argv: list[str] | None = None) -> int:
+    _stream_logs_unbuffered()
     args = _parse_args(argv)
     host = detect_host()
     experiment_path = Path(args.config).expanduser().resolve()
@@ -320,6 +334,23 @@ def main(argv: list[str] | None = None) -> int:
     from tinydet.training.finalize import finalize
     from tinydet.training.trainer import train
 
+    drive_backup = default_drive_backup_root(host)
+    run_local = (
+        Path(config.output["root"]) / config.name / effective_run_id
+        if effective_run_id
+        else None
+    )
+    epoch_counter = [0]
+    on_epoch_end = (
+        (
+            lambda: sync_run_to_drive(
+                run_local, drive_backup, every_n_epochs=5, epoch_counter=epoch_counter
+            )
+        )
+        if (drive_backup is not None and run_local is not None and Path(config.output["root"]) != drive_backup)
+        else None
+    )
+
     with tempfile.TemporaryDirectory(prefix="tinydet-cfg-") as temporary:
         config_file = Path(temporary) / "experiment.yaml"
         config_file.write_text(yaml.safe_dump(asdict(config), sort_keys=False))
@@ -329,7 +360,10 @@ def main(argv: list[str] | None = None) -> int:
             wandb_group=args.wandb_group,
             dataset_audit=dataset_audit,
             run_id=effective_run_id,
+            on_epoch_end_callback=on_epoch_end,
         )
+    if drive_backup is not None and Path(config.output["root"]) != drive_backup:
+        sync_run_to_drive(run, drive_backup, force=True)
 
     if not args.no_finalize:
         try:

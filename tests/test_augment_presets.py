@@ -114,5 +114,15 @@ def _run_pipeline(root: Path) -> None:
 
 
 def test_presets_registry_is_factory_based():
-    assert set(PRESETS) == {"tinyperson_b"}
-    assert callable(PRESETS["tinyperson_b"])
+    assert {"tinyperson_b", "tinyperson_safe"} <= set(PRESETS)
+    for name, factory in PRESETS.items():
+        assert callable(factory), name
+
+
+def test_tinyperson_safe_scales_crop_and_drops_destructive_ops():
+    for imgsz in (320, 640, 1280):
+        spec = resolve_augmentations("tinyperson_safe", imgsz)
+        crop = _crop_of(spec)
+        assert crop["height"] == imgsz and crop["width"] == imgsz
+        names = {item["transform"]["__class_fullname__"] for item in spec}
+        assert names.isdisjoint({"Downscale", "MotionBlur", "ImageCompression", "CoarseDropout"})

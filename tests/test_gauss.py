@@ -217,3 +217,23 @@ def test_gauss_checkpoint_remaps() -> None:
     s32 = m32.compute_sigmas()
     assert torch.allclose(s32[0], 0.4 + 0.5 * torch.sigmoid(sd31["gaussian.sigma1x_raw"]), atol=1e-6)
     assert torch.allclose(s32[3], 1.1 + 0.7 * torch.sigmoid(sd31["gaussian.sigma2y_raw"]), atol=1e-6)
+
+
+def test_gauss_diagnostics_armed_once_per_arming() -> None:
+    """arm_diagnostics(once=True) refreshes last_diag on one forward, then skips the syncs."""
+    module = GauSS(c1=[64, 64, 128], c2=32).eval()
+    xs = [torch.randn(1, 64, 32, 32), torch.randn(1, 64, 16, 16), torch.randn(1, 128, 8, 8)]
+    module.arm_diagnostics(once=True)
+    with torch.no_grad():
+        out_first = module(xs)
+    first = dict(module.last_diag)
+    assert first and "dysample/dy_up3/offset_rms" in first
+    module.last_diag = {"sentinel": 1.0}
+    with torch.no_grad():
+        out_second = module(xs)
+    assert module.last_diag == {"sentinel": 1.0}
+    assert torch.equal(out_first, out_second)
+    module.arm_diagnostics(once=True)
+    with torch.no_grad():
+        module(xs)
+    assert "sentinel" not in module.last_diag

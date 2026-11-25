@@ -67,7 +67,50 @@ def preset_tinyperson_b(imgsz: int) -> list[dict[str, Any]]:
     ]
 
 
-PRESETS: dict[str, Callable[[int], list[dict[str, Any]]]] = {"tinyperson_b": preset_tinyperson_b}
+def preset_tinyperson_safe(imgsz: int) -> list[dict[str, Any]]:
+    """Tiny-object-safe augmentation preset preserving sub-8px spatial fidelity.
+
+    Drops destructive degradations from ``tinyperson_b`` (``Downscale``,
+    ``MotionBlur(7)``, heavy JPEG ``ImageCompression``, and bbox-blind
+    ``CoarseDropout``) that erase ``tiny1`` (2-8 px) instances while leaving
+    their ground-truth boxes labeled as positives. Retains bbox-safe zoom
+    magnification and mild radiometric perturbations for sea/beach glare.
+    """
+    return [
+        {
+            "__version__": "2.0.8",
+            "transform": {
+                "__class_fullname__": "RandomBrightnessContrast",
+                "p": 0.20,
+                "brightness_limit": [-0.15, 0.15],
+                "contrast_limit": [-0.15, 0.15],
+            },
+        },
+        {
+            "__version__": "2.0.8",
+            "transform": {
+                "__class_fullname__": "CLAHE",
+                "p": 0.10,
+                "clip_limit": 2.0,
+            },
+        },
+        {
+            "__version__": "2.0.8",
+            "transform": {
+                "__class_fullname__": "RandomSizedBBoxSafeCrop",
+                "p": 0.25,
+                "height": imgsz,
+                "width": imgsz,
+                "erosion_rate": 0.0,
+            },
+        },
+    ]
+
+
+PRESETS: dict[str, Callable[[int], list[dict[str, Any]]]] = {
+    "tinyperson_b": preset_tinyperson_b,
+    "tinyperson_safe": preset_tinyperson_safe,
+}
 
 
 def _validate_shape_preserving(spec: list[dict[str, Any]], imgsz: int) -> None:

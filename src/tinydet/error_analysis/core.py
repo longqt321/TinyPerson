@@ -588,8 +588,20 @@ def _record_error(record: dict[str, Any], category: str, subtype: str, *,
     }
 
 
+def _person_prediction_ids(raw_annotations: dict[str, Any]) -> frozenset[int]:
+    """Return 0-indexed prediction class IDs corresponding to person categories in ``raw_annotations``."""
+    categories = raw_annotations.get("categories", [])
+    person_ids = {
+        idx
+        for idx, cat in enumerate(categories)
+        if "person" in str(cat.get("name", "")).lower()
+    }
+    return frozenset(person_ids | {0})
+
+
 def _validated_detections(row: dict[str, Any], config: AnalysisConfig,
-                          issues: list[dict[str, Any]], basename: str) -> list[Detection]:
+                          issues: list[dict[str, Any]], basename: str,
+                          person_class_ids: frozenset[int] = frozenset({0})) -> list[Detection]:
     detections: list[Detection] = []
     boxes, scores, classes = row["boxes"], row["scores"], row["classes"]
     for source_index, (box, score, class_id) in enumerate(zip(boxes, scores, classes)):
@@ -607,7 +619,7 @@ def _validated_detections(row: dict[str, Any], config: AnalysisConfig,
                 prediction_index=source_index,
             ))
             continue
-        if label != 0:
+        if label not in person_class_ids:
             issues.append(_issue(
                 "non_person_prediction",
                 f"Image {basename}: prediction class {label} is outside the evaluated person class",
@@ -617,7 +629,7 @@ def _validated_detections(row: dict[str, Any], config: AnalysisConfig,
             continue
         if score_value < config.score_threshold:
             continue
-        detections.append(Detection(source_index, box_value, score_value, label))
+        detections.append(Detection(source_index, box_value, score_value, 0))
     detections.sort(key=lambda detection: detection.score, reverse=True)
     if len(detections) > config.max_detections:
         issues.append(_issue(
@@ -924,6 +936,7 @@ def analyze_files(
         name: {threshold: [] for threshold in config.iou_thresholds} for name in SIZE_RANGES
     }
     positive_counts = {name: 0 for name in SIZE_RANGES}
+    person_class_ids = _person_prediction_ids(annotations.raw)
     excluded_dense = 0
     for basename, image_id in expected.items():
         if image_id in annotations.dense_ids:
@@ -933,7 +946,7 @@ def analyze_files(
         row = predictions.rows.get(basename)
         if row is None:
             continue
-        detections = _validated_detections(row, config, issues, basename)
+        detections = _validated_detections(row, config, issues, basename, person_class_ids)
         ground_truths = annotations.annotations.get(image_id, [])
         positive_objects = [gt for gt in ground_truths if not (gt.ignore or gt.uncertain)]
         density_name = _density_bin(len(positive_objects))

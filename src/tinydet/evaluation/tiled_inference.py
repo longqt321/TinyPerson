@@ -12,13 +12,15 @@ from __future__ import annotations
 import numpy as np
 import torch
 from PIL import Image
-from torchvision.ops import nms
+from torchvision.ops import batched_nms as tv_batched_nms
+from torchvision.ops import box_area, nms
 from ultralytics import YOLO
 
 # Canonical tile grid shared by every tiled evaluation / training entry point
 # (must match the protocol that produced the 0.3540 tiled baseline).
 TILE_W, TILE_H, TILE_OVERLAP = 640, 512, 100
 NMS_IOU = 0.50
+MERGE_IOS = 0.85
 
 
 def tile_origins(width: int, height: int) -> list[tuple[int, int]]:
@@ -29,16 +31,57 @@ def tile_origins(width: int, height: int) -> list[tuple[int, int]]:
     return [(x1, y1) for x1, y1, _, _ in get_image_slices(width, height)]
 
 
-def batched_nms(boxes: np.ndarray, scores: np.ndarray, iou_thr: float = NMS_IOU) -> np.ndarray:
-    """Greedy NMS over all boxes via torchvision; returns keep indices sorted by score."""
+def batched_nms(
+    boxes: np.ndarray,
+    scores: np.ndarray,
+    iou_thr: float = NMS_IOU,
+    classes: np.ndarray | None = None,
+) -> np.ndarray:
+    """Greedy NMS via TorchVision (class-aware when ``classes`` is given)."""
     if len(boxes) == 0:
         return np.array([], dtype=np.int64)
-    keep = nms(
-        torch.from_numpy(boxes).float(),
-        torch.from_numpy(scores).float(),
-        iou_thr,
-    ).numpy()
+    boxes_t = torch.from_numpy(boxes).float()
+    scores_t = torch.from_numpy(scores).float()
+    if classes is not None:
+        classes_t = torch.from_numpy(classes).long()
+        keep = tv_batched_nms(boxes_t, scores_t, classes_t, iou_thr).numpy()
+    else:
+        keep = nms(boxes_t, scores_t, iou_thr).numpy()
     return np.array(sorted(keep, key=lambda k: -scores[k]), dtype=np.int64)
+
+
+def suppress_border_truncated(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    classes: torch.Tensor,
+    ios_thr: float = MERGE_IOS,
+) -> torch.Tensor:
+    """Suppress lower-scoring same-class tile-border fragments contained inside larger boxes.
+
+    At tile seams, a truncated half-person prediction and the adjacent tile's full-person
+    prediction often have ``IoU < 0.50`` despite ``IOS = inter / min(area_i, area_j) ~ 1.0``.
+    ``boxes``/``scores``/``classes`` must already be sorted in descending score order.
+    """
+    n = boxes.shape[0]
+    if n <= 1 or ios_thr <= 0.0 or ios_thr > 1.0:
+        return torch.arange(n, device=boxes.device, dtype=torch.long)
+
+    areas = box_area(boxes).clamp(min=1e-6)
+    lt = torch.maximum(boxes[:, None, :2], boxes[None, :, :2])
+    rb = torch.minimum(boxes[:, None, 2:], boxes[None, :, 2:])
+    wh = (rb - lt).clamp(min=0.0)
+    inter = wh[..., 0] * wh[..., 1]
+    min_area = torch.minimum(areas[:, None], areas[None, :])
+    ios = inter / min_area
+    same_cls = classes[:, None] == classes[None, :]
+
+    keep_mask = torch.ones(n, dtype=torch.bool, device=boxes.device)
+    for i in range(n):
+        if not keep_mask[i]:
+            continue
+        suppressed = (ios[i, i + 1 :] >= ios_thr) & same_cls[i, i + 1 :]
+        keep_mask[i + 1 :] &= ~suppressed
+    return torch.nonzero(keep_mask, as_tuple=False).squeeze(1)
 
 
 def get_image_slices(img_w: int, img_h: int, tile_w: int = 640, tile_h: int = 512, overlap: int = 100) -> list[tuple[int, int, int, int]]:
@@ -69,11 +112,12 @@ def predict_tiled_image(
     overlap: int = 100,
     conf: float = 0.001,
     merge_iou: float = 0.50,
+    merge_ios: float | None = MERGE_IOS,
     nms_pre: int = 2000,
     max_per_img: int = 1000,
     device: str = "cuda:0",
 ) -> tuple[list[list[float]], list[float], list[int]]:
-    """Run tiled inference on a single PIL image and merge detections via NMS."""
+    """Run tiled inference on a single PIL image and merge detections via class-aware NMS + IOS."""
     img_w, img_h = img.size
     slices = get_image_slices(img_w, img_h, tile_w, tile_h, overlap)
 
@@ -81,15 +125,12 @@ def predict_tiled_image(
     all_scores = []
     all_classes = []
 
-    # Batch process crops
     crops = []
     offsets = []
     for x1, y1, x2, y2 in slices:
-        crop = img.crop((x1, y1, x2, y2))
-        crops.append(crop)
+        crops.append(img.crop((x1, y1, x2, y2)))
         offsets.append((x1, y1))
 
-    # Predict in chunks
     results = model.predict(crops, imgsz=(tile_h, tile_w), conf=conf, device=device, verbose=False)
 
     for (ox, oy), res in zip(offsets, results):
@@ -100,7 +141,6 @@ def predict_tiled_image(
         scores = boxes.conf.cpu().numpy()
         clses = boxes.cls.cpu().numpy().astype(int)
 
-        # Shift to full-frame coordinates
         xyxy[:, [0, 2]] += ox
         xyxy[:, [1, 3]] += oy
 
@@ -115,16 +155,23 @@ def predict_tiled_image(
     cat_scores = np.concatenate(all_scores, axis=0)
     cat_classes = np.concatenate(all_classes, axis=0)
 
-    # Sort and take top nms_pre
     order = np.argsort(-cat_scores)[:nms_pre]
     cat_boxes = cat_boxes[order]
     cat_scores = cat_scores[order]
     cat_classes = cat_classes[order]
 
-    # Global NMS via Torchvision
     boxes_t = torch.from_numpy(cat_boxes).float()
     scores_t = torch.from_numpy(cat_scores).float()
-    keep_indices = nms(boxes_t, scores_t, merge_iou).numpy()[:max_per_img]
+    classes_t = torch.from_numpy(cat_classes).long()
+    keep_t = tv_batched_nms(boxes_t, scores_t, classes_t, merge_iou)
+
+    if merge_ios is not None and merge_ios > 0.0 and keep_t.numel() > 1:
+        sub_keep = suppress_border_truncated(
+            boxes_t[keep_t], scores_t[keep_t], classes_t[keep_t], ios_thr=merge_ios
+        )
+        keep_t = keep_t[sub_keep]
+
+    keep_indices = keep_t[:max_per_img].numpy()
 
     final_boxes = cat_boxes[keep_indices].tolist()
     final_scores = cat_scores[keep_indices].tolist()
