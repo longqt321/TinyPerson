@@ -226,9 +226,9 @@ class SizeStratifiedValCallback:
         self.annotation_source = Path(annotation_source)
         self.split = split
         self.class_mode = class_mode
-        self.workers = (
-            min(6, max(1, os.cpu_count() or 1)) if workers is None else workers
-        )
+        # Default to in-process evaluation (workers=1) during training: calling fork()
+        # inside a multithreaded CUDA + DataLoader training process deadlocks on Linux.
+        self.workers = 1 if workers is None else max(1, int(workers))
         self.wandb_enabled = wandb_enabled
         self.eval_interval = max(1, int(eval_interval))
         self.enabled = True

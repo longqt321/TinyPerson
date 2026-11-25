@@ -26,6 +26,8 @@ import json
 import math
 import multiprocessing
 import os
+import sys
+import threading
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -53,14 +55,70 @@ SIZE_RANGES: dict[str, tuple[float, float, bool, bool]] = {
     "small": (20.0, 32.0, False, True),
     "reasonable": (32.0, 100000.0, False, True),
 }
-_EVAL_CONTEXT: tuple[list[int], dict, list[tuple[float, int, list[float], int]]] | None = None
+_EVAL_CONTEXT: tuple[
+    list[int],
+    dict,
+    list[tuple[float, int, list[float], int]],
+    np.ndarray,
+    dict[int, dict[int, np.ndarray]],
+    dict[int, np.ndarray],
+    dict[int, np.ndarray],
+] | None = None
 MERGED_CATEGORY = 0
+
+
+def _is_fork_safe() -> bool:
+    """Return True only when the current process is single-threaded and has no initialized CUDA context."""
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return False
+    if threading.active_count() > 1:
+        return False
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is not None:
+        cuda = getattr(torch_mod, "cuda", None)
+        if cuda is not None and callable(getattr(cuda, "is_initialized", None)) and cuda.is_initialized():
+            return False
+    return True
+
+
+def _precompute_overlap_matrices(
+    eval_ids: list[int],
+    gt_by_image: dict[int, dict[str, Any]],
+    scored: list[tuple[float, int, list[float], int]],
+) -> tuple[
+    np.ndarray,
+    dict[int, dict[int, np.ndarray]],
+    dict[int, np.ndarray],
+    dict[int, np.ndarray],
+]:
+    """Compute per-image IoU/IoD matrices once across all 7 size bins."""
+    rows_of_image: dict[int, list[int]] = defaultdict(list)
+    for row, (_, image_id, _, _) in enumerate(scored):
+        rows_of_image[image_id].append(row)
+    local_of_row = np.empty(len(scored), dtype=np.intp)
+    positive_iou: dict[int, dict[int, np.ndarray]] = {}
+    ignored_iou: dict[int, np.ndarray] = {}
+    ignored_iod: dict[int, np.ndarray] = {}
+    for image_id in eval_ids:
+        rows = rows_of_image.get(image_id, [])
+        local_of_row[rows] = np.arange(len(rows), dtype=np.intp)
+        detections = np.asarray(
+            [scored[row][2] for row in rows], dtype=np.float64
+        ).reshape(-1, 4)
+        positive_iou[image_id] = {
+            category: iou_matrix(detections, boxes)
+            for category, boxes in gt_by_image[image_id]["positive"].items()
+        }
+        ignored_boxes = gt_by_image[image_id]["ignored"]
+        ignored_iou[image_id] = iou_matrix(detections, ignored_boxes)
+        ignored_iod[image_id] = iod_matrix(detections, ignored_boxes)
+    return local_of_row, positive_iou, ignored_iou, ignored_iod
 
 
 def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
     if _EVAL_CONTEXT is None:
         raise RuntimeError("Evaluator worker context was not initialized")
-    eval_ids, gt_by_image, scored = _EVAL_CONTEXT
+    eval_ids, gt_by_image, scored, local_of_row, positive_iou, ignored_iou, ignored_iod = _EVAL_CONTEXT
     size_spec = SIZE_RANGES[bin_name]
     bin_gt: dict[int, dict[str, Any]] = {}
     positive_count = 0
@@ -86,31 +144,6 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
             "positive": inside, "outside": outside,
             "ignored": gt_by_image[image_id]["ignored"],
         }
-
-    # IoU never depends on the size bin or threshold, so compute each image's
-    # detection x ground-truth matrices once and let the greedy loops below
-    # index into them. This removes hundreds of thousands of scalar helper
-    # calls per evaluation (measured 34.6 s -> seconds on the val profile).
-    rows_of_image: dict[int, list[int]] = defaultdict(list)
-    for row, (_, image_id, _, _) in enumerate(scored):
-        rows_of_image[image_id].append(row)
-    local_of_row = np.empty(len(scored), dtype=np.intp)
-    positive_iou: dict[int, dict[int, np.ndarray]] = {}
-    ignored_iou: dict[int, np.ndarray] = {}
-    ignored_iod: dict[int, np.ndarray] = {}
-    for image_id in eval_ids:
-        rows = rows_of_image.get(image_id, [])
-        local_of_row[rows] = np.arange(len(rows), dtype=np.intp)
-        detections = np.asarray(
-            [scored[row][2] for row in rows], dtype=np.float64
-        ).reshape(-1, 4)
-        positive_iou[image_id] = {
-            category: iou_matrix(detections, boxes)
-            for category, boxes in gt_by_image[image_id]["positive"].items()
-        }
-        ignored_boxes = gt_by_image[image_id]["ignored"]
-        ignored_iou[image_id] = iou_matrix(detections, ignored_boxes)
-        ignored_iod[image_id] = iod_matrix(detections, ignored_boxes)
 
     metrics: dict[str, Any] = {}
     per_category: dict[int, dict[str, Any]] = defaultdict(dict)
@@ -449,11 +482,21 @@ def evaluate_tinyperson(annotation_file: str | Path,
          for image_id in eval_ids for d in pred_by_id[image_id]),
         key=lambda item: item[0], reverse=True,
     )
+    local_of_row, positive_iou, ignored_iou, ignored_iod = _precompute_overlap_matrices(
+        eval_ids, gt_by_image, scored
+    )
     global _EVAL_CONTEXT
-    _EVAL_CONTEXT = (eval_ids, gt_by_image, scored)
+    _EVAL_CONTEXT = (
+        eval_ids,
+        gt_by_image,
+        scored,
+        local_of_row,
+        positive_iou,
+        ignored_iou,
+        ignored_iod,
+    )
     worker_count = min(workers or min(len(SIZE_RANGES), os.cpu_count() or 1), len(SIZE_RANGES))
-    if (len(scored) >= 5000 and worker_count > 1
-            and "fork" in multiprocessing.get_all_start_methods()):
+    if len(scored) >= 5000 and worker_count > 1 and _is_fork_safe():
         with ProcessPoolExecutor(
             max_workers=worker_count, mp_context=multiprocessing.get_context("fork")
         ) as executor:

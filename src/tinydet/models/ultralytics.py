@@ -7,7 +7,6 @@ from tinydet.modules.lgt_detect import (
     LGTDetect,
     find_lgt_head,
     scale_invariant_wasserstein_xyxy,
-    wasserstein_similarity_xyxy,
 )
 
 
@@ -39,6 +38,36 @@ def make_tiny_floor_forward(orig_fn, floor_val):
     return patched_forward
 
 
+def _wasserstein_sim_lowmem(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor) -> torch.Tensor:
+    """Memory-minimal scale-invariant Wasserstein similarity ``1 / (1 + D)`` for TAL.
+
+    Computes x and y axes sequentially with in-place ops to cut peak VRAM ~3x inside
+    ``TaskAlignedAssigner`` where tensors reach ``(B, max_gt, 136k, 4)``.
+    """
+    g1 = gt_bboxes[..., 0].float()
+    g2 = gt_bboxes[..., 2].float()
+    p1 = pd_bboxes[..., 0].float()
+    p2 = pd_bboxes[..., 2].float()
+    sig_g = (g2 - g1).mul_(0.5).clamp_(min=1e-3)
+    sig_p = (p2 - p1).mul_(0.5).clamp_(min=1e-3)
+    dist = (g2 + g1).sub_(p2 + p1).mul_(0.5).square_()
+    dist.add_((sig_g - sig_p).square_())
+    dist.div_(sig_g.square_().add_(sig_p.square_()).add_(1e-6))
+
+    g1 = gt_bboxes[..., 1].float()
+    g2 = gt_bboxes[..., 3].float()
+    p1 = pd_bboxes[..., 1].float()
+    p2 = pd_bboxes[..., 3].float()
+    sig_g = (g2 - g1).mul_(0.5).clamp_(min=1e-3)
+    sig_p = (p2 - p1).mul_(0.5).clamp_(min=1e-3)
+    dy = (g2 + g1).sub_(p2 + p1).mul_(0.5).square_()
+    dy.add_((sig_g - sig_p).square_())
+    dy.div_(sig_g.square_().add_(sig_p.square_()).add_(1e-6))
+    dist.add_(dy)
+    del dy, g1, g2, p1, p2, sig_g, sig_p
+    return dist.add_(1.0).reciprocal_()
+
+
 def make_wasserstein_iou_calculation(orig_iou_fn, weight: float, ref_scale_px: float = 32.0):
     """Blend CIoU with scale-invariant Wasserstein similarity smoothly for tiny/small GTs."""
     ref_area = max(ref_scale_px * ref_scale_px, 1.0)
@@ -47,12 +76,11 @@ def make_wasserstein_iou_calculation(orig_iou_fn, weight: float, ref_scale_px: f
         ciou = orig_iou_fn(gt_bboxes, pd_bboxes)
         if gt_bboxes.numel() == 0:
             return ciou
-        gt_w = (gt_bboxes[..., 2] - gt_bboxes[..., 0]).clamp(min=0.0)
-        gt_h = (gt_bboxes[..., 3] - gt_bboxes[..., 1]).clamp(min=0.0)
-        alpha = float(weight) / (1.0 + (gt_w * gt_h) / ref_area)
-        alpha = alpha.to(dtype=ciou.dtype)
-        w_sim = wasserstein_similarity_xyxy(gt_bboxes, pd_bboxes).to(dtype=ciou.dtype)
-        return (1.0 - alpha) * ciou + alpha * w_sim
+        gt_area = (gt_bboxes[..., 2] - gt_bboxes[..., 0]).clamp_(min=0.0)
+        gt_area.mul_((gt_bboxes[..., 3] - gt_bboxes[..., 1]).clamp_(min=0.0))
+        alpha = gt_area.div_(ref_area).add_(1.0).reciprocal_().mul_(float(weight)).to(dtype=ciou.dtype)
+        w_sim = _wasserstein_sim_lowmem(gt_bboxes, pd_bboxes).to(dtype=ciou.dtype)
+        return ciou.add(w_sim.sub_(ciou).mul_(alpha))
 
     return patched_iou_calculation
 

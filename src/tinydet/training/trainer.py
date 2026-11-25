@@ -412,12 +412,13 @@ def train(
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:
                 media = WandbMediaCallback(run, effective_dataset_config)
-                for event, callback in (
-                    ("on_train_start", media.on_train_start),
-                    ("on_train_epoch_start", media.on_train_epoch_start),
-                    ("on_train_batch_end", media.on_train_batch_end),
-                    ("on_train_end", media.on_train_end),
-                ):
+                events = [("on_train_start", media.on_train_start), ("on_train_end", media.on_train_end)]
+                if media._hook is not None:
+                    events.extend([
+                        ("on_train_epoch_start", media.on_train_epoch_start),
+                        ("on_train_batch_end", media.on_train_batch_end),
+                    ])
+                for event, callback in events:
                     model.callbacks[event].insert(0, callback)
 
             model.train(
@@ -466,12 +467,13 @@ def train(
                 model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
             if project:
                 media = WandbMediaCallback(run, effective_dataset_config)
-                for event, callback in (
-                    ("on_train_start", media.on_train_start),
-                    ("on_train_epoch_start", media.on_train_epoch_start),
-                    ("on_train_batch_end", media.on_train_batch_end),
-                    ("on_train_end", media.on_train_end),
-                ):
+                events = [("on_train_start", media.on_train_start), ("on_train_end", media.on_train_end)]
+                if media._hook is not None:
+                    events.extend([
+                        ("on_train_epoch_start", media.on_train_epoch_start),
+                        ("on_train_batch_end", media.on_train_batch_end),
+                    ])
+                for event, callback in events:
                     model.callbacks[event].insert(0, callback)
 
             model.train(

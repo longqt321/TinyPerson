@@ -238,3 +238,36 @@ def test_realtime_and_system_callbacks_no_per_batch_sync(capsys):
     trainer.optimizer_step()
     assert sys_cb._grad_armed is False
     assert sys_cb._grad_norm_tensor is not None
+
+
+def test_lowmem_wasserstein_and_cache_serialization_equivalence():
+    """Verify low-memory TAL Wasserstein matches exact formula and LGT caches clear on pickle."""
+    import pickle
+
+    from tinydet.models.ultralytics import _wasserstein_sim_lowmem
+
+    torch.manual_seed(0)
+    xy = torch.rand(2, 5, 16, 2) * 100.0
+    wh = torch.rand(2, 5, 16, 2) * 20.0 + 1.0
+    gt = torch.cat((xy, xy + wh), dim=-1)
+    xy2 = xy + torch.randn_like(xy) * 2.0
+    wh2 = (wh + torch.randn_like(wh) * 1.5).clamp(min=0.5)
+    pd = torch.cat((xy2, xy2 + wh2), dim=-1)
+
+    exact = wasserstein_similarity_xyxy(gt, pd)
+    lowmem = _wasserstein_sim_lowmem(gt, pd)
+    assert torch.allclose(exact, lowmem, atol=1e-6)
+
+    head = LGTDetect(nc=1, reg_max=1, end2end=True, ch=(32, 64))
+    head.stride = torch.tensor([4.0, 8.0])
+    feats = [torch.randn(1, 32, 8, 8), torch.randn(1, 64, 4, 4)]
+    head.forward_lgt_one2one(feats)
+    assert len(head.lgt_stencil._valid_cache) == 2
+    assert len(head._parent_grid_cache) == 1
+    assert head._stride_ratios == [2.0]
+
+    restored = pickle.loads(pickle.dumps(head))
+    assert restored.lgt_stencil._valid_cache == {}
+    assert restored._parent_grid_cache == {}
+    assert restored._stride_ratios is None
+

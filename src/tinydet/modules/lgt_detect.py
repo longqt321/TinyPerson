@@ -134,16 +134,19 @@ class SpatialShiftStencil(nn.Module):
         dy_t = torch.tensor([dy for _, dy in OFFSETS_3X3], dtype=torch.float32).view(1, NUM_SPATIAL, 1, 1)
         self.register_buffer("dx", dx_t, persistent=False)
         self.register_buffer("dy", dy_t, persistent=False)
+        self._valid_cache: dict[tuple[int, int, torch.device], Tensor] = {}
 
-    def forward(self, field: Tensor) -> tuple[Tensor, Tensor]:  # agy-allow-dup
-        """Return shifted ``(B, C, 9, H, W)`` field and ``(1, 9, H, W)`` in-bounds boolean mask."""
-        bsz, channels, height, width = field.shape
-        weight = self.shift_weight.to(dtype=field.dtype)
-        shifted = F.conv2d(field, weight, padding=1, groups=self.channels).view(
-            bsz, channels, NUM_SPATIAL, height, width
-        )
+    def __getstate__(self):
+        state = dict(super().__getstate__())
+        state["_valid_cache"] = {}
+        return state
 
-        valid = torch.ones((1, NUM_SPATIAL, height, width), dtype=torch.bool, device=field.device)
+    def _get_valid_mask(self, height: int, width: int, device: torch.device) -> Tensor:
+        key = (height, width, device)
+        cached = self._valid_cache.get(key)
+        if cached is not None:
+            return cached
+        valid = torch.ones((1, NUM_SPATIAL, height, width), dtype=torch.bool, device=device)
         for k, (dx, dy) in enumerate(OFFSETS_3X3):
             if dx == -1:
                 valid[:, k, :, 0] = False
@@ -153,6 +156,19 @@ class SpatialShiftStencil(nn.Module):
                 valid[:, k, 0, :] = False
             elif dy == 1:
                 valid[:, k, height - 1, :] = False
+        if len(self._valid_cache) >= 16:
+            self._valid_cache.clear()
+        self._valid_cache[key] = valid
+        return valid
+
+    def forward(self, field: Tensor) -> tuple[Tensor, Tensor]:  # agy-allow-dup
+        """Return shifted ``(B, C, 9, H, W)`` field and ``(1, 9, H, W)`` in-bounds boolean mask."""
+        bsz, channels, height, width = field.shape
+        weight = self.shift_weight.to(dtype=field.dtype)
+        shifted = F.conv2d(field, weight, padding=1, groups=self.channels).view(
+            bsz, channels, NUM_SPATIAL, height, width
+        )
+        valid = self._get_valid_mask(height, width, field.device)
         return shifted, valid
 
 
@@ -212,7 +228,10 @@ class LGTDetect(Detect):
             self._build_cls_gate(rel_in_channels, self.rel_hidden, self.nc) for _ in range(self.nl)
         )
 
-        self._raw_o2o_boxes: list[Tensor] | None = None
+        self._raw_o2o_gauss: list[tuple[Tensor, Tensor]] | None = None
+        self._stride_ratios: list[float] | None = None
+        self._parent_grid_cache: dict[tuple[int, int, int, int, int, torch.device, torch.dtype], tuple[Tensor, Tensor, Tensor]] = {}
+        self._last_distill_tensor: Tensor | None = None
         self.last_stats: dict[str, float] = {}
 
     @staticmethod
@@ -229,8 +248,56 @@ class LGTDetect(Detect):
 
     def __getstate__(self):
         state = dict(super().__getstate__())
-        state["_raw_o2o_boxes"] = None
+        state["_raw_o2o_gauss"] = None
+        state["_stride_ratios"] = None
+        state["_parent_grid_cache"] = {}
+        state["_last_distill_tensor"] = None
         return state
+
+    def _get_parent_ratio(self, level_idx: int, p_idx: int) -> float:
+        """Return ``stride[p_idx] / stride[level_idx]`` with one-time host caching (zero per-batch sync)."""
+        cached = self._stride_ratios
+        if cached is not None and level_idx < len(cached):
+            return cached[level_idx]
+        strides = self.stride.detach().cpu().tolist()
+        if len(strides) >= self.nl and all(s > 0 for s in strides):
+            ratios = [
+                float(strides[i + 1]) / max(float(strides[i]), 1e-6)
+                for i in range(len(strides) - 1)
+            ]
+            self._stride_ratios = ratios
+            return ratios[level_idx]
+        s_child = float(strides[level_idx]) if strides[level_idx] > 0 else float(2**level_idx)
+        s_parent = float(strides[p_idx]) if strides[p_idx] > 0 else float(2**p_idx)
+        return s_parent / max(s_child, 1e-6)
+
+    def _get_parent_offsets(
+        self,
+        level_idx: int,
+        height: int,
+        width: int,
+        hp: int,
+        wp: int,
+        ratio: float,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Cache static parent-to-child coordinate offsets ``(dx_p, dy_p, valid_p)`` per grid shape."""
+        key = (level_idx, height, width, hp, wp, device, dtype)
+        cached = self._parent_grid_cache.get(key)
+        if cached is not None:
+            return cached
+        x_idx = torch.arange(width, device=device, dtype=dtype)
+        y_idx = torch.arange(height, device=device, dtype=dtype)
+        xp = torch.div(x_idx * wp, width, rounding_mode="floor")
+        yp = torch.div(y_idx * hp, height, rounding_mode="floor")
+        dx_p = (ratio * (xp + 0.5) - (x_idx + 0.5)).view(1, 1, width)
+        dy_p = (ratio * (yp + 0.5) - (y_idx + 0.5)).view(1, height, 1)
+        valid_p = torch.ones((1, 1, height, width), device=device, dtype=torch.bool)
+        if len(self._parent_grid_cache) >= 32:
+            self._parent_grid_cache.clear()
+        self._parent_grid_cache[key] = (dx_p, dy_p, valid_p)
+        return dx_p, dy_p, valid_p
 
     def _decode_level_ltrb(self, raw_box: Tensor) -> Tensor:
         """Extract ``(B, 4, H, W)`` stride-normalized ``[l, t, r, b]`` regardless of ``reg_max``."""
@@ -255,19 +322,17 @@ class LGTDetect(Detect):
 
         if not self.cross_scale or level_idx + 1 >= self.nl:
             zero_2 = torch.zeros((bsz, 2, 1, height, width), device=device, dtype=dtype)
+            sig_dummy = torch.full((bsz, 2, 1, height, width), 0.05, device=device, dtype=dtype)
             zero_1 = torch.zeros((bsz, 1, height, width), device=device, dtype=dtype)
             valid_p = torch.zeros((1, 1, height, width), device=device, dtype=torch.bool)
-            return zero_2, zero_2.clamp(min=0.05), zero_1, valid_p
+            return zero_2, sig_dummy, zero_1, valid_p
 
         p_idx = level_idx + 1
         mu_p = mu_list[p_idx]
         sig_p = sigma_list[p_idx]
         smax_p = smax_list[p_idx]
         hp, wp = mu_p.shape[2], mu_p.shape[3]
-
-        s_child = float(self.stride[level_idx].item()) if self.stride[level_idx] > 0 else float(2**level_idx)
-        s_parent = float(self.stride[p_idx].item()) if self.stride[p_idx] > 0 else float(2**p_idx)
-        ratio = s_parent / max(s_child, 1e-6)
+        ratio = self._get_parent_ratio(level_idx, p_idx)
 
         packed_p = torch.cat((mu_p, sig_p, smax_p), dim=1)
         up = F.interpolate(packed_p, size=(height, width), mode="nearest")
@@ -275,18 +340,13 @@ class LGTDetect(Detect):
         up_sig = up[:, 2:4]
         up_smax = up[:, 4:5]
 
-        x_idx = torch.arange(width, device=device, dtype=dtype)
-        y_idx = torch.arange(height, device=device, dtype=dtype)
-        xp = torch.div(x_idx * wp, width, rounding_mode="floor")
-        yp = torch.div(y_idx * hp, height, rounding_mode="floor")
-        dx_p = (ratio * (xp + 0.5) - (x_idx + 0.5)).view(1, 1, width)
-        dy_p = (ratio * (yp + 0.5) - (y_idx + 0.5)).view(1, height, 1)
-
+        dx_p, dy_p, valid_p = self._get_parent_offsets(
+            level_idx, height, width, hp, wp, ratio, device, dtype
+        )
         tilde_mu_x = ratio * up_mu[:, 0] + dx_p
         tilde_mu_y = ratio * up_mu[:, 1] + dy_p
         tilde_mu_p = torch.stack((tilde_mu_x, tilde_mu_y), dim=1).unsqueeze(2)
         tilde_sig_p = (ratio * up_sig).clamp(min=0.05).unsqueeze(2)
-        valid_p = torch.ones((1, 1, height, width), device=device, dtype=torch.bool)
         return tilde_mu_p, tilde_sig_p, up_smax, valid_p
 
     def _refine_level(
@@ -300,37 +360,50 @@ class LGTDetect(Detect):
     ) -> tuple[Tensor, Tensor]:
         """Apply Local Gaussian Transport to level ``level_idx`` in fp32 for AMP safety."""
         orig_dtype = raw_cls.dtype
-        mu_0 = mu_list[level_idx]  # (B, 2, H, W) fp32
-        sig_0 = sigma_list[level_idx]  # (B, 2, H, W) fp32
+        mu_0 = mu_list[level_idx]  # (B, 2, H, W) fp32 (retains grad to one2one_cv2)
+        sig_0 = sigma_list[level_idx]  # (B, 2, H, W) fp32 (retains grad to one2one_cv2)
         s_0 = smax_list[level_idx]  # (B, 1, H, W) fp32
         _, _, height, width = mu_0.shape
 
-        packed = torch.cat((mu_0, sig_0, s_0), dim=1)  # (B, 5, H, W)
-        shifted, valid_sp = self.lgt_stencil(packed)  # (B, 5, 9, H, W), (1, 9, H, W)
+        # All transported neighbor Gaussians and pairwise Wasserstein distances are detached
+        # inputs to the learnable barycenter/gate parameters; wrapping in no_grad() avoids
+        # storing ~2-3 GB of 5D P2 activation graphs that are discarded before backward().
+        with torch.no_grad():
+            packed = torch.cat((mu_0.detach(), sig_0.detach(), s_0.detach()), dim=1)
+            shifted, valid_sp = self.lgt_stencil(packed)  # (B, 5, 9, H, W), (1, 9, H, W)
 
-        tilde_mu_sp = torch.stack(
-            (shifted[:, 0] + self.lgt_stencil.dx, shifted[:, 1] + self.lgt_stencil.dy),
-            dim=1,
-        )  # (B, 2, 9, H, W)
-        tilde_sig_sp = shifted[:, 2:4].clamp(min=0.05)  # (B, 2, 9, H, W)
-        cand_s_sp = shifted[:, 4]  # (B, 9, H, W)
+            tilde_mu_sp = torch.stack(
+                (shifted[:, 0] + self.lgt_stencil.dx, shifted[:, 1] + self.lgt_stencil.dy),
+                dim=1,
+            )  # (B, 2, 9, H, W)
+            tilde_sig_sp = shifted[:, 2:4].clamp(min=0.05)  # (B, 2, 9, H, W)
+            cand_s_sp = shifted[:, 4]  # (B, 9, H, W)
 
-        tilde_mu_p, tilde_sig_p, cand_s_p, valid_p = self._parent_candidate(
-            level_idx, height, width, mu_list, sigma_list, smax_list
-        )
+            tilde_mu_p, tilde_sig_p, cand_s_p, valid_p = self._parent_candidate(
+                level_idx, height, width, mu_list, sigma_list, smax_list
+            )
 
-        tilde_mu = torch.cat((tilde_mu_sp, tilde_mu_p), dim=2)  # (B, 2, 10, H, W)
-        tilde_sig = torch.cat((tilde_sig_sp, tilde_sig_p), dim=2)  # (B, 2, 10, H, W)
-        cand_s = torch.cat((cand_s_sp, cand_s_p), dim=1)  # (B, 10, H, W)
-        valid = torch.cat((valid_sp, valid_p), dim=1)  # (1, 10, H, W)
+            tilde_mu = torch.cat((tilde_mu_sp, tilde_mu_p), dim=2)  # (B, 2, 10, H, W)
+            tilde_sig = torch.cat((tilde_sig_sp, tilde_sig_p), dim=2)  # (B, 2, 10, H, W)
+            cand_s = torch.cat((cand_s_sp, cand_s_p), dim=1)  # (B, 10, H, W)
+            valid = torch.cat((valid_sp, valid_p), dim=1)  # (1, 10, H, W)
 
-        mu_c = mu_0.unsqueeze(2)  # (B, 2, 1, H, W)
-        sig_c = sig_0.unsqueeze(2)  # (B, 2, 1, H, W)
-        num = (tilde_mu - mu_c).square() + (tilde_sig - sig_c).square()
-        den = sig_c.square() + tilde_sig.square() + 1e-6
-        dist_all = (num / den).sum(dim=1)  # (B, 10, H, W)
-        dist_all[:, 0].zero_()
-        dist_masked = dist_all.masked_fill(~valid, 1e4)
+            mu_c = mu_0.detach().unsqueeze(2)  # (B, 2, 1, H, W)
+            sig_c = sig_0.detach().unsqueeze(2)  # (B, 2, 1, H, W)
+            num = (tilde_mu - mu_c).square() + (tilde_sig - sig_c).square()
+            den = sig_c.square() + tilde_sig.square() + 1e-6
+            dist_all = (num / den).sum(dim=1)  # (B, 10, H, W)
+            dist_all[:, 0].zero_()
+            dist_masked = dist_all.masked_fill(~valid, 1e4)
+
+            log_q = F.logsigmoid(cand_s)
+            nb_delta_mu = tilde_mu[:, :, 1:] - mu_c
+            nb_delta_sig = tilde_sig[:, :, 1:] - sig_c
+            dist_nb = dist_masked[:, 1:]
+            valid_nb = valid[:, 1:].to(dtype=torch.float32)  # (1, 9, H, W)
+            score_diff = F.relu(cand_s[:, 1:] - s_0.detach()) * valid_nb  # (B, 9, H, W)
+            prob_nb = torch.sigmoid(cand_s[:, 1:]) * valid_nb  # (B, 9, H, W)
+            denom_nb = valid_nb.sum(dim=1, keepdim=True).clamp(min=1.0)
 
         # 1. Local Wasserstein Barycenter box refinement (for DFL-free reg_max == 1)
         if self.reg_max <= 1:
@@ -338,13 +411,11 @@ class LGTDetect(Detect):
             gamma_box = F.softplus(self.lgt_log_gamma_box[level_idx])
             beta_box = torch.sigmoid(self.lgt_logit_beta_box[level_idx])
 
-            log_q = F.logsigmoid(cand_s.detach())
-            logits_w = gamma_box * log_q - tau_box * dist_masked.detach()
-            logits_w = logits_w.masked_fill(~valid, -1e4)
+            logits_w = (gamma_box * log_q - tau_box * dist_masked).masked_fill(~valid, -1e4)
             weights_nb = torch.softmax(logits_w, dim=1)[:, 1:].unsqueeze(1)  # (B, 1, 9, H, W)
 
-            delta_mu = (weights_nb * (tilde_mu[:, :, 1:].detach() - mu_c.detach())).sum(dim=2)
-            delta_sig = (weights_nb * (tilde_sig[:, :, 1:].detach() - sig_c.detach())).sum(dim=2)
+            delta_mu = (weights_nb * nb_delta_mu).sum(dim=2)
+            delta_sig = (weights_nb * nb_delta_sig).sum(dim=2)
             mu_ref = mu_0 + beta_box * delta_mu
             sig_ref = (sig_0 + beta_box * delta_sig).clamp(min=0.05)
             refined_box = gaussian_to_ltrb(mu_ref, sig_ref).to(raw_box.dtype)
@@ -353,14 +424,10 @@ class LGTDetect(Detect):
 
         # 2. Differentiable NMS Dominance & Consensus Gate on classification logits
         tau_cls = F.softplus(self.lgt_log_tau_cls[level_idx]) + 0.1
-        valid_nb = valid[:, 1:].to(dtype=torch.float32)  # (1, 9, H, W)
-        aff_nb = torch.exp(-tau_cls * dist_masked[:, 1:].detach()) * valid_nb  # (B, 9, H, W)
-        score_diff = F.relu(cand_s[:, 1:].detach() - s_0.detach()) * valid_nb  # (B, 9, H, W)
-        prob_nb = torch.sigmoid(cand_s[:, 1:].detach()) * valid_nb  # (B, 9, H, W)
+        aff_nb = torch.exp(-tau_cls * dist_nb) * valid_nb  # (B, 9, H, W)
 
         dom_pairs = aff_nb * score_diff
         m_dom = dom_pairs.amax(dim=1, keepdim=True)  # (B, 1, H, W)
-        denom_nb = valid_nb.sum(dim=1, keepdim=True).clamp(min=1.0)
         m_sup = (aff_nb * prob_nb).sum(dim=1, keepdim=True) / denom_nb  # (B, 1, H, W)
 
         rel_feat = torch.cat((aff_nb, dom_pairs, m_dom, m_sup), dim=1).to(orig_dtype)
@@ -387,12 +454,12 @@ class LGTDetect(Detect):
                 mu_i, sig_i = ltrb_to_gaussian(ltrb_list[i])
                 mu_list.append(mu_i)
                 sigma_list.append(sig_i)
-                smax_list.append(raw_clses[i].float().amax(dim=1, keepdim=True))
+                smax_list.append(raw_clses[i].detach().float().amax(dim=1, keepdim=True))
 
         if self.training and self.distill_gain > 0.0:
-            self._raw_o2o_boxes = ltrb_list
+            self._raw_o2o_gauss = list(zip(mu_list, sigma_list))
         else:
-            self._raw_o2o_boxes = None
+            self._raw_o2o_gauss = None
 
         out_boxes: list[Tensor] = []
         out_scores: list[Tensor] = []
@@ -425,19 +492,30 @@ class LGTDetect(Detect):
             y = self.postprocess(y.permute(0, 2, 1))
         return y if self.export else (y, preds)
 
+    def get_lgt_stats(self) -> dict[str, float]:
+        """Materialize scalar LGT diagnostics on demand (call at epoch end, never per batch)."""
+        stats = {
+            "beta_box_p2": float(torch.sigmoid(self.lgt_logit_beta_box[0]).detach().item()),
+            "tau_cls_p2": float((F.softplus(self.lgt_log_tau_cls[0]) + 0.1).detach().item()),
+        }
+        if self._last_distill_tensor is not None:
+            stats["distill_loss"] = float(self._last_distill_tensor.item())
+        self.last_stats = stats
+        return stats
+
     def aux_loss(self, preds: dict[str, dict[str, Tensor]], batch: dict[str, Tensor]) -> Tensor:  # agy-allow-dup
         """Training-only dense Gaussian box-field distillation from ``one2many`` to ``one2one_cv2``."""
         del batch
-        raw_o2o = self._raw_o2o_boxes
-        self._raw_o2o_boxes = None
-        if self.distill_gain <= 0.0 or raw_o2o is None or "one2many" not in preds:
+        raw_o2o_gauss = self._raw_o2o_gauss
+        self._raw_o2o_gauss = None
+        if self.distill_gain <= 0.0 or raw_o2o_gauss is None or "one2many" not in preds:
             return torch.zeros((), device=next(self.parameters()).device)
 
         o2m = preds["one2many"]
         if not o2m or "boxes" not in o2m or "scores" not in o2m:
             return torch.zeros((), device=next(self.parameters()).device)
 
-        device_type = raw_o2o[0].device.type
+        device_type = raw_o2o_gauss[0][0].device.type
         with torch.autocast(device_type=device_type, enabled=False):
             o2m_boxes_flat = o2m["boxes"].detach().float()
             o2m_scores_flat = o2m["scores"].detach().float()
@@ -447,19 +525,19 @@ class LGTDetect(Detect):
             total_num = torch.zeros((), device=o2m_boxes_flat.device, dtype=torch.float32)
             total_den = torch.tensor(1e-6, device=o2m_boxes_flat.device, dtype=torch.float32)
 
-            for o2o_ltrb in raw_o2o:
-                _, _, height, width = o2o_ltrb.shape
+            for mu_o2o, sig_o2o in raw_o2o_gauss:
+                _, _, height, width = mu_o2o.shape
                 count = height * width
-                o2m_raw = o2m_boxes_flat[:, :, offset : offset + count].view(
-                    bsz, 4 * self.reg_max, height, width
-                )
-                o2m_ltrb = self._decode_level_ltrb(o2m_raw).float()
-                o2m_prob = torch.sigmoid(o2m_scores_flat[:, :, offset : offset + count]).amax(dim=1)
-                weight = o2m_prob.square().view(bsz, height, width)
+                with torch.no_grad():
+                    o2m_raw = o2m_boxes_flat[:, :, offset : offset + count].view(
+                        bsz, 4 * self.reg_max, height, width
+                    )
+                    o2m_ltrb = self._decode_level_ltrb(o2m_raw).float()
+                    o2m_prob = torch.sigmoid(o2m_scores_flat[:, :, offset : offset + count]).amax(dim=1)
+                    weight = o2m_prob.square().view(bsz, height, width)
+                    mu_o2m, sig_o2m = ltrb_to_gaussian(o2m_ltrb)
                 offset += count
 
-                mu_o2o, sig_o2o = ltrb_to_gaussian(o2o_ltrb.float())
-                mu_o2m, sig_o2m = ltrb_to_gaussian(o2m_ltrb)
                 num = (mu_o2o - mu_o2m).square() + (sig_o2o - sig_o2m).square()
                 den = sig_o2o.square() + sig_o2m.square() + 1e-6
                 dist = (num / den).sum(dim=1)
@@ -468,13 +546,9 @@ class LGTDetect(Detect):
                 total_num = total_num + (weight * bounded_loss).sum()
                 total_den = total_den + weight.sum()
 
-            loss = (total_num / total_den) * bsz * self.distill_gain
-            self.last_stats = {
-                "distill_loss": float((total_num / total_den).detach().item()),
-                "beta_box_p2": float(torch.sigmoid(self.lgt_logit_beta_box[0]).detach().item()),
-                "tau_cls_p2": float((F.softplus(self.lgt_log_tau_cls[0]) + 0.1).detach().item()),
-            }
-            return loss
+            mean_distill = total_num / total_den
+            self._last_distill_tensor = mean_distill.detach()
+            return mean_distill * (bsz * self.distill_gain)
 
 
 def find_lgt_head(model: nn.Module) -> LGTDetect | None:
