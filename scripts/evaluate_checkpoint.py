@@ -24,16 +24,19 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any
+
+import orjson
 
 from tinydet.error_analysis.core import AnalysisConfig, analyze_files
 from tinydet.error_analysis.inference import predict_split
 from tinydet.error_analysis.report import write_outputs
+from tinydet.evaluation.evaluator import sha256 as _sha256
 from tinydet.evaluation.tinyperson_benchmark import IOU_THRESHOLDS, evaluate_tinyperson
 from tinydet.models.ultralytics import register_ultralytics_modules
 from tinydet.utils.dataset import dataset_images
+from tinydet.utils.experiment import write_json
 
 register_ultralytics_modules()
 
@@ -162,13 +165,13 @@ def main() -> None:
         imgsz=args.imgsz, conf=args.conf, batch_size=args.batch_size,
         device=args.device,
     )
-    (args.output / "inference.json").write_text(json.dumps(inference, indent=2) + "\n")
+    write_json(args.output / "inference.json", inference)
 
     # Step 2: benchmark
     print("[2/4] Running TinyPerson benchmark evaluator")
     benchmark = _benchmark_metrics(args.annotations, predictions_path, args.workers,
                                    args.class_mode)
-    (args.output / "benchmark.json").write_text(json.dumps(benchmark, indent=2) + "\n")
+    write_json(args.output / "benchmark.json", benchmark)
 
     # Step 3: oracles
     oracles: dict[str, Any] | None = None
@@ -182,7 +185,7 @@ def main() -> None:
             args.class_mode,
             baseline_result=benchmark,
         )
-        (args.output / "oracle_summary.json").write_text(json.dumps(oracles, indent=2) + "\n")
+        write_json(args.output / "oracle_summary.json", oracles)
 
     # Step 4: error analysis
     analysis_summary: dict[str, Any] | None = None
@@ -211,8 +214,8 @@ def main() -> None:
         "error_analysis": _geometry_summary(analysis_summary) if analysis_summary else None,
     }
     summary_path = args.output / "summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2) + "\n")
-    print(json.dumps({
+    write_json(summary_path, summary)
+    print(orjson.dumps({
         "summary": str(summary_path.resolve()),
         "benchmark_all": benchmark.get("all"),
         "oracle_all_AP75": {
@@ -220,17 +223,7 @@ def main() -> None:
             for k, v in (oracles or {}).items()
             if isinstance(v, dict) and "metrics" in v
         } if oracles else None,
-    }, indent=2))
-
-
-def _sha256(path: Path, chunk: int = 8 << 20) -> str:
-    import hashlib
-
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(chunk), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    }, option=orjson.OPT_INDENT_2).decode())
 
 
 if __name__ == "__main__":

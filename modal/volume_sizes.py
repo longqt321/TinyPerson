@@ -47,25 +47,35 @@ def _sizes() -> dict:
     data.reload()
     models.reload()
     runs.reload()
-    out: dict = {}
-    for label, root in (("data", DATA_ROOT), ("models", MODEL_ROOT), ("runs", RUN_ROOT)):
-        size, count = _dir_size(root)
-        out[label] = {"bytes": size, "gb": round(size / 1e9, 2), "files": count}
-    # Per-run breakdown so a partial migration can pick only what is needed.
-    per_run = {}
-    for entry in sorted(RUN_ROOT.iterdir()):
-        if entry.is_dir():
-            size, count = _dir_size(entry)
-            per_run[entry.name] = {"gb": round(size / 1e9, 2), "files": count}
-    out["runs_per_dir"] = per_run
-    # Dataset breakdown.
-    ds = {}
-    for entry in sorted(DATA_ROOT.iterdir()):
-        if entry.is_dir():
-            size, count = _dir_size(entry)
-            ds[entry.name] = {"gb": round(size / 1e9, 2), "files": count}
-    out["data_per_dir"] = ds
-    return out
+
+    def _breakdown_with_total(root: Path) -> tuple[dict[str, int | float], dict[str, dict[str, int | float]]]:
+        total_bytes = 0
+        total_files = 0
+        per_dir: dict[str, dict[str, int | float]] = {}
+        for entry in sorted(root.iterdir()):
+            if entry.is_dir():
+                size, count = _dir_size(entry)
+                per_dir[entry.name] = {"gb": round(size / 1e9, 2), "files": count}
+                total_bytes += size
+                total_files += count
+            elif entry.is_file():
+                try:
+                    total_bytes += entry.stat().st_size
+                    total_files += 1
+                except OSError:
+                    continue
+        return {"bytes": total_bytes, "gb": round(total_bytes / 1e9, 2), "files": total_files}, per_dir
+
+    data_total, ds = _breakdown_with_total(DATA_ROOT)
+    models_size, models_count = _dir_size(MODEL_ROOT)
+    runs_total, per_run = _breakdown_with_total(RUN_ROOT)
+    return {
+        "data": data_total,
+        "models": {"bytes": models_size, "gb": round(models_size / 1e9, 2), "files": models_count},
+        "runs": runs_total,
+        "runs_per_dir": per_run,
+        "data_per_dir": ds,
+    }
 
 
 @app.local_entrypoint()

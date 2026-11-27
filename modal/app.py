@@ -1098,21 +1098,15 @@ def evaluate_checkpoint(
 
 
 @app.local_entrypoint()
-def evaluate_tiled(checkpoint: str, name: str, head_threshold: float | None = None, split: str = "test"):
+def evaluate_tiled(checkpoint: str, name: str, split: str = "test"):
     """Tiled (640x512, overlap 100) evaluation of one checkpoint."""
     result = _run_tiled_checkpoint_evaluation.remote(
-        relative_checkpoint=checkpoint, name=name, head_threshold=head_threshold, split=split
+        relative_checkpoint=checkpoint, name=name, split=split
     )
     output = Path("reports/eval")
     output.mkdir(parents=True, exist_ok=True)
     (output / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({"name": name, "benchmark": result["summary"]["benchmark"]}, indent=2))
-
-
-
-
-
-
 
 
 @app.function(
@@ -1128,18 +1122,17 @@ def evaluate_tiled(checkpoint: str, name: str, head_threshold: float | None = No
     timeout=3600,
 )
 def _run_tiled_checkpoint_evaluation(
-    relative_checkpoint: str, name: str, head_threshold: float | None = None, split: str = "test"
+    relative_checkpoint: str, name: str, split: str = "test"
 ):
     """Run tiled crop + merge evaluation (640x512, overlap 100) on one split."""
-    del head_threshold
-    import json
-
+    import orjson
     from PIL import Image
     from ultralytics import YOLO
 
     from tinydet.evaluation.tiled_inference import predict_tiled_image
     from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
     from tinydet.models.ultralytics import register_ultralytics_modules
+    from tinydet.utils.atomic import atomic_write_text
     from tinydet.utils.dataset import normalize_dataset_yaml
 
     register_ultralytics_modules()
@@ -1170,7 +1163,7 @@ def _run_tiled_checkpoint_evaluation(
         raw_annotation_source, data_yaml, split, output_dir / f"annotations_{split}.json"
     )
 
-    data_payload = json.loads(annotation_source.read_text())
+    data_payload = orjson.loads(annotation_source.read_bytes())
     image_dir = DATA_ROOT / "tinyperson-yolo-v2" / "images" / split
     fallback_by_name: dict[str, Path] | None = None
 
@@ -1213,13 +1206,21 @@ def _run_tiled_checkpoint_evaluation(
         if (idx + 1) % 100 == 0:
             print(f"    Processed {idx + 1}/{len(data_payload['images'])} images...", flush=True)
 
+    pred_payload = {"images": predictions}
     pred_file = output_dir / "predictions_tiled.json"
-    pred_file.write_text(json.dumps({"images": predictions}))
+    atomic_write_text(
+        pred_file,
+        orjson.dumps(pred_payload, option=orjson.OPT_SERIALIZE_NUMPY).decode(),
+    )
 
     print("--> Running standardized TinyPerson benchmark on merged predictions...", flush=True)
-    bench_result = evaluate_tinyperson(annotation_source, pred_file, workers=4,
-                                       class_mode="merge")
-    (output_dir / "benchmark.json").write_text(json.dumps(bench_result, indent=2))
+    bench_result = evaluate_tinyperson(
+        data_payload, pred_payload, workers=4, class_mode="merge"
+    )
+    atomic_write_text(
+        output_dir / "benchmark.json",
+        orjson.dumps(bench_result, option=orjson.OPT_INDENT_2 | orjson.OPT_SERIALIZE_NUMPY).decode() + "\n",
+    )
 
     summary = {
         "checkpoint": str(checkpoint),
@@ -1227,7 +1228,10 @@ def _run_tiled_checkpoint_evaluation(
         "protocol": "Tiled crop 640x512 + NMS merge 0.50",
         "benchmark": bench_result,
     }
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    atomic_write_text(
+        output_dir / "summary.json",
+        orjson.dumps(summary, option=orjson.OPT_INDENT_2 | orjson.OPT_SERIALIZE_NUMPY).decode() + "\n",
+    )
     runs.commit()
 
     return {

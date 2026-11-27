@@ -13,6 +13,7 @@ from collections.abc import Iterable, Sequence
 
 import numpy as np
 import torch
+from numba import njit
 from torchvision.ops import box_iou
 
 Box = Sequence[float]
@@ -94,3 +95,27 @@ def best_last_max(overlaps: np.ndarray, candidates: np.ndarray) -> int:
     """Index of the highest overlap, last index on ties (``max`` on tuples)."""
     peak = overlaps[candidates].max()
     return int(candidates[overlaps[candidates] == peak].max())
+
+
+@njit(cache=True)
+def greedy_assign_first_max(overlap_mat: np.ndarray, order: np.ndarray, threshold: float) -> np.ndarray:
+    """JIT-compiled greedy 1-to-1 GT assignment at ``IoU >= threshold`` (first-max tie breaking)."""
+    n_det, n_gt = overlap_mat.shape
+    assigned = np.full(n_det, -1, dtype=np.int64)
+    if n_det == 0 or n_gt == 0:
+        return assigned
+    gt_available = np.ones(n_gt, dtype=np.bool_)
+    for k in range(order.shape[0]):
+        det_idx = order[k]
+        best_gt = -1
+        best_iou = threshold
+        for j in range(n_gt):
+            if gt_available[j]:
+                val = overlap_mat[det_idx, j]
+                if val >= threshold and (best_gt == -1 or val > best_iou):
+                    best_iou = val
+                    best_gt = j
+        if best_gt != -1:
+            gt_available[best_gt] = False
+            assigned[det_idx] = best_gt
+    return assigned

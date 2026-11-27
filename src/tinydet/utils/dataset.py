@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import tempfile
 from pathlib import Path
 
 import yaml
+
+_GROUP_I_RE = re.compile(r"^(.*)_I\d+$")
+_GROUP_FRAME_RE = re.compile(r"^(.*?)[_-](?:frame)?\d+$", re.IGNORECASE)
+
+
+def tinyperson_group_key(filename: str) -> str:
+    """Infer a video/source group from a TinyPerson filename so whole videos stay together."""
+    stem = Path(filename).stem
+    match = _GROUP_I_RE.match(stem)
+    if match:
+        return match.group(1)
+    match = _GROUP_FRAME_RE.match(stem)
+    return match.group(1) if match else stem
 
 
 def resolve_dataset_yaml(path: str | Path) -> Path:

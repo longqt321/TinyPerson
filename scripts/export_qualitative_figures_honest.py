@@ -25,7 +25,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib
@@ -36,12 +35,19 @@ import sys
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+import orjson
 import torch
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tinydet.evaluation.tiled_inference import batched_nms
+from tinydet.evaluation.tiled_inference import (
+    NMS_IOU,
+    TILE_H,
+    TILE_OVERLAP,
+    TILE_W,
+    predict_tiled_image,
+)
 
 plt.rcParams.update({
     "font.family": "serif",
@@ -54,51 +60,29 @@ ROOT = Path(__file__).resolve().parents[1]
 ANNO_PATH = ROOT / "datasets/TinyPerson_official/tiny/tiny_set/annotations/tiny_set_test_with_dense.json"
 IMG_DIR = ROOT / "datasets/TinyPerson_official/tiny/tiny_set/test/labeled_images"
 
-TILE_W, TILE_H, TILE_OVERLAP = 640, 512, 100
-NMS_IOU = 0.50
 COLOR_BASELINE = "#2C5D88"
 COLOR_GAUSS = "#C0392B"
 COLOR_GT = "#27AE60"
 
 
-def xywh_to_xyxy(b: list[float]) -> np.ndarray:
-    from tinydet.utils.geometry import xywh_to_xyxy as _convert
-
-    return np.array(_convert(b, validate=False), dtype=np.float64)
-
-
-
-
-
 def tiled_predict(model, pil_img: Image.Image, conf: float, device: str) -> dict:
-    """Slice the full image into 640x512 tiles (overlap 100), predict per tile,
-    map boxes back to source coordinates, then apply Global NMS (IoU 0.50)."""
-    w, h = pil_img.size
-    all_boxes: list[np.ndarray] = []
-    all_scores: list[float] = []
-    ys = sorted(set(list(range(0, max(h - TILE_H, 1), TILE_H - TILE_OVERLAP)) + [max(h - TILE_H, 0)]))
-    xs = sorted(set(list(range(0, max(w - TILE_W, 1), TILE_W - TILE_OVERLAP)) + [max(w - TILE_W, 0)]))
-    with torch.no_grad():
-        for ty in ys:
-            for tx in xs:
-                tile = pil_img.crop((tx, ty, tx + TILE_W, ty + TILE_H))
-                res = model.predict(tile, imgsz=TILE_W, conf=conf, verbose=False,
-                                    device=device)[0]
-                if res.boxes is None or len(res.boxes) == 0:
-                    continue
-                bb = res.boxes.xyxy.cpu().numpy().astype(np.float64)
-                bb[:, 0] += tx
-                bb[:, 2] += tx
-                bb[:, 1] += ty
-                bb[:, 3] += ty
-                all_boxes.append(bb)
-                all_scores.extend(res.boxes.conf.cpu().numpy().tolist())
-    if not all_boxes:
-        return {"boxes": np.zeros((0, 4)), "scores": np.zeros((0,))}
-    boxes = np.concatenate(all_boxes, axis=0)
-    scores = np.array(all_scores, dtype=np.float64)
-    keep = batched_nms(boxes, scores, NMS_IOU)
-    return {"boxes": boxes[keep], "scores": scores[keep]}
+    """Run batched tiled inference (640x512, overlap 100) + class-aware NMS + IOS merge."""
+    boxes, scores, _ = predict_tiled_image(
+        model=model,
+        img=pil_img,
+        tile_w=TILE_W,
+        tile_h=TILE_H,
+        overlap=TILE_OVERLAP,
+        conf=conf,
+        merge_iou=NMS_IOU,
+        device=device,
+    )
+    if not boxes:
+        return {"boxes": np.zeros((0, 4), dtype=np.float64), "scores": np.zeros((0,), dtype=np.float64)}
+    return {
+        "boxes": np.asarray(boxes, dtype=np.float64),
+        "scores": np.asarray(scores, dtype=np.float64),
+    }
 
 
 def select_image(anno: dict, needle: str) -> tuple[dict, list]:
@@ -161,8 +145,7 @@ def draw_gt_panel(ax, crop_img: Image.Image, gts: list[dict], x0: int, y0: int) 
     return n
 
 
-def fig12(out_dir: Path, gauss_model, base_model, device: str, conf: float) -> None:
-    anno = json.loads(ANNO_PATH.read_text())
+def fig12(out_dir: Path, gauss_model, base_model, device: str, conf: float, anno: dict) -> None:
     target, gts = select_image(anno, "youtube_V0001_I0000320")
     img = Image.open(IMG_DIR / Path(target["file_name"]).name).convert("RGB")
     assert img.size == (target["width"], target["height"])
@@ -205,8 +188,7 @@ def fig12(out_dir: Path, gauss_model, base_model, device: str, conf: float) -> N
     print("Figure 12 saved.", flush=True)
 
 
-def fig13(out_dir: Path, gauss_model, base_model, device: str, conf: float) -> None:
-    anno = json.loads(ANNO_PATH.read_text())
+def fig13(out_dir: Path, gauss_model, base_model, device: str, conf: float, anno: dict) -> None:
     target, _ = select_image(anno, "youtube_V0001_I0002640")
     img = Image.open(IMG_DIR / Path(target["file_name"]).name).convert("RGB")
     assert img.size == (target["width"], target["height"])
@@ -271,8 +253,9 @@ def main() -> None:
     base_model = YOLO(str(args.baseline_checkpoint))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    fig12(args.output_dir, gauss_model, base_model, device, args.conf_fig12)
-    fig13(args.output_dir, gauss_model, base_model, device, args.conf_fig13)
+    anno = orjson.loads(ANNO_PATH.read_bytes())
+    fig12(args.output_dir, gauss_model, base_model, device, args.conf_fig12, anno)
+    fig13(args.output_dir, gauss_model, base_model, device, args.conf_fig13, anno)
 
 
 if __name__ == "__main__":

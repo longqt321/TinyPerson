@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from tinydet.utils.dataset import tinyperson_group_key
 from tinydet.utils.runtime import (
     default_output_root,
     detect_host,
@@ -69,3 +70,10 @@ def test_discover_dataset_finds_nested_yaml() -> None:
         yaml_file.write_text("path: .\ntrain: images/train\nval: images/val\nnames:\n  0: person\n")
         found = discover_dataset(None, "/nonexistent/data.yaml", "local", root)
         assert found == yaml_file.resolve()
+
+
+def test_tinyperson_group_key_patterns() -> None:
+    assert tinyperson_group_key("labeled_images/youtube_V0001_I0000320.jpg") == "youtube_V0001"
+    assert tinyperson_group_key("beach_clip_frame0042.png") == "beach_clip"
+    assert tinyperson_group_key("seqA-105.jpg") == "seqA"
+    assert tinyperson_group_key("standalone.jpg") == "standalone"

@@ -7,11 +7,11 @@ import app as modal_app_module  # modal/ is not a package; path added above
 
 app = modal_app_module.app
 
-# Default campaign: the 150-epoch TinyPerson round (ADR-019). Override on the
-# command line with `--configs a.yaml,b.yaml`; nothing is hardcoded downstream.
+# Default campaign: clean scientific baseline vs LGT-Detect 150-epoch TinyPerson round.
+# Override on the command line with `--configs a.yaml,b.yaml`; nothing is hardcoded downstream.
 DEFAULT_CONFIGS = [
-    "configs/experiment/baseline_tinyperson_wacv_150e.yaml",
-    "configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml",
+    "configs/experiment/baseline_clean_tinyperson_150e.yaml",
+    "configs/experiment/lgt_tinyperson_150e.yaml",
 ]
 
 

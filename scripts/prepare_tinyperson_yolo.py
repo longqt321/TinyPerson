@@ -2,35 +2,20 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import os
 import random
-import re
 import shutil
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import orjson
 import yaml
 from PIL import Image
 
-
-def _group_key(filename: str) -> str:
-    stem = Path(filename).stem
-    match = re.match(r"^(.*)_I\d+$", stem)
-    if match:
-        return match.group(1)
-    match = re.match(r"^(.*?)[_-](?:frame)?\d+$", stem, flags=re.IGNORECASE)
-    return match.group(1) if match else stem
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from tinydet.evaluation.evaluator import sha256 as _sha256
+from tinydet.utils.dataset import tinyperson_group_key as _group_key
+from tinydet.utils.experiment import write_json
 
 
 def _image_size(item: tuple[dict, Path]) -> tuple[dict, int, int]:
@@ -58,8 +43,6 @@ def _write_record(item: tuple[dict, Path, Path, set[str]]) -> tuple[dict, str, i
     source = image_root / record["file_name"]
     image_dest = output / "images" / split / record["basename"]
     label_dest = output / "labels" / split / f"{Path(record['basename']).stem}.txt"
-    image_dest.parent.mkdir(parents=True, exist_ok=True)
-    label_dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, image_dest)
 
     lines = []
@@ -88,8 +71,6 @@ def _write_test_record(item: tuple[dict, Path, Path]) -> tuple[dict, int]:
     source = image_root / record["file_name"]
     image_dest = output / "images" / "test" / record["basename"]
     label_dest = output / "labels" / "test" / f"{Path(record['basename']).stem}.txt"
-    image_dest.parent.mkdir(parents=True, exist_ok=True)
-    label_dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, image_dest)
 
     lines = []
@@ -120,9 +101,12 @@ def _prepare_test_split(test_annotations: Path, test_image_root: Path, output: P
     ignore/uncertain boxes are dropped from the YOLO labels; the untouched COCO
     JSON is copied alongside so the benchmark evaluator still sees that metadata.
     """
-    data = json.loads(test_annotations.read_text())
+    data = orjson.loads(test_annotations.read_bytes())
     if not all(key in data for key in ("images", "annotations", "categories")):
         raise ValueError("Expected original COCO-style TinyPerson test annotation JSON")
+
+    (output / "images" / "test").mkdir(parents=True, exist_ok=True)
+    (output / "labels" / "test").mkdir(parents=True, exist_ok=True)
 
     by_image = defaultdict(list)
     for ann in data["annotations"]:
@@ -169,8 +153,7 @@ def _prepare_test_split(test_annotations: Path, test_image_root: Path, output: P
                         if int(row["image_id"]) in keep_ids],
     }
     copy_dest = output / "annotations" / "tiny_set_test.json"
-    copy_dest.parent.mkdir(parents=True, exist_ok=True)
-    copy_dest.write_text(json.dumps(subset, indent=2) + "\n")
+    write_json(copy_dest, subset)
     return (
         {"images": len(records), "objects": objects, "dense_excluded": len(dense_ids)},
         {"manifest": manifest, "annotation_copy": str(copy_dest.relative_to(output)),
@@ -187,7 +170,7 @@ def prepare(annotations_path: Path, image_root: Path, output: Path,
         raise ValueError("val_fraction must be between 0 and 0.5")
     if output.exists() and any(output.iterdir()):
         raise FileExistsError(f"Output directory is not empty: {output}")
-    data = json.loads(annotations_path.read_text())
+    data = orjson.loads(annotations_path.read_bytes())
     if not all(key in data for key in ("images", "annotations", "categories")):
         raise ValueError("Expected original COCO-style TinyPerson annotation JSON")
 
@@ -253,7 +236,9 @@ def prepare(annotations_path: Path, image_root: Path, output: Path,
     if len(val_groups) == len(groups):
         val_groups.remove(groups[-1])
 
-    output.mkdir(parents=True, exist_ok=True)
+    for split_name in ("train", "val"):
+        (output / "images" / split_name).mkdir(parents=True, exist_ok=True)
+        (output / "labels" / split_name).mkdir(parents=True, exist_ok=True)
     source_annotation_copy = output / "annotations" / annotations_path.name
     source_annotation_copy.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(annotations_path, source_annotation_copy)
@@ -307,7 +292,7 @@ def prepare(annotations_path: Path, image_root: Path, output: Path,
             "test_dense_excluded": test_summary["dense_excluded"],
             "test_images_manifest": test_meta["manifest"],
         })
-    (output / "manifest.json").write_text(json.dumps(manifest_payload, indent=2) + "\n")
+    write_json(output / "manifest.json", manifest_payload)
     summary = {
         "data_yaml": str((output / "data.yaml").resolve()),
         "images": len(image_records), "split_images": dict(split_counts),
@@ -337,9 +322,10 @@ def main() -> None:
     parser.add_argument("--test-image-root", type=Path, default=None,
                         help="Directory containing file_name paths of the test JSON")
     args = parser.parse_args()
-    print(json.dumps(prepare(args.annotations, args.image_root, args.output,
-                             args.val_fraction, args.seed, args.workers,
-                             args.test_annotations, args.test_image_root), indent=2))
+    print(orjson.dumps(prepare(args.annotations, args.image_root, args.output,
+                               args.val_fraction, args.seed, args.workers,
+                               args.test_annotations, args.test_image_root),
+                       option=orjson.OPT_INDENT_2).decode())
 
 
 if __name__ == "__main__":

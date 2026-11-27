@@ -23,9 +23,7 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import random
-import re
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -33,23 +31,12 @@ from pathlib import Path
 import polars as pl
 import yaml
 
+from tinydet.utils.dataset import tinyperson_group_key as _group_key
+from tinydet.utils.experiment import write_json
+
 
 def _clamp(val: float, min_val: float, max_val: float) -> float:
     return max(min_val, min(val, max_val))
-
-
-def _group_key(filename: str) -> str:
-    """Infer a video/source group from a TinyPerson filename.
-
-    Kept in sync with ``scripts/prepare_tinyperson_yolo.py`` so both generators
-    produce the same train/validation partition for the same input.
-    """
-    stem = Path(filename).stem
-    match = re.match(r"^(.*)_I\d+$", stem)
-    if match:
-        return match.group(1)
-    match = re.match(r"^(.*?)[_-](?:frame)?\d+$", stem, flags=re.IGNORECASE)
-    return match.group(1) if match else stem
 
 
 def _split_groups(names: list[str], val_fraction: float, seed: int) -> set[str]:
@@ -225,7 +212,7 @@ def convert_tinyperson(
     with open(output_dir / "data.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(data_yaml, f, sort_keys=False)
 
-    (output_dir / "manifest.json").write_text(json.dumps({
+    write_json(output_dir / "manifest.json", {
         "source": str(input_dir.resolve()),
         "source_format": "huggingface-parquet",
         "single_class": single_class,
@@ -239,7 +226,7 @@ def convert_tinyperson(
         "val_groups": sorted(val_groups),
         "counts": dict(totals),
         "images": manifest,
-    }, indent=2) + "\n", encoding="utf-8")
+    })
 
     print(f"TinyPerson done: {totals['train_images']} train / {totals['val_images']} val / "
           f"{totals['test_images']} test images; {totals['train_objects']} train boxes.")

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
+import orjson
+
 from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
+from tinydet.utils.experiment import write_json
 
 
 def main() -> None:
@@ -24,9 +26,8 @@ def main() -> None:
     args = parser.parse_args()
     result = evaluate_tinyperson(args.annotations, args.predictions, args.workers,
                                  class_mode=args.class_mode)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, indent=2) + "\n")
-    print(json.dumps(result, indent=2))
+    write_json(args.output, result)
+    print(orjson.dumps(result, option=orjson.OPT_INDENT_2 | orjson.OPT_SERIALIZE_NUMPY).decode())
 
 
 if __name__ == "__main__":

@@ -2,17 +2,18 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import orjson
 import torch
 from PIL import Image
 from ultralytics import YOLO
 
 from tinydet.models.ultralytics import register_ultralytics_modules
+from tinydet.utils.experiment import write_json
 
 register_ultralytics_modules()
 
@@ -38,7 +39,7 @@ def main() -> None:
     if not args.checkpoint.is_file():
         raise FileNotFoundError(args.checkpoint)
 
-    annotation = json.loads(args.annotations.read_text())
+    annotation = orjson.loads(args.annotations.read_bytes())
 
     def _check_image(row: dict) -> Path:
         path = args.image_root / row["file_name"]
@@ -79,16 +80,15 @@ def main() -> None:
                 "scores": boxes.conf.cpu().tolist() if boxes is not None else [],
                 "classes": [int(v) for v in boxes.cls.cpu().tolist()] if boxes is not None else [],
             })
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps({"images": predictions}, indent=2) + "\n")
-    print(json.dumps({
+    write_json(args.output, {"images": predictions})
+    print(orjson.dumps({
         "checkpoint": str(args.checkpoint.resolve()),
         "annotation": str(args.annotations.resolve()),
         "predictions": str(args.output.resolve()),
         "images_predicted": len(predictions),
         "imgsz": args.imgsz, "batch_size": args.batch_size,
         "confidence_threshold": args.conf, "max_det": 200,
-    }, indent=2))
+    }, option=orjson.OPT_INDENT_2).decode())
 
 
 if __name__ == "__main__":

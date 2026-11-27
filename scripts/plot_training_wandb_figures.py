@@ -56,7 +56,7 @@ def plot_training_loss_curves():
     df_gauss = pd.read_csv("reports/data/gauss_results.csv")
     df_gauss.columns = [c.strip() for c in df_gauss.columns]
 
-    fig, axes = plt.subplots(1, 3, figsize=(3.10, 1.46))
+    fig, axes = plt.subplots(1, 2, figsize=(3.10, 1.46))
 
     metrics = [
         ("train/box_loss", "Box Loss", axes[0]),

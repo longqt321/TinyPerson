@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import orjson
 
 from tinydet.evaluation.tinyperson_benchmark import _load_gt, evaluate_tinyperson
-from tinydet.utils.geometry import best_first_max, iou_matrix
+from tinydet.utils.atomic import atomic_write_text
+from tinydet.utils.geometry import greedy_assign_first_max, iou_matrix
 
 
 def _precompute_image_matches(
@@ -36,21 +37,16 @@ def _precompute_image_matches(
         scores = list(map(float, row["scores"]))
         image_id = basename_to_id[Path(row["path"]).name]
         gt = positives[image_id]
-        overlap_mat = iou_matrix(boxes, gt)
-        gt_available = np.ones(len(gt), dtype=bool)
-        order = sorted(range(len(boxes)), key=lambda index: scores[index], reverse=True)
-        assignments: dict[int, int] = {}
-        for detection_index in order:
-            overlaps = overlap_mat[detection_index]
-            if overlaps.size:
-                candidates = np.flatnonzero((overlaps >= 0.75) & gt_available)
-            else:
-                candidates = np.empty(0, dtype=np.intp)
-            if candidates.size:
-                best = best_first_max(overlaps, candidates)
-                gt_available[best] = False
-                assignments[detection_index] = best
-        matched_gt += len(set(assignments.values()))
+        overlap_mat = np.ascontiguousarray(iou_matrix(boxes, gt), dtype=np.float64)
+        scores_arr = np.asarray(scores, dtype=np.float64)
+        order = np.argsort(-scores_arr, kind="stable").astype(np.int64, copy=False)
+        assigned_arr = greedy_assign_first_max(overlap_mat, order, 0.75)
+        assignments = {
+            int(det_idx): int(gt_idx)
+            for det_idx, gt_idx in enumerate(assigned_arr)
+            if gt_idx >= 0
+        }
+        matched_gt += len(assignments)
         matched_detections += len(assignments)
         prepared.append({
             "path": row["path"],
@@ -90,14 +86,18 @@ def _build_variant_payload(prepared: list[dict[str, Any]], variant: str) -> dict
 
 def run_oracles(
     annotations_path: Path,
-    predictions_path: Path,
+    predictions_path: Path | dict[str, Any],
     output_dir: Path,
     workers: int = 0,
     class_mode: str = "per_class",
     baseline_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    raw_annotations = json.loads(annotations_path.read_text())
-    predictions = json.loads(predictions_path.read_text())
+    raw_annotations = orjson.loads(annotations_path.read_bytes())
+    predictions = (
+        predictions_path
+        if isinstance(predictions_path, dict)
+        else orjson.loads(Path(predictions_path).read_bytes())
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     gt_cached = _load_gt(raw_annotations)
     gt_cached["source"] = str(annotations_path.resolve())
@@ -136,8 +136,11 @@ def run_oracles(
             ap75 = f"{metrics['AP@0.75']:.9f}" if metrics["AP@0.75"] is not None else ""
             rows.append(f"{variant},{size_bin},{ap25},{ap50},{ap75}")
 
-    (output_dir / "oracle_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    (output_dir / "oracle_by_size.csv").write_text("\n".join(rows) + "\n")
+    atomic_write_text(
+        output_dir / "oracle_summary.json",
+        orjson.dumps(summary, option=orjson.OPT_INDENT_2 | orjson.OPT_SERIALIZE_NUMPY).decode() + "\n",
+    )
+    atomic_write_text(output_dir / "oracle_by_size.csv", "\n".join(rows) + "\n")
     return summary
 
 
@@ -165,7 +168,7 @@ def main() -> None:
         }
         for variant in summary
     }
-    print(json.dumps(compact, indent=2))
+    print(orjson.dumps(compact, option=orjson.OPT_INDENT_2).decode())
 
 
 if __name__ == "__main__":
