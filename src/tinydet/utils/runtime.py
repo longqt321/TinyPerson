@@ -14,6 +14,19 @@ import torch
 
 DEFAULT_HF_DATASET_REPO = "longqt321/tinyperson-yolo"
 DEFAULT_HF_ARCHIVE_NAME = "tinyperson-yolo-v2.tar.gz"
+RUN_SYNC_ALLOW_PATTERNS = [
+    "config.yaml",
+    "metadata.json",
+    "environment.txt",
+    "training/args.yaml",
+    "training/results.csv",
+    "training/completed.flag",
+    "training/weights/last.pt",
+    "training/weights/best.pt",
+    "checkpoints/*",
+    "metrics/*",
+]
+_HF_ENSURED_REPOS: set[str] = set()
 
 
 def detect_host() -> str:
@@ -280,7 +293,7 @@ def sync_run_to_drive(
     epoch_counter: list[int] | None = None,
     force: bool = False,
 ) -> None:
-    """Sync essential checkpoints and metrics from local SSD to Google Drive."""
+    """Sync essential checkpoints, configs, and metrics from local SSD to Google Drive."""
     if not force and epoch_counter is not None:
         epoch_counter[0] += 1
         if epoch_counter[0] % max(1, every_n_epochs) != 0:
@@ -290,21 +303,135 @@ def sync_run_to_drive(
     dest_dir = drive_root / run_dir.parent.name / run_dir.name
     try:
         for rel in (
+            Path("config.yaml"),
+            Path("metadata.json"),
+            Path("environment.txt"),
+            Path("training/args.yaml"),
+            Path("training/results.csv"),
+            Path("training/completed.flag"),
             Path("training/weights/last.pt"),
             Path("training/weights/best.pt"),
-            Path("training/results.csv"),
         ):
             src = run_dir / rel
             if src.is_file():
-                dst = dest_dir / rel
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
-        metrics_src = run_dir / "metrics"
-        if metrics_src.is_dir():
-            metrics_dst = dest_dir / "metrics"
-            metrics_dst.mkdir(parents=True, exist_ok=True)
-            for item in metrics_src.iterdir():
-                if item.is_file():
-                    shutil.copy2(item, metrics_dst / item.name)
+                _atomic_copy(src, dest_dir / rel)
+        for folder_name in ("checkpoints", "metrics"):
+            folder_src = run_dir / folder_name
+            if folder_src.is_dir():
+                folder_dst = dest_dir / folder_name
+                for item in folder_src.iterdir():
+                    if item.is_file():
+                        _atomic_copy(item, folder_dst / item.name)
     except Exception as exc:  # noqa: BLE001 - Drive FUSE hiccup must not abort training
         print(f"[sync] Warning: Drive backup failed: {exc}", flush=True)
+
+
+def _atomic_copy(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.tmp")
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
+
+
+def restore_run_from_drive(run_dir: Path, drive_root: Path) -> bool:
+    """Restore an interrupted run from Google Drive to local SSD if ``last.pt`` is absent."""
+    if (run_dir / "training/weights/last.pt").is_file():
+        return False
+    backup_dir = drive_root / run_dir.parent.name / run_dir.name
+    if not (backup_dir / "training/weights/last.pt").is_file():
+        return False
+    print(f"[restore] Restoring run from Drive: {backup_dir} -> {run_dir}", flush=True)
+    shutil.copytree(backup_dir, run_dir, dirs_exist_ok=True)
+    return True
+
+
+def ensure_hf_auth() -> tuple[str | None, str | None]:
+    """Resolve ``HF_TOKEN``, export it to ``os.environ``, and return ``(token, username)``."""
+    token = resolve_secret("HF_TOKEN")
+    if not token:
+        return None, None
+    os.environ["HF_TOKEN"] = token
+    try:
+        from huggingface_hub import HfApi
+
+        username = HfApi(token=token).whoami().get("name")
+        return token, str(username) if username else None
+    except Exception as exc:  # noqa: BLE001 - network/token check is best-effort
+        print(f"[hf] Warning: could not verify HF_TOKEN ({exc})", flush=True)
+        return token, None
+
+
+def default_hf_runs_repo(username: str | None) -> str | None:
+    """Return the Hugging Face model repo used for checkpoint backup/resume."""
+    if env_repo := os.environ.get("TINYDET_HF_RUNS_REPO"):
+        return env_repo.strip() or None
+    if username:
+        return f"{username}/tinydet-runs"
+    return None
+
+
+def sync_run_to_hf(
+    run_dir: Path,
+    repo_id: str,
+    token: str | None = None,
+    *,
+    every_n_epochs: int = 5,
+    epoch_counter: list[int] | None = None,
+    force: bool = False,
+    run_as_background: bool = True,
+) -> None:
+    """Upload essential run checkpoints, configs, and metrics to Hugging Face Hub."""
+    if not force and epoch_counter is not None:
+        epoch_counter[0] += 1
+        if epoch_counter[0] % max(1, every_n_epochs) != 0:
+            return
+    if not run_dir.is_dir():
+        return
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi(token=token)
+        if repo_id not in _HF_ENSURED_REPOS:
+            api.create_repo(repo_id=repo_id, repo_type="model", private=True, exist_ok=True)
+            _HF_ENSURED_REPOS.add(repo_id)
+
+        path_in_repo = f"{run_dir.parent.name}/{run_dir.name}"
+        api.upload_folder(
+            folder_path=str(run_dir),
+            path_in_repo=path_in_repo,
+            repo_id=repo_id,
+            repo_type="model",
+            allow_patterns=RUN_SYNC_ALLOW_PATTERNS,
+            commit_message=f"Sync {path_in_repo}",
+            run_as_background=run_as_background and not force,
+        )
+    except Exception as exc:  # noqa: BLE001 - HF Hub hiccup must not abort training
+        print(f"[hf-sync] Warning: HF backup failed: {exc}", flush=True)
+
+
+def restore_run_from_hf(
+    run_dir: Path,
+    repo_id: str,
+    token: str | None = None,
+) -> bool:
+    """Restore an interrupted run from Hugging Face Hub if ``last.pt`` is absent locally."""
+    if (run_dir / "training/weights/last.pt").is_file():
+        return False
+    try:
+        from huggingface_hub import snapshot_download
+
+        path_in_repo = f"{run_dir.parent.name}/{run_dir.name}"
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type="model",
+            token=token,
+            allow_patterns=[f"{path_in_repo}/**"],
+            local_dir=str(run_dir.parent.parent),
+        )
+        restored = (run_dir / "training/weights/last.pt").is_file()
+        if restored:
+            print(f"[hf-restore] Restored run from hf://{repo_id}/{path_in_repo}", flush=True)
+        return restored
+    except Exception as exc:  # noqa: BLE001 - fresh runs have no remote snapshot yet
+        print(f"[hf-restore] No remote checkpoint restored ({exc})", flush=True)
+        return False

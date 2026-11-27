@@ -8,11 +8,16 @@ from pathlib import Path
 
 from tinydet.utils.dataset import tinyperson_group_key
 from tinydet.utils.runtime import (
+    default_hf_runs_repo,
     default_output_root,
     detect_host,
     deterministic_wandb_id,
     discover_dataset,
+    restore_run_from_drive,
+    restore_run_from_hf,
     stable_run_id,
+    sync_run_to_drive,
+    sync_run_to_hf,
 )
 
 
@@ -77,3 +82,77 @@ def test_tinyperson_group_key_patterns() -> None:
     assert tinyperson_group_key("beach_clip_frame0042.png") == "beach_clip"
     assert tinyperson_group_key("seqA-105.jpg") == "seqA"
     assert tinyperson_group_key("standalone.jpg") == "standalone"
+
+
+def test_default_hf_runs_repo_resolution() -> None:
+    saved = os.environ.pop("TINYDET_HF_RUNS_REPO", None)
+    try:
+        assert default_hf_runs_repo("longqt321") == "longqt321/tinydet-runs"
+        assert default_hf_runs_repo(None) is None
+        os.environ["TINYDET_HF_RUNS_REPO"] = "custom/repo"
+        assert default_hf_runs_repo("longqt321") == "custom/repo"
+    finally:
+        if saved is not None:
+            os.environ["TINYDET_HF_RUNS_REPO"] = saved
+
+
+def test_drive_sync_and_restore_roundtrip() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        run_dir = root / "local_runs" / "lgt_150e" / "colab-seed42"
+        drive_root = root / "drive_runs"
+        (run_dir / "training" / "weights").mkdir(parents=True)
+        (run_dir / "metrics").mkdir(parents=True)
+        (run_dir / "config.yaml").write_text("name: lgt_150e\n")
+        (run_dir / "training" / "results.csv").write_text("epoch,mAP50\n1,0.1\n")
+        (run_dir / "training" / "weights" / "last.pt").write_bytes(b"weights-last")
+        (run_dir / "metrics" / "epoch.json").write_text("{}")
+
+        sync_run_to_drive(run_dir, drive_root, force=True)
+        assert (drive_root / "lgt_150e" / "colab-seed42" / "config.yaml").is_file()
+        assert (drive_root / "lgt_150e" / "colab-seed42" / "training" / "weights" / "last.pt").is_file()
+
+        fresh_run = root / "fresh_runs" / "lgt_150e" / "colab-seed42"
+        assert restore_run_from_drive(fresh_run, drive_root) is True
+        assert (fresh_run / "training" / "weights" / "last.pt").read_bytes() == b"weights-last"
+        assert restore_run_from_drive(fresh_run, drive_root) is False
+
+
+def test_hf_sync_and_restore_mocked(monkeypatch) -> None:
+    uploaded: list[dict] = []
+
+    class FakeHfApi:
+        def __init__(self, token=None) -> None:
+            self.token = token
+
+        def create_repo(self, **kwargs) -> None:
+            pass
+
+        def upload_folder(self, **kwargs) -> None:
+            uploaded.append(kwargs)
+
+    def fake_snapshot_download(**kwargs) -> None:
+        local_dir = Path(kwargs["local_dir"])
+        target = local_dir / "lgt_150e" / "colab-seed42" / "training" / "weights" / "last.pt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"hf-last")
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeHfApi)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        run_dir = root / "runs" / "lgt_150e" / "colab-seed42"
+        (run_dir / "training" / "weights").mkdir(parents=True)
+        (run_dir / "training" / "weights" / "last.pt").write_bytes(b"local-last")
+
+        sync_run_to_hf(run_dir, "user/tinydet-runs", token="hf_test", force=True)
+        assert len(uploaded) == 1
+        assert uploaded[0]["path_in_repo"] == "lgt_150e/colab-seed42"
+        assert uploaded[0]["run_as_background"] is False
+
+        fresh_run = root / "fresh" / "lgt_150e" / "colab-seed42"
+        assert restore_run_from_hf(fresh_run, "user/tinydet-runs", token="hf_test") is True
+        assert (fresh_run / "training" / "weights" / "last.pt").read_bytes() == b"hf-last"

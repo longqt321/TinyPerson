@@ -40,13 +40,18 @@ from tinydet.utils.config import ExperimentConfig, load_config
 from tinydet.utils.runtime import (
     DEFAULT_HF_DATASET_REPO,
     default_drive_backup_root,
+    default_hf_runs_repo,
     default_output_root,
     detect_host,
     discover_dataset,
+    ensure_hf_auth,
     ensure_wandb_auth,
+    restore_run_from_drive,
+    restore_run_from_hf,
     stable_run_id,
     stage_dataset_to_local_ssd,
     sync_run_to_drive,
+    sync_run_to_hf,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -69,6 +74,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("TINYDET_HF_DATASET", DEFAULT_HF_DATASET_REPO),
         help="Hugging Face dataset repo to auto-download if dataset is not present locally. "
         "Pass empty string '' to disable.",
+    )
+    parser.add_argument(
+        "--hf-runs-repo",
+        help="Hugging Face model repo for automatic checkpoint backup & resume "
+        "(defaults to <hf_user>/tinydet-runs when HF_TOKEN is set).",
+    )
+    parser.add_argument(
+        "--no-hf-sync",
+        action="store_true",
+        help="Disable automatic Hugging Face Hub checkpoint backup & resume.",
+    )
+    parser.add_argument(
+        "--sync-every",
+        type=int,
+        default=5,
+        help="Sync checkpoints to Hugging Face Hub / Google Drive every N epochs.",
     )
     parser.add_argument(
         "--data-root", type=Path, help="Override the 'path' key inside the dataset YAML."
@@ -285,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from tinydet.utils.dataset import normalize_dataset_yaml
 
+    hf_token, hf_user = ensure_hf_auth()
     hf_repo = args.hf_dataset.strip() or None
     discovered = discover_dataset(
         args.data, config.data.get("config"), host, REPO_ROOT, hf_repo=hf_repo
@@ -335,35 +357,75 @@ def main(argv: list[str] | None = None) -> int:
     from tinydet.training.trainer import train
 
     drive_backup = default_drive_backup_root(host)
+    hf_runs_repo = None if args.no_hf_sync else (args.hf_runs_repo or default_hf_runs_repo(hf_user))
     run_local = (
         Path(config.output["root"]) / config.name / effective_run_id
         if effective_run_id
         else None
     )
-    epoch_counter = [0]
-    on_epoch_end = (
-        (
-            lambda: sync_run_to_drive(
-                run_local, drive_backup, every_n_epochs=5, epoch_counter=epoch_counter
-            )
+    print(f"[preflight] HF Auth: {'authenticated (' + hf_user + ')' if hf_user else ('token set' if hf_token else 'not set')}", flush=True)
+    print(f"[preflight] HF Backup: {hf_runs_repo or 'disabled'}", flush=True)
+    print(f"[preflight] Drive Sync: {drive_backup or 'disabled'}", flush=True)
+    if host in {"colab", "kaggle"} and not hf_runs_repo and not drive_backup:
+        print(
+            "[preflight] WARNING: ephemeral runtime with no HF Backup or Drive Sync — "
+            "checkpoints will be lost if the session stops!",
+            flush=True,
         )
-        if (drive_backup is not None and run_local is not None and Path(config.output["root"]) != drive_backup)
-        else None
-    )
 
-    with tempfile.TemporaryDirectory(prefix="tinydet-cfg-") as temporary:
-        config_file = Path(temporary) / "experiment.yaml"
-        config_file.write_text(yaml.safe_dump(asdict(config), sort_keys=False))
-        run = train(
-            config_file,
-            dataset_config=dataset_yaml,
-            wandb_group=args.wandb_group,
-            dataset_audit=dataset_audit,
-            run_id=effective_run_id,
-            on_epoch_end_callback=on_epoch_end,
-        )
-    if drive_backup is not None and Path(config.output["root"]) != drive_backup:
-        sync_run_to_drive(run, drive_backup, force=True)
+    if run_local is not None:
+        restored = False
+        if hf_runs_repo:
+            restored = restore_run_from_hf(run_local, hf_runs_repo, hf_token)
+        if not restored and drive_backup is not None and Path(config.output["root"]) != drive_backup:
+            restore_run_from_drive(run_local, drive_backup)
+
+    sync_every = max(1, int(args.sync_every))
+    drive_counter = [0]
+    hf_counter = [0]
+    use_drive = drive_backup is not None and run_local is not None and Path(config.output["root"]) != drive_backup
+
+    def _on_epoch_end() -> None:
+        if use_drive and drive_backup is not None and run_local is not None:
+            sync_run_to_drive(run_local, drive_backup, every_n_epochs=sync_every, epoch_counter=drive_counter)
+        if hf_runs_repo and run_local is not None:
+            sync_run_to_hf(
+                run_local,
+                hf_runs_repo,
+                hf_token,
+                every_n_epochs=sync_every,
+                epoch_counter=hf_counter,
+                run_as_background=True,
+            )
+
+    on_epoch_end = _on_epoch_end if (use_drive or (hf_runs_repo and run_local is not None)) else None
+
+    run: Path | None = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="tinydet-cfg-") as temporary:
+            config_file = Path(temporary) / "experiment.yaml"
+            config_file.write_text(yaml.safe_dump(asdict(config), sort_keys=False))
+            run = train(
+                config_file,
+                dataset_config=dataset_yaml,
+                wandb_group=args.wandb_group,
+                dataset_audit=dataset_audit,
+                run_id=effective_run_id,
+                on_epoch_end_callback=on_epoch_end,
+            )
+    finally:
+        flush_dir = run or run_local
+        if flush_dir is not None and flush_dir.is_dir():
+            if drive_backup is not None and Path(config.output["root"]) != drive_backup:
+                sync_run_to_drive(flush_dir, drive_backup, force=True)
+            if hf_runs_repo:
+                sync_run_to_hf(
+                    flush_dir,
+                    hf_runs_repo,
+                    hf_token,
+                    force=True,
+                    run_as_background=False,
+                )
 
     if not args.no_finalize:
         try:
