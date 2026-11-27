@@ -458,6 +458,10 @@ def sync_run_to_hf(
             _HF_ENSURED_REPOS.add(repo_id)
 
         if bool(run_as_background and not force):
+            print(
+                f"[hf-sync] Queued background backup: {path_in_repo} -> hf://{repo_id}",
+                flush=True,
+            )
             fut = api.upload_folder(
                 folder_path=str(staging_dir),
                 path_in_repo=path_in_repo,
@@ -470,6 +474,10 @@ def sync_run_to_hf(
             if isinstance(fut, Future):
                 _HF_INFLIGHT_FUTURES[path_in_repo] = fut
         else:
+            print(
+                f"[hf-sync] Uploading final backup: {path_in_repo} -> hf://{repo_id}...",
+                flush=True,
+            )
             api.upload_folder(
                 folder_path=str(staging_dir),
                 path_in_repo=path_in_repo,
@@ -479,6 +487,7 @@ def sync_run_to_hf(
                 commit_message=f"Sync {path_in_repo}",
                 run_as_future=False,
             )
+            print(f"[hf-sync] Backup complete: {path_in_repo}", flush=True)
     except Exception as exc:  # noqa: BLE001 - HF Hub hiccup must not abort training
         print(f"[hf-sync] Warning: HF backup failed: {exc}", flush=True)
 
