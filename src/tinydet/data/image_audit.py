@@ -32,17 +32,17 @@ def _quantiles(values: list[float]) -> dict[str, float | int | None]:
         return {"count": 0, "min": None, "p05": None, "p25": None,
                 "median": None, "p75": None, "p95": None, "max": None}
     array = np.asarray(values, dtype=np.float64)
-    # numpy implements the same linear-interpolation percentile the manual
-    # helper used; verified bit-equal on n = 1..101 before switching.
+    # Single-pass linear-interpolation percentile call instead of 7 separate scans.
+    q = np.percentile(array, [0, 5, 25, 50, 75, 95, 100], method="linear")
     return {
         "count": array.size,
-        "min": round(float(array.min()), 4),
-        "p05": round(float(np.percentile(array, 5, method="linear")), 4),
-        "p25": round(float(np.percentile(array, 25, method="linear")), 4),
-        "median": round(float(np.median(array)), 4),
-        "p75": round(float(np.percentile(array, 75, method="linear")), 4),
-        "p95": round(float(np.percentile(array, 95, method="linear")), 4),
-        "max": round(float(array.max()), 4),
+        "min": round(float(q[0]), 4),
+        "p05": round(float(q[1]), 4),
+        "p25": round(float(q[2]), 4),
+        "median": round(float(q[3]), 4),
+        "p75": round(float(q[4]), 4),
+        "p95": round(float(q[5]), 4),
+        "max": round(float(q[6]), 4),
     }
 
 
@@ -294,15 +294,19 @@ def audit_dataset(
 
     signature = hashlib.sha256()
     signature.update(yaml_path.read_bytes())
-    for annotation_file in sorted(root.rglob("*.json")):
-        if "annotations" in annotation_file.parts or "tiny_set" in annotation_file.name.lower():
-            try:
-                annotation_stat = annotation_file.stat()
-                signature.update(
-                    f"{annotation_file.name}\0{annotation_stat.st_size}\0{annotation_stat.st_mtime_ns}\n".encode()
-                )
-            except OSError:
-                signature.update(f"{annotation_file.name}\0unstatable\n".encode())
+    annotation_files = [
+        annotation_file
+        for annotation_file in sorted(root.rglob("*.json"))
+        if "annotations" in annotation_file.parts or "tiny_set" in annotation_file.name.lower()
+    ]
+    for annotation_file in annotation_files:
+        try:
+            annotation_stat = annotation_file.stat()
+            signature.update(
+                f"{annotation_file.name}\0{annotation_stat.st_size}\0{annotation_stat.st_mtime_ns}\n".encode()
+            )
+        except OSError:
+            signature.update(f"{annotation_file.name}\0unstatable\n".encode())
     signatures = set()
     split_reports: dict[str, Any] = {}
     per_image: list[dict[str, Any]] = []
@@ -500,9 +504,7 @@ def audit_dataset(
     for row in per_image:
         native_by_stem.setdefault(Path(row["path"]).stem.lower(), []).append(row)
     coco_checks: list[dict[str, Any]] = []
-    for annotation_file in sorted(root.rglob("*.json")):
-        if "annotations" not in annotation_file.parts and "tiny_set" not in annotation_file.name.lower():
-            continue
+    for annotation_file in annotation_files:
         try:
             annotation_doc = json.loads(annotation_file.read_text())
         except (OSError, json.JSONDecodeError):

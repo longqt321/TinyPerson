@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from numba import njit
 from PIL import Image
 from torchvision.ops import batched_nms as tv_batched_nms
 from torchvision.ops import box_area, nms
@@ -51,6 +52,19 @@ def batched_nms(
     return nms(boxes_t, scores_t, iou_thr).numpy().astype(np.int64, copy=False)
 
 
+@njit(cache=True)
+def _greedy_suppress_mask(sup_mat: np.ndarray) -> np.ndarray:
+    """JIT-compiled greedy suppression over an ``(N, N)`` boolean conflict matrix."""
+    n = sup_mat.shape[0]
+    keep = np.ones(n, dtype=np.bool_)
+    for i in range(n):
+        if keep[i]:
+            for j in range(i + 1, n):
+                if sup_mat[i, j]:
+                    keep[j] = False
+    return keep
+
+
 def suppress_border_truncated(
     boxes: torch.Tensor,
     scores: torch.Tensor,
@@ -74,12 +88,10 @@ def suppress_border_truncated(
     wh = (rb - lt).clamp(min=0.0)
     inter = wh[..., 0] * wh[..., 1]
     min_area = torch.minimum(areas[:, None], areas[None, :])
-    sup_mat = ((inter >= ios_thr * min_area) & (classes[:, None] == classes[None, :])).cpu().numpy()
-
-    keep_np = np.ones(n, dtype=bool)
-    for i in range(n):
-        if keep_np[i]:
-            keep_np[i + 1 :] &= ~sup_mat[i, i + 1 :]
+    sup_mat = np.ascontiguousarray(
+        ((inter >= ios_thr * min_area) & (classes[:, None] == classes[None, :])).cpu().numpy()
+    )
+    keep_np = _greedy_suppress_mask(sup_mat)
     return torch.from_numpy(np.flatnonzero(keep_np)).to(device=boxes.device, dtype=torch.long)
 
 

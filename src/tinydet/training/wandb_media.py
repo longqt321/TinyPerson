@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from pathlib import Path
 from types import MethodType
 
 import numpy as np
+import orjson
 
 from tinydet.training.val_predictions import build_prediction_row
 from tinydet.utils.atomic import atomic_write_text
@@ -19,7 +19,7 @@ def analysis_inputs(dataset_config: Path) -> tuple[Path, Path] | None:
     manifest = root / "manifest.json"
     if not manifest.is_file():
         return None
-    payload = json.loads(manifest.read_text())
+    payload = orjson.loads(manifest.read_bytes())
     candidate = payload.get("source_annotation_copy") or payload.get("source_annotation")
     if not candidate:
         return None
@@ -131,7 +131,10 @@ class WandbMediaCallback:
         predictions = output / "predictions.json"
         # Compact JSON: this file is machine-read by the analysis pass, and
         # indent=2 measured 2.4x slower and 1.7x larger for no benefit.
-        atomic_write_text(predictions, json.dumps({"images": self._rows}) + "\n")
+        atomic_write_text(
+            predictions,
+            orjson.dumps({"images": self._rows}, option=orjson.OPT_SERIALIZE_NUMPY).decode() + "\n",
+        )
         result = analyze_files(
             annotations, predictions, manifest_path=manifest, split="val",
             run=self.run, checkpoint=trainer.best,

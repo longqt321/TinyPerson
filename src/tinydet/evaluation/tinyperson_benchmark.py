@@ -22,7 +22,6 @@ TinyPerson annotates two person categories (``sea_person`` = category 1,
 """
 from __future__ import annotations
 
-import json
 import math
 import multiprocessing
 import os
@@ -35,9 +34,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import orjson
+from numba import njit
+from numba.typed import List as NumbaList
 
 from tinydet.utils.geometry import (
-    best_first_max,
     iod_matrix,
     iou_matrix,
 )
@@ -146,6 +147,104 @@ def _precompute_overlap_matrices(
     return local_of_row, det_sizes, gt_sizes, positive_iou, ignored_iou, ignored_iod
 
 
+@njit(cache=True)
+def _match_threshold_numba(
+    local_of_row: np.ndarray,
+    in_slot: np.ndarray,
+    out_slot: np.ndarray,
+    ign_slot: np.ndarray,
+    det_in_bin: np.ndarray,
+    in_mats: NumbaList,
+    out_mats: NumbaList,
+    ign_iou_mats: NumbaList,
+    ign_iod_mats: NumbaList,
+    in_avail: NumbaList,
+    out_avail: NumbaList,
+    ign_avail: NumbaList,
+    threshold: float,
+) -> np.ndarray:
+    """Bit-exact JIT-compiled TinyPerson greedy matcher for one size bin and IoU threshold.
+
+    Returns ``status`` of shape ``(N,)`` with ``1`` (TP), ``-1`` (FP), ``0`` (neutral/ignored).
+    """
+    n = local_of_row.shape[0]
+    status = np.zeros(n, dtype=np.int8)
+    for r in range(n):
+        local = local_of_row[r]
+
+        slot = in_slot[r]
+        if slot >= 0:
+            mat = in_mats[slot]
+            avail = in_avail[slot]
+            best_j = -1
+            best_val = -1.0
+            for j in range(avail.shape[0]):
+                if avail[j]:
+                    v = mat[local, j]
+                    if v >= threshold and v > best_val:
+                        best_val = v
+                        best_j = j
+            if best_j >= 0:
+                avail[best_j] = False
+                status[r] = 1
+                continue
+
+        oslot = out_slot[r]
+        if oslot >= 0:
+            mat = out_mats[oslot]
+            avail = out_avail[oslot]
+            best_j = -1
+            best_val = -1.0
+            for j in range(avail.shape[0]):
+                if avail[j]:
+                    v = mat[local, j]
+                    if v >= threshold and v > best_val:
+                        best_val = v
+                        best_j = j
+            if best_j >= 0:
+                avail[best_j] = False
+                continue
+
+        islot = ign_slot[r]
+        if islot >= 0:
+            iou_mat = ign_iou_mats[islot]
+            avail = ign_avail[islot]
+            hit_j = -1
+            for j in range(avail.shape[0]):
+                if avail[j] and iou_mat[local, j] >= threshold:
+                    hit_j = j
+                    break
+            if hit_j >= 0:
+                avail[hit_j] = False
+                continue
+            iod_mat = ign_iod_mats[islot]
+            iod_hit = False
+            for j in range(iod_mat.shape[1]):
+                if iod_mat[local, j] >= threshold:
+                    iod_hit = True
+                    break
+            if iod_hit:
+                continue
+
+        if det_in_bin[r]:
+            status[r] = -1
+    return status
+
+
+def _empty_numba_mat_list() -> NumbaList:
+    lst = NumbaList()
+    lst.append(np.empty((0, 0), dtype=np.float64))
+    lst.clear()
+    return lst
+
+
+def _empty_numba_bool_list() -> NumbaList:
+    lst = NumbaList()
+    lst.append(np.empty(0, dtype=np.bool_))
+    lst.clear()
+    return lst
+
+
 def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
     if _EVAL_CONTEXT is None:
         raise RuntimeError("Evaluator worker context was not initialized")
@@ -160,100 +259,98 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
         ignored_iod,
     ) = _EVAL_CONTEXT
     size_spec = SIZE_RANGES[bin_name]
-    det_in_bin = _sizes_in_range(det_sizes, size_spec)
+    det_in_bin = np.ascontiguousarray(_sizes_in_range(det_sizes, size_spec), dtype=np.bool_)
     positive_count = 0
     positive_count_by_cat: dict[int, int] = defaultdict(int)
-    inside_columns: dict[int, dict[int, np.ndarray]] = {}
-    outside_columns: dict[int, dict[int, np.ndarray]] = {}
+
+    in_mats = _empty_numba_mat_list()
+    out_mats = _empty_numba_mat_list()
+    ign_iou_mats = _empty_numba_mat_list()
+    ign_iod_mats = _empty_numba_mat_list()
+    in_slot_map: dict[tuple[int, int], int] = {}
+    out_slot_map: dict[tuple[int, int], int] = {}
+    ign_slot_map: dict[int, int] = {}
+    in_sizes: list[int] = []
+    out_sizes: list[int] = []
+    ign_sizes: list[int] = []
+
     for image_id in eval_ids:
-        inside_columns[image_id] = {}
-        outside_columns[image_id] = {}
         for category, sizes in gt_sizes[image_id].items():
             flags = _sizes_in_range(sizes, size_spec)
             inside_idx = np.flatnonzero(flags)
-            inside_columns[image_id][category] = inside_idx
-            outside_columns[image_id][category] = np.flatnonzero(~flags)
+            outside_idx = np.flatnonzero(~flags)
             n_in = int(inside_idx.size)
             positive_count += n_in
             positive_count_by_cat[category] += n_in
+            if n_in:
+                in_slot_map[(image_id, category)] = len(in_sizes)
+                in_mats.append(np.ascontiguousarray(positive_iou[image_id][category][:, inside_idx], dtype=np.float64))
+                in_sizes.append(n_in)
+            if outside_idx.size:
+                out_slot_map[(image_id, category)] = len(out_sizes)
+                out_mats.append(np.ascontiguousarray(positive_iou[image_id][category][:, outside_idx], dtype=np.float64))
+                out_sizes.append(int(outside_idx.size))
+        n_ign = ignored_iou[image_id].shape[1]
+        if n_ign > 0:
+            ign_slot_map[image_id] = len(ign_sizes)
+            ign_iou_mats.append(np.ascontiguousarray(ignored_iou[image_id], dtype=np.float64))
+            ign_iod_mats.append(np.ascontiguousarray(ignored_iod[image_id], dtype=np.float64))
+            ign_sizes.append(n_ign)
 
+    n_scored = len(scored)
+    in_slot_arr = np.full(n_scored, -1, dtype=np.int32)
+    out_slot_arr = np.full(n_scored, -1, dtype=np.int32)
+    ign_slot_arr = np.full(n_scored, -1, dtype=np.int32)
+    cat_arr = np.empty(n_scored, dtype=np.int64)
+    for r, (_, image_id, _, category) in enumerate(scored):
+        key = (image_id, category)
+        in_slot_arr[r] = in_slot_map.get(key, -1)
+        out_slot_arr[r] = out_slot_map.get(key, -1)
+        ign_slot_arr[r] = ign_slot_map.get(image_id, -1)
+        cat_arr[r] = category
+
+    local_arr = np.ascontiguousarray(local_of_row, dtype=np.int64)
     metrics: dict[str, Any] = {}
     per_category: dict[int, dict[str, Any]] = defaultdict(dict)
     num_eval_images = len(eval_ids)
     for threshold in IOU_THRESHOLDS:
-        avail_in: dict[tuple[int, int], np.ndarray] = {
-            (image_id, category): np.ones(cols.size, dtype=bool)
-            for image_id in eval_ids
-            for category, cols in inside_columns[image_id].items()
-            if cols.size
-        }
-        avail_out: dict[tuple[int, int], np.ndarray] = {
-            (image_id, category): np.ones(cols.size, dtype=bool)
-            for image_id in eval_ids
-            for category, cols in outside_columns[image_id].items()
-            if cols.size
-        }
-        avail_ign: dict[int, np.ndarray] = {
-            image_id: np.ones(ignored_iou[image_id].shape[1], dtype=bool)
-            for image_id in eval_ids
-            if ignored_iou[image_id].shape[1] > 0
-        }
-        tp, fp = [], []
-        tp_by_cat: dict[int, list[int]] = defaultdict(list)
-        fp_by_cat: dict[int, list[int]] = defaultdict(list)
-        for row, (_, image_id, _, category) in enumerate(scored):
-            local = int(local_of_row[row])
-            key = (image_id, category)
-            avail = avail_in.get(key)
-            if avail is not None:
-                overlaps = positive_iou[image_id][category][local][inside_columns[image_id][category]]
-                candidates = np.flatnonzero((overlaps >= threshold) & avail)
-            else:
-                candidates = np.empty(0, dtype=np.intp)
-            if avail is not None and candidates.size:
-                best = best_first_max(overlaps, candidates)
-                avail[best] = False
-                tp.append(1)
-                fp.append(0)
-                tp_by_cat[category].append(1)
-                fp_by_cat[category].append(0)
-                continue
+        in_avail = _empty_numba_bool_list()
+        for sz in in_sizes:
+            in_avail.append(np.ones(sz, dtype=np.bool_))
+        out_avail = _empty_numba_bool_list()
+        for sz in out_sizes:
+            out_avail.append(np.ones(sz, dtype=np.bool_))
+        ign_avail = _empty_numba_bool_list()
+        for sz in ign_sizes:
+            ign_avail.append(np.ones(sz, dtype=np.bool_))
 
-            avail_o = avail_out.get(key)
-            if avail_o is not None:
-                outside_overlaps = positive_iou[image_id][category][local][outside_columns[image_id][category]]
-                outside_candidates = np.flatnonzero((outside_overlaps >= threshold) & avail_o)
-            else:
-                outside_candidates = np.empty(0, dtype=np.intp)
-            if avail_o is not None and outside_candidates.size:
-                best = best_first_max(outside_overlaps, outside_candidates)
-                avail_o[best] = False
-                continue
-
-            avail_ig = avail_ign.get(image_id)
-            if avail_ig is not None:
-                ignored_row = ignored_iou[image_id][local]
-                ignored_hits = np.flatnonzero((ignored_row >= threshold) & avail_ig)
-                if ignored_hits.size:
-                    avail_ig[int(ignored_hits[0])] = False
-                    continue
-                if bool(np.any(ignored_iod[image_id][local] >= threshold)):
-                    continue
-            if not det_in_bin[row]:
-                continue
-            tp.append(0)
-            fp.append(1)
-            tp_by_cat[category].append(0)
-            fp_by_cat[category].append(1)
+        status = _match_threshold_numba(
+            local_arr,
+            in_slot_arr,
+            out_slot_arr,
+            ign_slot_arr,
+            det_in_bin,
+            in_mats,
+            out_mats,
+            ign_iou_mats,
+            ign_iod_mats,
+            in_avail,
+            out_avail,
+            ign_avail,
+            float(threshold),
+        )
+        active = status != 0
+        tp = (status[active] == 1).astype(np.float64)
+        fp = (status[active] == -1).astype(np.float64)
         metrics[f"AP@{threshold:.2f}"] = _ap(tp, fp, positive_count)
         metrics[f"MR@{threshold:.2f}"] = _mr(tp, fp, positive_count, num_eval_images)
         for category, category_gt in positive_count_by_cat.items():
-            per_category[category][f"AP@{threshold:.2f}"] = _ap(
-                tp_by_cat[category], fp_by_cat[category], category_gt
-            )
+            cat_active = active & (cat_arr == category)
+            tp_c = (status[cat_active] == 1).astype(np.float64)
+            fp_c = (status[cat_active] == -1).astype(np.float64)
+            per_category[category][f"AP@{threshold:.2f}"] = _ap(tp_c, fp_c, category_gt)
             per_category[category][f"MR@{threshold:.2f}"] = _mr(
-                tp_by_cat[category], fp_by_cat[category],
-                category_gt, num_eval_images,
+                tp_c, fp_c, category_gt, num_eval_images
             )
 
     valid_ap = [metrics[f"AP@{t:.2f}"] for t in IOU_THRESHOLDS if metrics[f"AP@{t:.2f}"] is not None]
@@ -288,10 +385,10 @@ def _in_range(box: list[float], size_spec: tuple[float, float, bool, bool]) -> b
     return left_ok and right_ok
 
 
-def _ap(tp: list[int], fp: list[int], positive_count: int) -> float | None:
+def _ap(tp: Sequence[int] | np.ndarray, fp: Sequence[int] | np.ndarray, positive_count: int) -> float | None:
     if positive_count == 0:
         return None
-    if not tp:
+    if len(tp) == 0:
         return 0.0
     tp_cum = np.cumsum(np.asarray(tp, dtype=float))
     fp_cum = np.cumsum(np.asarray(fp, dtype=float))
@@ -308,11 +405,16 @@ def _ap(tp: list[int], fp: list[int], positive_count: int) -> float | None:
     return float(sampled.mean())
 
 
-def _mr(tp: list[int], fp: list[int], positive_count: int, num_images: int) -> float | None:
+def _mr(
+    tp: Sequence[int] | np.ndarray,
+    fp: Sequence[int] | np.ndarray,
+    positive_count: int,
+    num_images: int,
+) -> float | None:
     """Log-average miss rate across 9 points evenly spaced in log10(FPPI) in [-2, 0]."""
     if positive_count == 0 or num_images == 0:
         return None
-    if not tp:
+    if len(tp) == 0:
         return 1.0
     tp_cum = np.cumsum(np.asarray(tp, dtype=float))
     fp_cum = np.cumsum(np.asarray(fp, dtype=float))
@@ -349,7 +451,7 @@ def subset_annotations_to_split(
     wanted = {path.name for path in dataset_images(data_yaml, split)}
     if not wanted:
         raise ValueError(f"No images for split {split!r} in {data_yaml}")
-    payload = json.loads(annotation_source.read_text())
+    payload = orjson.loads(annotation_source.read_bytes())
     keep_ids = {int(row["id"]) for row in payload["images"] if Path(row["file_name"]).name in wanted}
     images = [row for row in payload["images"] if int(row["id"]) in keep_ids]
     annotations = [row for row in payload["annotations"] if int(row["image_id"]) in keep_ids]
@@ -362,7 +464,7 @@ def subset_annotations_to_split(
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
-        json.dumps({**payload, "images": images, "annotations": annotations}, indent=2) + "\n"
+        orjson.dumps({**payload, "images": images, "annotations": annotations}, option=orjson.OPT_INDENT_2).decode() + "\n"
     )
     return destination
 
@@ -375,7 +477,7 @@ def _load_gt(source: Path | dict[str, Any]) -> dict[str, Any]:
         source_label = "<in-memory>"
     else:
         path = Path(source)
-        data = json.loads(path.read_text())
+        data = orjson.loads(path.read_bytes())
         source_label = str(path.resolve())
     if not all(key in data for key in ("images", "annotations", "categories")):
         raise ValueError(f"{source_label} is not COCO-style JSON")
@@ -437,7 +539,7 @@ def evaluate_tinyperson(
         pred_source = "<in-memory>"
     else:
         pred_path = Path(predictions_file)
-        payload = json.loads(pred_path.read_text())
+        payload = orjson.loads(pred_path.read_bytes())
         pred_source = str(pred_path.resolve())
     rows = payload.get("images")
     if not isinstance(rows, list):

@@ -11,7 +11,6 @@
 """
 
 import csv
-import json
 import math
 import os
 import sys
@@ -19,6 +18,7 @@ import time
 from pathlib import Path
 from types import MethodType
 
+import orjson
 import torch
 
 from tinydet.modules.lgt_detect import find_lgt_head
@@ -246,7 +246,11 @@ class SizeStratifiedValCallback:
             run = Path(trainer.save_dir).parent
             payload = {"images": self.rows}
             predictions = run / "metrics" / "val_predictions_latest.json"
-            atomic_write_text(predictions, json.dumps(payload) + "\n", fsync=False)
+            atomic_write_text(
+                predictions,
+                orjson.dumps(payload, option=orjson.OPT_SERIALIZE_NUMPY).decode() + "\n",
+                fsync=False,
+            )
 
             started = time.monotonic()
             gt_input = self._gt_cache if self._gt_cache is not None else self._annotations

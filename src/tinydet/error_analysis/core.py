@@ -9,7 +9,6 @@ AP is derived from the same matched records and cross-checked against it.
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -18,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import orjson
 
 from tinydet.error_analysis.baseline_summary import load_baseline_summaries
 from tinydet.evaluation.tinyperson_benchmark import (
@@ -222,7 +222,7 @@ def _label_map(raw: dict[str, Any], issues: list[dict[str, Any]]) -> dict[int, i
 
 def load_annotations(path: str | Path) -> AnnotationSet:
     source = Path(path).expanduser().resolve()
-    raw = json.loads(source.read_text())
+    raw = orjson.loads(source.read_bytes())
     if not isinstance(raw, dict) or not all(
         key in raw for key in ("images", "annotations", "categories")
     ):
@@ -331,7 +331,7 @@ def load_annotations(path: str | Path) -> AnnotationSet:
 
 def load_manifest(path: str | Path, split: str, annotations: AnnotationSet) -> ManifestSet:
     source = Path(path).expanduser().resolve()
-    raw = json.loads(source.read_text())
+    raw = orjson.loads(source.read_bytes())
     rows = raw.get("images_manifest")
     if not isinstance(rows, list):
         raise TypeError(f"{source} does not contain images_manifest")
@@ -405,7 +405,7 @@ def load_predictions(path: str | Path) -> PredictionSet:
     if source.suffix == ".pt":
         rows = _predictions_from_pt(source)
         return PredictionSet(rows=rows, source=str(source), sha256=sha256(source))
-    payload = json.loads(source.read_text())
+    payload = orjson.loads(source.read_bytes())
     rows = payload.get("images")
     if not isinstance(rows, list):
         raise TypeError("Prediction JSON must contain an images list")
@@ -1265,7 +1265,7 @@ def _provenance(annotations: AnnotationSet, manifest: ManifestSet | None,
     run_metadata = None
     run_path = Path(run).expanduser().resolve() if run is not None else None
     if run_path is not None and (run_path / "metadata.json").is_file():
-        run_metadata = json.loads((run_path / "metadata.json").read_text())
+        run_metadata = orjson.loads((run_path / "metadata.json").read_bytes())
     checkpoint_path = Path(checkpoint).expanduser().resolve() if checkpoint is not None else None
     if checkpoint_path is None and run_path is not None:
         for candidate in (run_path / "checkpoints" / "best.pt",
@@ -1273,7 +1273,7 @@ def _provenance(annotations: AnnotationSet, manifest: ManifestSet | None,
             if candidate.is_file():
                 checkpoint_path = candidate.resolve()
                 break
-    config_json = json.dumps(config.to_dict(), sort_keys=True)
+    config_json = orjson.dumps(config.to_dict(), option=orjson.OPT_SORT_KEYS).decode()
     return {
         "implementation_version": IMPLEMENTATION_VERSION,
         "created_at": datetime.now(UTC).isoformat(),

@@ -57,7 +57,7 @@ def resolve_checkpoint(run: Path, checkpoint: str | Path | None = None) -> Path:
     ]
     if not found:
         raise FileNotFoundError(f"No best.pt under {run}/checkpoints or {run}/training/weights")
-    if len({sha256(path) for path in found}) > 1:
+    if len(found) > 1 and len({sha256(path) for path in found}) > 1:
         raise ValueError(
             f"Run {run.name} exposes distinct best.pt files "
             f"({', '.join(path.relative_to(run).as_posix() for path in found)}); "
