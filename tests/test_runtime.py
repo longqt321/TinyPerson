@@ -153,13 +153,45 @@ def test_hf_sync_and_restore_mocked(monkeypatch) -> None:
         assert len(uploaded) == 1
         assert uploaded[0]["path_in_repo"] == "lgt_150e/colab-seed42"
         assert uploaded[0]["run_as_future"] is False
+        assert Path(uploaded[0]["folder_path"]).name == "_hf_staging"
 
         fresh_run = root / "fresh" / "lgt_150e" / "colab-seed42"
         assert restore_run_from_hf(fresh_run, "user/tinydet-runs", token="hf_test") is True
         assert (fresh_run / "training" / "weights" / "last.pt").read_bytes() == b"hf-last"
 
 
+def test_tar_zst_dataset_extract_and_slug_inference(tmp_path) -> None:
+    import tarfile
+
+    import zstandard
+
+    from tinydet.utils.runtime import _extract_archive, infer_dataset_slug
+
+    assert infer_dataset_slug("configs/data/visdrone.yaml") == "visdrone-yolo"
+    assert infer_dataset_slug("configs/data/tinyperson.yaml") == "tinyperson-yolo-v2"
+
+    src_ds = tmp_path / "src" / "visdrone-yolo"
+    src_ds.mkdir(parents=True)
+    (src_ds / "data.yaml").write_text("path: .\ntrain: images/train\nval: images/val\nnames:\n  0: pedestrian\n")
+
+    archive = tmp_path / "visdrone-yolo.tar.zst"
+    cctx = zstandard.ZstdCompressor(level=2, threads=2)
+    with (
+        archive.open("wb") as raw_f,
+        cctx.stream_writer(raw_f) as comp,
+        tarfile.open(fileobj=comp, mode="w|") as tar,
+    ):
+        tar.add(src_ds, arcname="visdrone-yolo")
+
+    dest = tmp_path / "unpacked"
+    _extract_archive(archive, dest)
+    assert (dest / "visdrone-yolo" / "data.yaml").is_file()
+
+
 def test_resolve_secret_strips_whitespace(monkeypatch) -> None:
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "get_token", lambda: None)
     monkeypatch.setenv("HF_TOKEN", "  hf_abc123\r\n ")
     assert resolve_secret("HF_TOKEN") == "hf_abc123"
     monkeypatch.setenv("HF_TOKEN", "   \r\n ")

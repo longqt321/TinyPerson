@@ -1,23 +1,19 @@
 """Explicit registration and hooks for custom TinyDet modules parsed from YAML."""
 
 import torch
+from ultralytics.utils.tal import dist2bbox
 
 from tinydet.modules.lgt_detect import (
     LGTDetect,
     SpatialShiftStencil,
     find_lgt_head,
+    nwd_similarity_xyxy,
     scale_invariant_wasserstein_xyxy,
 )
 
 
 def make_tiny_floor_forward(orig_fn, floor_val):
-    """Wrap a TAL assigner forward so tiny ground truths keep a score floor on their matched class only.
-
-    ``orig_fn`` returns ``(target_labels, target_bboxes, target_scores, fg_mask,
-    target_gt_idx)`` where ``target_bboxes`` is ``(b, h*w, 4)`` in pixel units
-    and ``fg_mask`` is ``(b, h*w)``. Only positive class channels (``target_scores > 0``)
-    are floored so false classes in multi-class training remain strictly zero.
-    """
+    """Wrap a TAL assigner forward so tiny ground truths keep a score floor on their matched class only."""
 
     def patched_forward(pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs):
         target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx = orig_fn(
@@ -38,11 +34,7 @@ def make_tiny_floor_forward(orig_fn, floor_val):
 
 
 def _wasserstein_sim_lowmem(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor) -> torch.Tensor:
-    """Memory-minimal scale-invariant Wasserstein similarity ``1 / (1 + D)`` for TAL.
-
-    Computes x and y axes sequentially with broadcast-safe in-place ops to cut peak VRAM ~3x
-    inside ``TaskAlignedAssigner`` for both 1D ``(K, 4)`` and broadcasted ``(B, M, N, 4)`` inputs.
-    """
+    """Memory-minimal scale-invariant Wasserstein similarity ``1 / (1 + D)`` for TAL."""
     g1 = gt_bboxes[..., 0].float()
     g2 = gt_bboxes[..., 2].float()
     p1 = pd_bboxes[..., 0].float()
@@ -67,6 +59,30 @@ def _wasserstein_sim_lowmem(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor) ->
     return dist.add_(1.0).reciprocal_()
 
 
+def _nwd_sim_lowmem(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor, constant_c: float = 12.8) -> torch.Tensor:
+    """Memory-minimal NWD similarity ``exp(-sqrt(W_2^2) / C)`` (Wang et al., 2021) in pixel coordinates."""
+    inv_c = -1.0 / max(float(constant_c), 1e-3)
+    g1 = gt_bboxes[..., 0].float()
+    g2 = gt_bboxes[..., 2].float()
+    p1 = pd_bboxes[..., 0].float()
+    p2 = pd_bboxes[..., 2].float()
+    sig_g = (g2 - g1).mul_(0.5).clamp_(min=1e-3)
+    sig_p = (p2 - p1).mul_(0.5).clamp_(min=1e-3)
+    w2_sq = ((g2 + g1) - (p2 + p1)).mul_(0.5).square_()
+    w2_sq.add_((sig_g - sig_p).square_())
+
+    g1 = gt_bboxes[..., 1].float()
+    g2 = gt_bboxes[..., 3].float()
+    p1 = pd_bboxes[..., 1].float()
+    p2 = pd_bboxes[..., 3].float()
+    sig_g = (g2 - g1).mul_(0.5).clamp_(min=1e-3)
+    sig_p = (p2 - p1).mul_(0.5).clamp_(min=1e-3)
+    w2_sq.add_(((g2 + g1) - (p2 + p1)).mul_(0.5).square_())
+    w2_sq.add_((sig_g - sig_p).square_())
+    del g1, g2, p1, p2, sig_g, sig_p
+    return w2_sq.add_(1e-6).sqrt_().mul_(inv_c).exp_()
+
+
 def make_wasserstein_iou_calculation(orig_iou_fn, weight: float, ref_scale_px: float = 32.0):
     """Blend CIoU with scale-invariant Wasserstein similarity smoothly for tiny/small GTs."""
     ref_area = max(ref_scale_px * ref_scale_px, 1.0)
@@ -80,6 +96,20 @@ def make_wasserstein_iou_calculation(orig_iou_fn, weight: float, ref_scale_px: f
         alpha = gt_area.div_(ref_area).add_(1.0).reciprocal_().mul_(float(weight)).to(dtype=ciou.dtype)
         w_sim = _wasserstein_sim_lowmem(gt_bboxes, pd_bboxes).to(dtype=ciou.dtype)
         return ciou.add_(w_sim.sub_(ciou).mul_(alpha))
+
+    return patched_iou_calculation
+
+
+def make_nwd_iou_calculation(orig_iou_fn, weight: float = 0.50, constant_c: float = 12.8):
+    """Blend CIoU with fixed-constant NWD similarity (Wang et al., 2021) for controlled comparison."""
+    w = float(weight)
+
+    def patched_iou_calculation(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor) -> torch.Tensor:
+        ciou = orig_iou_fn(gt_bboxes, pd_bboxes)
+        if gt_bboxes.numel() == 0:
+            return ciou
+        nwd = _nwd_sim_lowmem(gt_bboxes, pd_bboxes, constant_c=constant_c).to(dtype=ciou.dtype)
+        return ciou.mul_(1.0 - w).add_(nwd.mul_(w))
 
     return patched_iou_calculation
 
@@ -131,6 +161,73 @@ def make_wasserstein_bbox_forward(orig_bbox_forward, weight: float, ref_scale_px
     return patched_bbox_forward
 
 
+def make_nwd_bbox_forward(orig_bbox_forward, weight: float = 0.50, constant_c: float = 12.8):
+    """Hybrid CIoU + NWD regression loss ``(1 - w) * L_CIoU + w * (1 - NWD)`` in pixel coordinates."""
+    w = float(weight)
+
+    def patched_bbox_forward(
+        pred_dist,
+        pred_bboxes,
+        anchor_points,
+        target_bboxes,
+        target_scores,
+        target_scores_sum,
+        fg_mask,
+        imgsz,
+        stride,
+    ):
+        loss_iou, loss_dfl = orig_bbox_forward(
+            pred_dist,
+            pred_bboxes,
+            anchor_points,
+            target_bboxes,
+            target_scores,
+            target_scores_sum,
+            fg_mask,
+            imgsz,
+            stride,
+        )
+        fg_idx = fg_mask.nonzero(as_tuple=True)
+        if fg_idx[0].numel() == 0:
+            return loss_iou, loss_dfl
+        fg_stride = stride[fg_idx[1]]
+        fg_pred_px = pred_bboxes[fg_idx] * fg_stride
+        fg_target_px = target_bboxes[fg_idx] * fg_stride
+        pos_weight = target_scores[fg_idx].sum(-1, keepdim=True)
+        nwd_sim = nwd_similarity_xyxy(fg_pred_px, fg_target_px, constant_c=constant_c).unsqueeze(-1)
+        nwd_loss = (((1.0 - nwd_sim) * pos_weight.to(nwd_sim.dtype)).sum() / target_scores_sum.to(nwd_sim.dtype)).to(
+            loss_iou.dtype
+        )
+        return loss_iou * (1.0 - w) + nwd_loss * w, loss_dfl
+
+    return patched_bbox_forward
+
+
+def _patch_ltrb_aware_loss(loss_obj) -> None:
+    """Allow ``v8DetectionLoss`` to consume Barycenter-refined ``preds['ltrb']`` when ``reg_max > 1``."""
+    if getattr(loss_obj, "_ltrb_patched", False):
+        return
+    orig_loss = loss_obj.loss
+    orig_decode = loss_obj.bbox_decode
+
+    def bbox_decode(anchor_points: torch.Tensor, pred_dist: torch.Tensor) -> torch.Tensor:
+        active_ltrb = getattr(loss_obj, "_active_ltrb", None)
+        if active_ltrb is not None:
+            return dist2bbox(active_ltrb.permute(0, 2, 1).contiguous(), anchor_points, xywh=False)
+        return orig_decode(anchor_points, pred_dist)
+
+    def loss(preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]):
+        loss_obj._active_ltrb = preds.get("ltrb")
+        try:
+            return orig_loss(preds, batch)
+        finally:
+            loss_obj._active_ltrb = None
+
+    loss_obj.bbox_decode = bbox_decode
+    loss_obj.loss = loss
+    loss_obj._ltrb_patched = True
+
+
 def _install_hooks() -> None:
     """Apply model YAML hooks once after Ultralytics constructs a detector."""
     from ultralytics.nn.tasks import DetectionModel
@@ -148,6 +245,10 @@ def _install_hooks() -> None:
         tal_wasserstein = float(self.yaml.get("tal_wasserstein", 0.0))
         loss_wasserstein = float(self.yaml.get("loss_wasserstein", 0.0))
         ref_scale_px = float(self.yaml.get("wasserstein_ref_px", 32.0))
+        tal_nwd = float(self.yaml.get("tal_nwd", 0.0))
+        loss_nwd = float(self.yaml.get("loss_nwd", 0.0))
+        nwd_constant = float(self.yaml.get("nwd_constant", 12.8))
+
         losses = (criterion.one2many, criterion.one2one) if hasattr(criterion, "one2many") else (criterion,)
         for loss in losses:
             if hasattr(loss, "assigner"):
@@ -161,20 +262,32 @@ def _install_hooks() -> None:
                         assigner.iou_calculation, tal_wasserstein, ref_scale_px=ref_scale_px
                     )
                     assigner._wasserstein_patched = True
-            if loss_wasserstein > 0.0 and hasattr(loss, "bbox_loss"):
+                elif tal_nwd > 0.0 and not getattr(assigner, "_nwd_patched", False):
+                    assigner.iou_calculation = make_nwd_iou_calculation(
+                        assigner.iou_calculation, tal_nwd, constant_c=nwd_constant
+                    )
+                    assigner._nwd_patched = True
+            if hasattr(loss, "bbox_loss"):
                 bbox_loss = loss.bbox_loss
-                if not getattr(bbox_loss, "_wasserstein_patched", False):
+                if loss_wasserstein > 0.0 and not getattr(bbox_loss, "_wasserstein_patched", False):
                     bbox_loss.forward = make_wasserstein_bbox_forward(
                         bbox_loss.forward, loss_wasserstein, ref_scale_px=ref_scale_px
                     )
                     bbox_loss._wasserstein_patched = True
+                elif loss_nwd > 0.0 and not getattr(bbox_loss, "_nwd_patched", False):
+                    bbox_loss.forward = make_nwd_bbox_forward(
+                        bbox_loss.forward, loss_nwd, constant_c=nwd_constant
+                    )
+                    bbox_loss._nwd_patched = True
+
         head = find_lgt_head(self)
         if head is not None:
             if not isinstance(criterion, E2ELoss):
                 raise TypeError(
                     f"a model with {type(head).__name__} needs E2ELoss, got {type(criterion).__name__}; "
-                    "the auxiliary loss would silently not train otherwise"
+                    "set end2end: True in the model YAML"
                 )
+            _patch_ltrb_aware_loss(criterion.one2one)
             criterion._tinydet_head = head
         return criterion
 
@@ -186,7 +299,7 @@ def _install_hooks() -> None:
         total, items = original_e2e_call(self, preds, batch)
         head = getattr(self, "_tinydet_head", None)
         if head is None or not getattr(head, "training", True):
-            return total, items
+            return total.sum(), items
         raw = preds[1] if isinstance(preds, tuple) else preds
         aux = head.aux_loss(raw, batch)
         bsz = max(raw["one2one"]["boxes"].shape[0], 1)
@@ -199,15 +312,7 @@ def _install_hooks() -> None:
 
 
 def _install_tile_train_only_hook() -> None:
-    """Apply `args.tile` to the train loader only; validation stays full-frame.
-
-    Ultralytics passes `cfg.tile` to every `build_yolo_dataset` call, so enabling
-    tiling also tiles validation. That breaks the per-epoch TinyPerson benchmark:
-    `build_prediction_row` emits one row per *tile* keyed by the source image, and
-    the benchmark refuses duplicate images. Training the head on 1:1 tiles while
-    validating on full frames keeps both the intended distribution (tile space,
-    same as `evaluate_tiled`) and the per-epoch size-stratified diagnostics.
-    """
+    """Apply ``args.tile`` to the train loader only; validation stays full-frame."""
     from ultralytics.models.yolo.detect.train import DetectionTrainer
 
     if getattr(DetectionTrainer, "_tinydet_tile_hook", False):
@@ -222,7 +327,6 @@ def _install_tile_train_only_hook() -> None:
         try:
             return original_build_dataset(self, img_path, mode, batch)
         finally:
-            # Keep validator in full-frame mode while preserving provenance on trainer._tiled_train
             self._tiled_train = tile
 
     DetectionTrainer.build_dataset = build_dataset

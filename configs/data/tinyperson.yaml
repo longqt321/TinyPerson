@@ -1,0 +1,7 @@
+# Logical TinyPerson dataset pointer resolved across Local, Colab, Kaggle, and Modal
+path: .
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: person

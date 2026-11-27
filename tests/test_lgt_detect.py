@@ -69,7 +69,7 @@ def test_proposition_1_spatial_and_cross_scale_transport_exactness():
     head = LGTDetect(nc=1, reg_max=1, end2end=True, ch=(32, 64))
     head.stride = torch.tensor([4.0, 8.0])
     smax_dummy = [torch.zeros((1, 1, h2, w2)), torch.zeros((1, 1, h3, w3))]
-    tilde_mu_p, tilde_sig_p, _, valid_p = head._parent_candidate(
+    tilde_mu_p, tilde_sig_p, _, valid_p, _ = head._parent_candidate(
         0, h2, w2, [mu2, mu3], [sig2, sig3], smax_dummy
     )
     assert valid_p.all()
@@ -374,5 +374,103 @@ def test_vectorized_error_matching_and_xywh_conversion():
     assert gt_out[0]["status"] == "matched"
     assert gt_out[1]["status"] == "missed"
     assert gt_out[2]["status"] == "ignored"
+
+
+def test_multiclass_same_cls_isolation_and_regmax16_yolov10_backward(tmp_path):
+    """Verify Class-Aware gating isolates cross-class neighbors (VisDrone nc=10) & reg_max=16 DFL backward."""
+    import json
+
+    from tinydet.evaluation.coco_benchmark import evaluate_coco_suite
+
+    # 1. Multi-class isolation: a confident car (cls=3) next to a tiny pedestrian (cls=0) must NOT pull mu_0!
+    head10 = LGTDetect(nc=10, reg_max=1, end2end=True, ch=(32, 64))
+    head10.stride = torch.tensor([4.0, 8.0])
+    assert head10.lgt_stencil.channels == 6
+
+    raw_box = torch.ones((1, 4, 4, 4), dtype=torch.float32) * 0.5  # symmetric box centered on each cell
+    raw_cls_diff = torch.full((1, 10, 4, 4), -4.0)
+    raw_cls_diff[:, 5] = -3.0       # background cells default to cls=5 (truck), not pedestrian (cls=0)
+    raw_cls_diff[0, 0, 2, 2] = 1.0  # center cell (2,2) is pedestrian (cls=0)
+    raw_cls_diff[0, 3, 2, 3] = 8.0  # right neighbor (2,3) is a high-score car (cls=3)
+    raw_box_shifted = raw_box.clone()
+    raw_box_shifted[0, :, 2, 3] = torch.tensor([0.2, 0.2, 3.8, 3.8])  # large car shifted right
+
+    mu0, sig0 = ltrb_to_gaussian(raw_box_shifted)
+    mu1, sig1 = ltrb_to_gaussian(torch.ones((1, 4, 2, 2)) * 0.5)
+    s0 = raw_cls_diff.amax(dim=1, keepdim=True)
+    s1 = torch.full((1, 1, 2, 2), -4.0)
+    c0 = raw_cls_diff.argmax(dim=1, keepdim=True).float()
+    c1 = torch.full((1, 1, 2, 2), 9.0)  # parent is motor (cls=9), also different from pedestrian (cls=0)
+
+    ref_ltrb, _ = head10._refine_level(0, raw_box_shifted, raw_cls_diff, [mu0, mu1], [sig0, sig1], [s0, s1], [c0, c1])
+    assert torch.allclose(ref_ltrb[0, :, 2, 2], raw_box_shifted[0, :, 2, 2], atol=1e-6)
+
+    # 2. YOLOv10n-P2 + LGTDetect (reg_max=16 DFL) forward + E2ELoss backward + Detect.fuse()
+    v10_lgt = build_model({"config": str(REPO_ROOT / "configs/model/yolov10n_p2_lgt.yaml")})
+    v10_head = find_lgt_head(v10_lgt.model)
+    assert v10_head is not None and v10_head.reg_max == 16
+    v10_lgt.model.train()
+    criterion = v10_lgt.model.init_criterion()
+    imgs = torch.randn(2, 3, 128, 128)
+    batch = {
+        "img": imgs,
+        "batch_idx": torch.tensor([0.0, 1.0]),
+        "cls": torch.tensor([[0.0], [0.0]]),
+        "bboxes": torch.tensor([[0.30, 0.30, 0.06, 0.08], [0.60, 0.60, 0.10, 0.12]]),
+    }
+    preds = v10_lgt.model(imgs)
+    assert "ltrb" in preds["one2one"]
+    assert preds["one2one"]["boxes"].shape[1] == 64
+    assert preds["one2one"]["ltrb"].shape[1] == 4
+    loss_val, items = criterion(preds, batch)
+    loss_val.backward()
+    assert v10_head.lgt_logit_beta_box.grad is not None and v10_head.lgt_logit_beta_box.grad.abs().sum() > 0
+    assert "lgt_loss" in items
+
+    fused_v10 = copy.deepcopy(v10_lgt.model).eval()
+    fused_v10.fuse()
+    with torch.no_grad():
+        det_v10, _ = fused_v10(imgs)
+    assert det_v10.shape == (2, 300, 6)
+
+    # 3. NWD competitor YAML build + backward & YOLO26s + YOLO11n-NMS build sanity
+    nwd_m = build_model({"config": str(REPO_ROOT / "configs/model/yolo26n_p2_nwd.yaml")})
+    nwd_m.model.train()
+    nwd_crit = nwd_m.model.init_criterion()
+    nwd_loss, _ = nwd_crit(nwd_m.model(imgs), batch)
+    nwd_loss.backward()
+    assert torch.isfinite(nwd_loss)
+
+    s_lgt = build_model({"config": str(REPO_ROOT / "configs/model/yolo26s_p2_lgt.yaml")})
+    y11_nms = build_model({"config": str(REPO_ROOT / "configs/model/yolo11n_p2_nms.yaml")})
+    assert sum(p.numel() for p in s_lgt.model.parameters()) > 8_000_000
+    assert getattr(y11_nms.model.model[-1], "end2end", False) is False
+
+    # 4. Verify faster-coco-eval suite (COCO-100 + VisDrone-500 + Occlusion + TIDE + Crowded pairs)
+    gt_json = tmp_path / "vd_gt.json"
+    dt_json = tmp_path / "vd_dt.json"
+    gt_json.write_text(json.dumps({
+        "images": [{"id": 1, "file_name": "images/val/0001.jpg", "width": 400, "height": 400}],
+        "categories": [{"id": 1, "name": "pedestrian"}, {"id": 4, "name": "car"}],
+        "annotations": [
+            {"id": 1, "image_id": 1, "category_id": 1, "bbox": [20.0, 20.0, 6.0, 6.0], "area": 36.0, "iscrowd": 0, "occlusion": 0},
+            {"id": 2, "image_id": 1, "category_id": 1, "bbox": [27.0, 20.0, 6.0, 6.0], "area": 36.0, "iscrowd": 0, "occlusion": 1},
+            {"id": 3, "image_id": 1, "category_id": 4, "bbox": [100.0, 100.0, 50.0, 40.0], "area": 2000.0, "iscrowd": 0, "occlusion": 2},
+        ],
+    }))
+    dt_json.write_text(json.dumps({
+        "images": [{
+            "path": "/tmp/images/val/0001.jpg",
+            "boxes": [[20.0, 20.0, 26.0, 26.0], [100.0, 100.0, 150.0, 140.0]],
+            "scores": [0.92, 0.88],
+            "classes": [0, 3],
+        }]
+    }))
+    suite = evaluate_coco_suite(gt_json, dt_json, collapse_single_class=False)
+    assert suite["visdrone_maxdet500"]["AP50"] > 0.70
+    assert suite["occlusion_ap50"] is not None
+    assert suite["tide_and_crowded"]["counts"]["TP"] == 2
+    assert suite["tide_and_crowded"]["counts"]["FN_Miss"] == 1
+    assert suite["tide_and_crowded"]["crowded_pairs"]["crowded_lt_10px"]["ground_truths"] == 2
 
 

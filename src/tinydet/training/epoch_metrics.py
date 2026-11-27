@@ -358,6 +358,8 @@ class RealtimeLogCallback:
             vals = tloss.detach().float().view(-1).cpu().tolist()
             names = getattr(trainer, "loss_names", ("box", "cls", "l1"))
             loss_str = " | " + " ".join(f"{n}={v:.4f}" for n, v in zip(names, vals))
+        elif isinstance(tloss, dict) and tloss:
+            loss_str = " | " + " ".join(f"{k}={float(v):.4f}" for k, v in tloss.items())
         total_b = f"/{self._num_batches}" if self._num_batches else ""
         print(
             f"[live] epoch {epoch}/{epochs} | batch {self._batch_idx}{total_b} "

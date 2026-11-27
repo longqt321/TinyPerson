@@ -2,8 +2,6 @@
 
 Delegates standard IoU and box-format conversion to ``torchvision.ops`` while
 preserving float64 arithmetic for TinyPerson protocol reproducibility.
-Intersection-over-detection (IoD) is kept here because it is TinyPerson-specific
-(ignore-region matching) and has no equivalent in ``torchvision.ops``.
 """
 
 from __future__ import annotations
@@ -13,7 +11,6 @@ from collections.abc import Iterable, Sequence
 
 import numpy as np
 import torch
-from numba import njit
 from torchvision.ops import box_iou
 
 Box = Sequence[float]
@@ -87,35 +84,28 @@ def iod(detection: Box, ignored: Iterable[Box] | np.ndarray) -> np.ndarray:
 
 
 def best_first_max(overlaps: np.ndarray, candidates: np.ndarray) -> int:
-    """Index of the highest overlap, first index on ties (``max(key=...)``)."""
+    """Index of the highest overlap, first index on ties."""
     return int(candidates[int(np.argmax(overlaps[candidates]))])
 
 
 def best_last_max(overlaps: np.ndarray, candidates: np.ndarray) -> int:
-    """Index of the highest overlap, last index on ties (``max`` on tuples)."""
+    """Index of the highest overlap, last index on ties."""
     peak = overlaps[candidates].max()
     return int(candidates[overlaps[candidates] == peak].max())
 
 
-@njit(cache=True)
 def greedy_assign_first_max(overlap_mat: np.ndarray, order: np.ndarray, threshold: float) -> np.ndarray:
-    """JIT-compiled greedy 1-to-1 GT assignment at ``IoU >= threshold`` (first-max tie breaking)."""
+    """Vectorized C-numpy greedy 1-to-1 GT assignment at ``IoU >= threshold`` (first-max tie breaking)."""
     n_det, n_gt = overlap_mat.shape
     assigned = np.full(n_det, -1, dtype=np.int64)
     if n_det == 0 or n_gt == 0:
         return assigned
-    gt_available = np.ones(n_gt, dtype=np.bool_)
-    for k in range(order.shape[0]):
-        det_idx = order[k]
-        best_gt = -1
-        best_iou = threshold
-        for j in range(n_gt):
-            if gt_available[j]:
-                val = overlap_mat[det_idx, j]
-                if val >= threshold and (best_gt == -1 or val > best_iou):
-                    best_iou = val
-                    best_gt = j
-        if best_gt != -1:
-            gt_available[best_gt] = False
+    masked = overlap_mat.copy()
+    masked[masked < threshold] = -1.0
+    for det_idx in order.tolist():
+        row = masked[det_idx]
+        best_gt = int(np.argmax(row))
+        if row[best_gt] >= threshold:
             assigned[det_idx] = best_gt
+            masked[:, best_gt] = -1.0
     return assigned

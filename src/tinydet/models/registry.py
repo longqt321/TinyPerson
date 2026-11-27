@@ -3,6 +3,7 @@ from typing import Any, cast
 
 from ultralytics import YOLO
 from ultralytics.cfg import get_cfg
+from ultralytics.utils.downloads import attempt_download_asset
 
 from tinydet.models.ultralytics import register_ultralytics_modules
 
@@ -14,7 +15,7 @@ def build_model(config: dict):
         raise ValueError(f"Model config does not exist: {model_path}")
 
     model = YOLO(str(model_path))
-    net = cast(Any, model.model)  # Ultralytics stubs type YOLO.model as `str | None`
+    net = cast(Any, model.model)
     if isinstance(getattr(net, "args", None), dict):
         net.args = get_cfg(overrides=net.args)
     if getattr(net, "yaml", {}).get("e2e_eval", False):
@@ -22,9 +23,13 @@ def build_model(config: dict):
 
     pretrained = config.get("pretrained")
     if pretrained:
-        weights = Path(pretrained)
+        weights = Path(str(pretrained)).expanduser()
         if not weights.is_file():
-            raise ValueError(f"Pretrained checkpoint does not exist: {weights}")
+            downloaded = Path(attempt_download_asset(str(pretrained)))
+            if downloaded.is_file():
+                weights = downloaded
+        if not weights.is_file():
+            raise ValueError(f"Pretrained checkpoint does not exist: {pretrained}")
         model.load(str(weights))
 
     return model

@@ -1,46 +1,40 @@
-# agy-allow-dup
 """Local Gaussian Transport Detection Head (``LGTDetect``) for NMS-free tiny object detection.
 
 Mathematical formulation
 ------------------------
-In DFL-free, NMS-free detectors (YOLO26: ``reg_max=1``, ``end2end=True``), each grid cell
-``u = (y, x)`` on FPN level ``s`` predicts four scalar distances ``(l, t, r, b)`` in stride
-units and class logits ``s_cls``. Standard ``one2one`` heads suffer two failure modes on tiny
-crowded objects:
-1. Single-cell box regression variance without DFL collapses high-IoU precision (``AP75``).
+In NMS-free detectors (YOLO26: ``reg_max=1``, YOLOv10: ``reg_max=16``, ``end2end=True``), each grid
+cell ``u = (y, x)`` on FPN level ``s`` predicts decoded stride-normalized distances ``(l, t, r, b)``
+and class logits ``s_cls``. Standard ``one2one`` heads suffer two failure modes on tiny crowded
+objects:
+1. Single-cell box regression variance collapses high-IoU precision (``AP75``).
 2. Appearance-only ``one2one_cv3`` classification is geometry-blind, falsely suppressing the
-   second object in close tiny pairs.
+   second object in close tiny pairs or cross-class neighbors in multi-class aerial scenes.
 
-``LGTDetect`` models each cell's box as a diagonal 2D Gaussian ``G(u) = N(mu(u), diag(sigma(u)^2))``
-with ``mu = ((r - l)/2, (b - t)/2)`` and ``sigma = ((l + r)/2, (t + b)/2)``, and performs:
+``LGTDetect`` models each cell's decoded box expectation as a diagonal 2D Gaussian
+``G(u) = N(mu(u), diag(sigma(u)^2))`` with ``mu = ((r - l)/2, (b - t)/2)`` and
+``sigma = ((l + r)/2, (t + b)/2)``, and performs:
 
 1. **Coordinate-Frame Transport (Proposition 1):**
-   Across the ``3x3`` spatial neighborhood ``delta_k in {-1, 0, +1}^2`` (extracted via a frozen
-   depthwise shift ``Conv2d``) plus the co-located parent cell interpolated from FPN level ``s+1``,
-   neighbor Gaussians are transported into cell ``u``'s local coordinate frame:
-   ``tilde_mu_k(u) = mu(u + delta_k) + delta_k``, ``tilde_sigma_k(u) = sigma(u + delta_k)``.
-   Identical physical boxes across adjacent cells or adjacent FPN scales satisfy
-   ``tilde_mu_k == mu`` and ``tilde_sigma_k == sigma`` exactly.
+   Across the ``3x3`` spatial neighborhood ``delta_k in {-1, 0, +1}^2`` plus the co-located parent
+   cell interpolated from FPN level ``s+1``, neighbor Gaussians are transported into cell ``u``'s
+   local coordinate frame so identical physical boxes satisfy ``tilde_mu_k == mu`` and
+   ``tilde_sigma_k == sigma`` exactly.
 
 2. **Hyperparameter-Free Scale-Invariant Wasserstein Distance (Proposition 2):**
-   ``D_k(u) = ((tilde_mu_kx - mu_x)^2 + (tilde_sigma_kx - sigma_x)^2) / (sigma_x^2 + tilde_sigma_kx^2 + eps)``
-   ``       + ((tilde_mu_ky - mu_y)^2 + (tilde_sigma_ky - sigma_y)^2) / (sigma_y^2 + tilde_sigma_ky^2 + eps)``
-   Unlike fixed-constant NWD, ``D_k(lambda * B1, lambda * B2) == D_k(B1, B2)`` for all ``lambda > 0``
-   with zero manual scale constants, separating duplicate predictions on larger targets from
-   distinct adjacent ``tiny1`` instances.
+   ``D_k(u) = sum_{a in {x,y}} ((tilde_mu_ka - mu_a)^2 + (tilde_sigma_ka - sigma_a)^2) / (sigma_a^2 + tilde_sigma_ka^2 + eps)``
+   Unlike fixed-constant NWD, ``D_k(lambda * B1, lambda * B2) == D_k(B1, B2)`` for all ``lambda > 0``.
 
-3. **Closed-Form Local Wasserstein Barycenter & Differentiable Dominance Gate (Proposition 3):**
-   - Box branch (``one2one_cv2``): refines ``(mu, sigma)`` via confidence- and affinity-weighted
-     Wasserstein barycenter ``w_k = softmax(gamma * log(sigmoid(s_k)) - tau_box * D_k)``.
-   - Classification branch (``one2one_cv3``): computes differentiable NMS dominance pressure
-     ``M_dom = max_{k != 0} A_k * ReLU(s_k - s_0)`` and neighborhood consensus support
-     ``M_sup = mean_{k != 0} A_k * sigmoid(s_k)`` where ``A_k = exp(-tau_cls * D_k)``, modulating
-     ``one2one`` class logits through a residual ``1x1`` bottleneck zero-initialized at its output.
+3. **Class-Aware Local Wasserstein Barycenter & Differentiable Dominance Gate (Proposition 3):**
+   - Multi-class safety: only neighbors sharing the same dominant class ``hat_c(u + delta_k) == hat_c(u)``
+     participate in transport, preventing large vehicles from shifting or suppressing nearby pedestrians.
+   - Box branch: refines ``(mu, sigma)`` for both DFL-free (``reg_max=1``) and DFL (``reg_max>1``)
+     heads via ``w_k = softmax(gamma * log(sigmoid(s_k)) - tau_box * D_k)``.
+   - Classification branch: computes differentiable NMS dominance ``M_dom`` and consensus ``M_sup``
+     to modulate ``one2one`` class logits via a zero-initialized ``1x1`` residual bottleneck.
 
 4. **Training-Only Dense Gaussian Field Distillation:**
-   During training, ``one2many`` (supervised with ``topk=10``) distills its dense Gaussian box field
-   into ``one2one_cv2``'s pre-barycenter field weighted by ``one2many`` foreground confidence. At
-   inference (``Detect.fuse()``), ``one2many`` is removed completely with zero runtime overhead.
+   During training, ``one2many`` distills its dense Gaussian box field into ``one2one_cv2`` weighted
+   by foreground confidence. At ``Detect.fuse()``, ``one2many`` is dropped with zero runtime cost.
 """
 
 from __future__ import annotations
@@ -52,8 +46,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 from ultralytics.nn.modules.head import Detect
+from ultralytics.utils.tal import make_anchors
 
-# Center first (k=0), followed by the 8 surrounding (dx, dy) spatial taps.
 OFFSETS_3X3: tuple[tuple[int, int], ...] = (
     (0, 0),
     (-1, -1),
@@ -66,12 +60,11 @@ OFFSETS_3X3: tuple[tuple[int, int], ...] = (
     (1, 1),
 )
 NUM_SPATIAL = len(OFFSETS_3X3)  # 9
-NUM_CANDIDATES = NUM_SPATIAL + 1  # 9 spatial + 1 coarser-scale parent = 10
-NUM_NEIGHBORS = NUM_CANDIDATES - 1  # 9 non-self candidates
+NUM_NEIGHBORS = (NUM_SPATIAL - 1) + 1  # 8 spatial + 1 parent = 9
 
 
 def xyxy_to_gaussian(boxes: Tensor, eps_sigma: float = 1e-3) -> tuple[Tensor, Tensor]:
-    """Convert ``(..., 4)`` ``[x1, y1, x2, y2]`` boxes into ``(mu, sigma)`` of shape ``(..., 2)``."""
+    """Convert ``(..., 4)`` ``[x1, y1, x2, y2]`` boxes into ``(mu, sigma)`` Gaussian parameters."""
     mu = 0.5 * (boxes[..., 2:] + boxes[..., :2])
     sigma = (0.5 * (boxes[..., 2:] - boxes[..., :2])).clamp(min=eps_sigma)
     return mu, sigma
@@ -97,6 +90,20 @@ def wasserstein_similarity_xyxy(box1: Tensor, box2: Tensor, kappa: float = 1.0) 
     return 1.0 / (1.0 + kappa * dist)
 
 
+def nwd_similarity_xyxy(
+    box1: Tensor,
+    box2: Tensor,
+    constant_c: float = 12.8,
+    eps: float = 1e-6,
+    eps_sigma: float = 1e-3,
+) -> Tensor:
+    """Published Normalized Wasserstein Distance (Wang et al., 2021) ``exp(-sqrt(W_2^2) / C)`` in pixel units."""
+    mu1, sig1 = xyxy_to_gaussian(box1.float(), eps_sigma=eps_sigma)
+    mu2, sig2 = xyxy_to_gaussian(box2.float(), eps_sigma=eps_sigma)
+    w2_sq = ((mu1 - mu2).square() + (sig1 - sig2).square()).sum(dim=-1)
+    return torch.exp(-torch.sqrt(w2_sq + eps) / max(float(constant_c), 1e-3))
+
+
 def ltrb_to_gaussian(ltrb: Tensor, eps_sigma: float = 0.05) -> tuple[Tensor, Tensor]:
     """Convert ``(B, 4, H, W)`` stride-normalized ``[l, t, r, b]`` into ``(mu, sigma)`` ``(B, 2, H, W)``."""
     left, top, right, bottom = ltrb.unbind(dim=1)
@@ -116,11 +123,7 @@ def gaussian_to_ltrb(mu: Tensor, sigma: Tensor) -> Tensor:
 
 
 class SpatialShiftStencil(nn.Module):
-    """Fixed depthwise ``3x3`` shift convolution extracting ``OFFSETS_3X3`` taps and valid masks.
-
-    Stored as a non-parameter buffer (``register_buffer``) rather than an ``nn.Parameter`` so
-    Ultralytics ``BaseTrainer`` never forces ``requires_grad=True`` on the Dirac shift stencil.
-    """
+    """Fixed depthwise ``3x3`` shift convolution extracting ``OFFSETS_3X3`` taps and valid masks."""
 
     shift_weight: Tensor
     dx: Tensor
@@ -166,7 +169,7 @@ class SpatialShiftStencil(nn.Module):
         self._valid_cache[key] = valid
         return valid
 
-    def forward(self, field: Tensor) -> tuple[Tensor, Tensor]:  # agy-allow-dup
+    def forward(self, field: Tensor) -> tuple[Tensor, Tensor]:
         """Return shifted ``(B, C, 9, H, W)`` field and ``(1, 9, H, W)`` in-bounds boolean mask."""
         bsz, channels, height, width = field.shape
         weight = self.shift_weight.to(dtype=field.dtype)
@@ -178,19 +181,7 @@ class SpatialShiftStencil(nn.Module):
 
 
 class LGTDetect(Detect):
-    """YOLO End-to-End ``Detect`` head with Local Gaussian Transport refinement and dominance gating.
-
-    Args:
-        nc: Number of object classes.
-        reg_max: DFL bins (1 for YOLO26 DFL-free direct regression).
-        end2end: Enable NMS-free one-to-one inference path.
-        ch: Input feature channels per FPN level ``[P2, P3, ...]``.
-        rel_hidden: Hidden channels of the ``1x1`` relational dominance gate MLP.
-        init_tau: Initial sharpness ``tau`` for Wasserstein affinity and barycenter kernels.
-        init_beta_box: Initial barycenter box blending factor in ``(0, 1)``.
-        distill_gain: Weight of training-only ``one2many -> one2one`` dense Gaussian distillation.
-        cross_scale: Include the co-located parent FPN level candidate ``P_{s+1} -> P_s``.
-    """
+    """YOLO End-to-End ``Detect`` head with Class-Aware Local Gaussian Transport and universal DFL support."""
 
     def __init__(
         self,
@@ -216,8 +207,8 @@ class LGTDetect(Detect):
         self.distill_gain = float(distill_gain)
         self.cross_scale = bool(cross_scale)
 
-        # Named without "one2one_" prefix so Detect.fuse() keeps them intact in end2end mode.
-        self.lgt_stencil = SpatialShiftStencil(channels=5)
+        stencil_ch = 6 if self.nc > 1 else 5
+        self.lgt_stencil = SpatialShiftStencil(channels=stencil_ch)
 
         tau_raw = math.log(math.expm1(max(init_tau - 0.1, 1e-3)))
         gamma_raw = math.log(math.expm1(1.0))
@@ -228,14 +219,16 @@ class LGTDetect(Detect):
         self.lgt_logit_beta_box = nn.Parameter(torch.full((self.nl,), beta_logit, dtype=torch.float32))
         self.lgt_log_tau_cls = nn.Parameter(torch.full((self.nl,), tau_raw, dtype=torch.float32))
 
-        rel_in_channels = NUM_NEIGHBORS * 2 + 2  # 9 affinities + 9 weighted score diffs + M_dom + M_sup = 20
+        rel_in_channels = NUM_NEIGHBORS * 2 + 2  # 20 relational channels
         self.lgt_cls_gate = nn.ModuleList(
             self._build_cls_gate(rel_in_channels, self.rel_hidden, self.nc) for _ in range(self.nl)
         )
 
         self._raw_o2o_gauss: list[tuple[Tensor, Tensor]] | None = None
         self._stride_ratios: list[float] | None = None
-        self._parent_grid_cache: dict[tuple[int, int, int, int, int, torch.device, torch.dtype], tuple[Tensor, Tensor, Tensor]] = {}
+        self._parent_grid_cache: dict[
+            tuple[int, int, int, int, int, torch.device, torch.dtype], tuple[Tensor, Tensor, Tensor]
+        ] = {}
         self._level_mask_cache: dict[tuple[int, int, int, torch.device], tuple[Tensor, Tensor, Tensor]] = {}
         self._last_distill_tensor: Tensor | None = None
         self.last_stats: dict[str, float] = {}
@@ -263,7 +256,6 @@ class LGTDetect(Detect):
         return state
 
     def _get_parent_ratio(self, level_idx: int, p_idx: int) -> float:
-        """Return ``stride[p_idx] / stride[level_idx]`` with one-time host caching (zero per-batch sync)."""
         cached = self._stride_ratios
         if cached is not None and level_idx < len(cached):
             return cached[level_idx]
@@ -290,7 +282,6 @@ class LGTDetect(Detect):
         device: torch.device,
         dtype: torch.dtype,
     ) -> tuple[Tensor, Tensor, Tensor]:
-        """Cache static parent-to-child coordinate offsets ``(dx_p, dy_p, valid_p)`` per grid shape."""
         key = (level_idx, height, width, hp, wp, device, dtype)
         cached = self._parent_grid_cache.get(key)
         if cached is not None:
@@ -314,6 +305,16 @@ class LGTDetect(Detect):
         bsz, _, height, width = raw_box.shape
         return self.dfl(raw_box.view(bsz, 4 * self.reg_max, -1)).view(bsz, 4, height, width)
 
+    def _get_decode_boxes(self, x: dict[str, Tensor]) -> Tensor:
+        """Decode ``x['ltrb']`` directly when refined post-DFL coordinates are provided (``reg_max > 1``)."""
+        if "ltrb" not in x:
+            return super()._get_decode_boxes(x)
+        shape = x["feats"][0].shape
+        if self.dynamic or self.shape != shape:
+            self.anchors, self.strides = (a.transpose(0, 1) for a in make_anchors(x["feats"], self.stride, 0.5))
+            self.shape = shape
+        return self.decode_bboxes(x["ltrb"], self.anchors.unsqueeze(0), x.get("angle")) * self.strides
+
     def _parent_candidate(
         self,
         level_idx: int,
@@ -322,7 +323,8 @@ class LGTDetect(Detect):
         mu_list: list[Tensor],
         sigma_list: list[Tensor],
         smax_list: list[Tensor],
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        cls_list: list[Tensor] | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor | None]:
         """Transport co-located parent cell ``level_idx + 1`` into child grid coordinates."""
         bsz = mu_list[level_idx].shape[0]
         device = mu_list[level_idx].device
@@ -333,7 +335,8 @@ class LGTDetect(Detect):
             sig_dummy = torch.full((bsz, 2, 1, height, width), 0.05, device=device, dtype=dtype)
             zero_1 = torch.zeros((bsz, 1, height, width), device=device, dtype=dtype)
             valid_p = torch.zeros((1, 1, height, width), device=device, dtype=torch.bool)
-            return zero_2, sig_dummy, zero_1, valid_p
+            cls_dummy = torch.full((bsz, 1, height, width), -1.0, device=device, dtype=dtype) if cls_list is not None else None
+            return zero_2, sig_dummy, zero_1, valid_p, cls_dummy
 
         p_idx = level_idx + 1
         mu_p = mu_list[p_idx]
@@ -342,11 +345,15 @@ class LGTDetect(Detect):
         hp, wp = mu_p.shape[2], mu_p.shape[3]
         ratio = self._get_parent_ratio(level_idx, p_idx)
 
-        packed_p = torch.cat((mu_p, sig_p, smax_p), dim=1)
+        tensors = [mu_p, sig_p, smax_p]
+        if cls_list is not None:
+            tensors.append(cls_list[p_idx])
+        packed_p = torch.cat(tensors, dim=1)
         up = F.interpolate(packed_p, size=(height, width), mode="nearest")
         up_mu = up[:, 0:2]
         up_sig = up[:, 2:4]
         up_smax = up[:, 4:5]
+        up_cls = up[:, 5:6] if cls_list is not None else None
 
         dx_p, dy_p, valid_p = self._get_parent_offsets(
             level_idx, height, width, hp, wp, ratio, device, dtype
@@ -355,7 +362,7 @@ class LGTDetect(Detect):
         tilde_mu_y = ratio * up_mu[:, 1] + dy_p
         tilde_mu_p = torch.stack((tilde_mu_x, tilde_mu_y), dim=1).unsqueeze(2)
         tilde_sig_p = (ratio * up_sig).clamp(min=0.05).unsqueeze(2)
-        return tilde_mu_p, tilde_sig_p, up_smax, valid_p
+        return tilde_mu_p, tilde_sig_p, up_smax, valid_p, up_cls
 
     def _get_level_masks(
         self,
@@ -365,7 +372,6 @@ class LGTDetect(Detect):
         valid_sp: Tensor,
         valid_p: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor]:
-        """Cache static ``(valid, valid_nb, denom_nb)`` tensors per FPN grid resolution."""
         key = (level_idx, height, width, valid_sp.device)
         cached = self._level_mask_cache.get(key)
         if cached is not None:
@@ -386,24 +392,24 @@ class LGTDetect(Detect):
         mu_list: list[Tensor],
         sigma_list: list[Tensor],
         smax_list: list[Tensor],
+        cls_list: list[Tensor] | None = None,
     ) -> tuple[Tensor, Tensor]:
-        """Apply Local Gaussian Transport to level ``level_idx`` in fp32 for AMP safety."""
+        """Apply Class-Aware Local Gaussian Transport to level ``level_idx`` in fp32 for AMP safety."""
         orig_dtype = raw_cls.dtype
-        mu_0 = mu_list[level_idx]  # (B, 2, H, W) fp32 (retains grad to one2one_cv2)
-        sig_0 = sigma_list[level_idx]  # (B, 2, H, W) fp32 (retains grad to one2one_cv2)
+        mu_0 = mu_list[level_idx]  # (B, 2, H, W) fp32 (retains grad through one2one_cv2 / DFL)
+        sig_0 = sigma_list[level_idx]  # (B, 2, H, W) fp32
         s_0 = smax_list[level_idx]  # (B, 1, H, W) fp32
         _, _, height, width = mu_0.shape
 
         with torch.autocast(device_type=mu_0.device.type, enabled=False):
-            # All transported neighbor Gaussians and pairwise Wasserstein distances are detached
-            # inputs to the learnable barycenter/gate parameters; wrapping in no_grad() and
-            # freeing 5D intermediates early saves ~3 GB of P2 activation/workspace VRAM.
             with torch.no_grad():
-                packed = torch.cat((mu_0.detach(), sig_0.detach(), s_0.detach()), dim=1)
-                shifted, valid_sp = self.lgt_stencil(packed)  # (B, 5, 9, H, W), (1, 9, H, W)
+                pack_items = [mu_0.detach(), sig_0.detach(), s_0.detach()]
+                if cls_list is not None:
+                    pack_items.append(cls_list[level_idx])
+                packed = torch.cat(pack_items, dim=1)
+                shifted, valid_sp = self.lgt_stencil(packed)
                 del packed
 
-                # Skip k=0 (self: dx=0, dy=0, dist=0) so we compute only the 8 spatial neighbors
                 tilde_mu_sp_nb = torch.stack(
                     (
                         shifted[:, 0, 1:] + self.lgt_stencil.dx[:, 1:],
@@ -411,12 +417,13 @@ class LGTDetect(Detect):
                     ),
                     dim=1,
                 )  # (B, 2, 8, H, W)
-                tilde_sig_sp_nb = shifted[:, 2:4, 1:].clamp(min=0.05)  # (B, 2, 8, H, W)
+                tilde_sig_sp_nb = shifted[:, 2:4, 1:].clamp(min=0.05)
                 cand_s_sp = shifted[:, 4].clone()  # (B, 9, H, W)
+                cand_cls_sp_nb = shifted[:, 5, 1:].clone() if cls_list is not None else None
                 del shifted
 
-                tilde_mu_p, tilde_sig_p, cand_s_p, valid_p = self._parent_candidate(
-                    level_idx, height, width, mu_list, sigma_list, smax_list
+                tilde_mu_p, tilde_sig_p, cand_s_p, valid_p, cand_cls_p = self._parent_candidate(
+                    level_idx, height, width, mu_list, sigma_list, smax_list, cls_list
                 )
 
                 tilde_mu_nb = torch.cat((tilde_mu_sp_nb, tilde_mu_p), dim=2)  # (B, 2, 9, H, W)
@@ -424,63 +431,69 @@ class LGTDetect(Detect):
                 cand_s = torch.cat((cand_s_sp, cand_s_p), dim=1)  # (B, 10, H, W)
                 del tilde_mu_sp_nb, tilde_sig_sp_nb, cand_s_sp, tilde_mu_p, tilde_sig_p, cand_s_p
 
-                valid, valid_nb, denom_nb = self._get_level_masks(
+                valid, valid_nb_spatial, denom_nb = self._get_level_masks(
                     level_idx, height, width, valid_sp, valid_p
                 )
 
-                mu_c = mu_0.detach().unsqueeze(2)  # (B, 2, 1, H, W)
-                sig_c = sig_0.detach().unsqueeze(2)  # (B, 2, 1, H, W)
-                nb_delta_mu = tilde_mu_nb - mu_c  # (B, 2, 9, H, W)
-                nb_delta_sig = tilde_sig_nb - sig_c  # (B, 2, 9, H, W)
+                if cls_list is not None and cand_cls_sp_nb is not None and cand_cls_p is not None:
+                    cand_cls_nb = torch.cat((cand_cls_sp_nb, cand_cls_p), dim=1)  # (B, 9, H, W)
+                    same_cls_mask = valid[:, 1:] & (cand_cls_nb == cls_list[level_idx])
+                    valid_nb_eff = same_cls_mask.to(dtype=torch.float32)
+                    del cand_cls_sp_nb, cand_cls_p, cand_cls_nb
+                else:
+                    same_cls_mask = valid[:, 1:]
+                    valid_nb_eff = valid_nb_spatial
+
+                mu_c = mu_0.detach().unsqueeze(2)
+                sig_c = sig_0.detach().unsqueeze(2)
+                nb_delta_mu = tilde_mu_nb - mu_c
+                nb_delta_sig = tilde_sig_nb - sig_c
                 num = nb_delta_mu.square() + nb_delta_sig.square()
                 den = sig_c.square() + tilde_sig_nb.square() + 1e-6
                 del tilde_mu_nb, tilde_sig_nb
-                dist_nb = (num / den).sum(dim=1).masked_fill(~valid[:, 1:], 1e4)  # (B, 9, H, W)
+                dist_nb = (num / den).sum(dim=1).masked_fill(~same_cls_mask, 1e4)  # (B, 9, H, W)
                 del num, den
 
                 log_q = F.logsigmoid(cand_s)  # (B, 10, H, W)
-                score_diff = F.relu(cand_s[:, 1:] - s_0.detach()) * valid_nb  # (B, 9, H, W)
-                prob_nb = torch.sigmoid(cand_s[:, 1:]) * valid_nb  # (B, 9, H, W)
+                score_diff = F.relu(cand_s[:, 1:] - s_0.detach()) * valid_nb_eff
+                prob_nb = torch.sigmoid(cand_s[:, 1:]) * valid_nb_eff
                 del cand_s
 
-            # 1. Local Wasserstein Barycenter box refinement (for DFL-free reg_max == 1)
-            if self.reg_max <= 1:
-                tau_box = F.softplus(self.lgt_log_tau_box[level_idx]) + 0.1
-                gamma_box = F.softplus(self.lgt_log_gamma_box[level_idx])
-                beta_box = torch.sigmoid(self.lgt_logit_beta_box[level_idx])
+            # 1. Unified Local Wasserstein Barycenter box refinement (works for reg_max == 1 AND reg_max > 1)
+            tau_box = F.softplus(self.lgt_log_tau_box[level_idx]) + 0.1
+            gamma_box = F.softplus(self.lgt_log_gamma_box[level_idx])
+            beta_box = torch.sigmoid(self.lgt_logit_beta_box[level_idx])
 
-                logit_0 = gamma_box * log_q[:, :1]  # k=0 self has D_0 == 0 and valid_0 == True
-                logit_nb = (gamma_box * log_q[:, 1:] - tau_box * dist_nb).masked_fill(
-                    ~valid[:, 1:], -1e4
-                )
-                logits_w = torch.cat((logit_0, logit_nb), dim=1)
-                weights_nb = torch.softmax(logits_w, dim=1)[:, 1:].unsqueeze(1)  # (B, 1, 9, H, W)
+            logit_0 = gamma_box * log_q[:, :1]
+            logit_nb = (gamma_box * log_q[:, 1:] - tau_box * dist_nb).masked_fill(
+                ~same_cls_mask, -1e4
+            )
+            logits_w = torch.cat((logit_0, logit_nb), dim=1)
+            weights_nb = torch.softmax(logits_w, dim=1)[:, 1:].unsqueeze(1)  # (B, 1, 9, H, W)
 
-                delta_mu = (weights_nb * nb_delta_mu).sum(dim=2)
-                delta_sig = (weights_nb * nb_delta_sig).sum(dim=2)
-                mu_ref = mu_0 + beta_box * delta_mu
-                sig_ref = (sig_0 + beta_box * delta_sig).clamp(min=0.05)
-                refined_box = gaussian_to_ltrb(mu_ref, sig_ref).to(raw_box.dtype)
-            else:
-                refined_box = raw_box
+            delta_mu = (weights_nb * nb_delta_mu).sum(dim=2)
+            delta_sig = (weights_nb * nb_delta_sig).sum(dim=2)
+            mu_ref = mu_0 + beta_box * delta_mu
+            sig_ref = (sig_0 + beta_box * delta_sig).clamp(min=0.05)
+            refined_ltrb = gaussian_to_ltrb(mu_ref, sig_ref).to(raw_box.dtype)
 
-            # 2. Differentiable NMS Dominance & Consensus Gate features in fp32
+            # 2. Differentiable Class-Aware NMS Dominance & Consensus Gate
             tau_cls = F.softplus(self.lgt_log_tau_cls[level_idx]) + 0.1
-            aff_nb = torch.exp(-tau_cls * dist_nb) * valid_nb  # (B, 9, H, W)
+            aff_nb = torch.exp(-tau_cls * dist_nb) * valid_nb_eff
 
             dom_pairs = aff_nb * score_diff
-            m_dom = dom_pairs.amax(dim=1, keepdim=True)  # (B, 1, H, W)
-            m_sup = (aff_nb * prob_nb).sum(dim=1, keepdim=True) / denom_nb  # (B, 1, H, W)
+            m_dom = dom_pairs.amax(dim=1, keepdim=True)
+            m_sup = (aff_nb * prob_nb).sum(dim=1, keepdim=True) / denom_nb
 
             rel_feat = torch.cat((aff_nb, dom_pairs, m_dom, m_sup), dim=1).to(orig_dtype)
 
         cls_delta = self.lgt_cls_gate[level_idx](rel_feat)
         refined_cls = raw_cls + cls_delta
 
-        return refined_box, refined_cls
+        return refined_ltrb, refined_cls
 
     def forward_lgt_one2one(self, x: list[Tensor]) -> dict[str, Any]:
-        """Run ``one2one`` branch with cross-scale Local Gaussian Transport."""
+        """Run ``one2one`` branch with cross-scale Class-Aware Local Gaussian Transport."""
         if self.one2one_cv2 is None or self.one2one_cv3 is None:
             return {}
         bsz = x[0].shape[0]
@@ -488,38 +501,52 @@ class LGTDetect(Detect):
         raw_clses = [self.one2one_cv3[i](x[i]) for i in range(self.nl)]
 
         device_type = x[0].device.type
+        use_multiclass = self.nc > 1
         with torch.autocast(device_type=device_type, enabled=False):
             ltrb_list = [self._decode_level_ltrb(rb).float() for rb in raw_boxes]
             mu_list: list[Tensor] = []
             sigma_list: list[Tensor] = []
             smax_list: list[Tensor] = []
+            cls_list: list[Tensor] | None = [] if use_multiclass else None
             for i in range(self.nl):
                 mu_i, sig_i = ltrb_to_gaussian(ltrb_list[i])
                 mu_list.append(mu_i)
                 sigma_list.append(sig_i)
-                smax_list.append(raw_clses[i].detach().float().amax(dim=1, keepdim=True))
+                cls_detached = raw_clses[i].detach().float()
+                smax_list.append(cls_detached.amax(dim=1, keepdim=True))
+                if cls_list is not None:
+                    cls_list.append(cls_detached.argmax(dim=1, keepdim=True).to(dtype=torch.float32))
 
         if self.training and self.distill_gain > 0.0:
             self._raw_o2o_gauss = list(zip(mu_list, sigma_list))
         else:
             self._raw_o2o_gauss = None
 
-        out_boxes: list[Tensor] = []
+        out_ltrb: list[Tensor] = []
         out_scores: list[Tensor] = []
         for i in range(self.nl):
-            ref_box, ref_cls = self._refine_level(
-                i, raw_boxes[i], raw_clses[i], mu_list, sigma_list, smax_list
+            ref_ltrb, ref_cls = self._refine_level(
+                i, raw_boxes[i], raw_clses[i], mu_list, sigma_list, smax_list, cls_list
             )
-            out_boxes.append(ref_box.view(bsz, 4 * self.reg_max, -1))
+            out_ltrb.append(ref_ltrb.view(bsz, 4, -1))
             out_scores.append(ref_cls.view(bsz, self.nc, -1))
 
+        if self.reg_max <= 1:
+            return {
+                "boxes": torch.cat(out_ltrb, dim=-1),
+                "scores": torch.cat(out_scores, dim=-1),
+                "feats": x,
+            }
+
+        out_raw_dfl = [rb.view(bsz, 4 * self.reg_max, -1) for rb in raw_boxes]
         return {
-            "boxes": torch.cat(out_boxes, dim=-1),
+            "boxes": torch.cat(out_raw_dfl, dim=-1),
+            "ltrb": torch.cat(out_ltrb, dim=-1),
             "scores": torch.cat(out_scores, dim=-1),
             "feats": x,
         }
 
-    def forward(  # agy-allow-dup
+    def forward(
         self, x: list[Tensor]
     ) -> dict[str, Tensor] | Tensor | tuple[Tensor, dict[str, Tensor]]:
         """Run dual-head forward in training/eval and single-branch LGT forward after ``fuse()``."""
@@ -536,17 +563,24 @@ class LGTDetect(Detect):
         return y if self.export else (y, preds)
 
     def get_lgt_stats(self) -> dict[str, float]:
-        """Materialize scalar LGT diagnostics on demand (call at epoch end, never per batch)."""
-        stats = {
-            "beta_box_p2": float(torch.sigmoid(self.lgt_logit_beta_box[0]).detach().item()),
-            "tau_cls_p2": float((F.softplus(self.lgt_log_tau_cls[0]) + 0.1).detach().item()),
-        }
+        """Materialize scalar LGT diagnostics across all FPN levels at epoch end."""
+        stats: dict[str, float] = {}
+        beta_vals = torch.sigmoid(self.lgt_logit_beta_box).detach().cpu().tolist()
+        tau_box_vals = (F.softplus(self.lgt_log_tau_box) + 0.1).detach().cpu().tolist()
+        tau_cls_vals = (F.softplus(self.lgt_log_tau_cls) + 0.1).detach().cpu().tolist()
+        gamma_vals = F.softplus(self.lgt_log_gamma_box).detach().cpu().tolist()
+        for idx in range(self.nl):
+            lvl = f"p{idx + 2}"
+            stats[f"beta_box_{lvl}"] = float(beta_vals[idx])
+            stats[f"tau_box_{lvl}"] = float(tau_box_vals[idx])
+            stats[f"tau_cls_{lvl}"] = float(tau_cls_vals[idx])
+            stats[f"gamma_box_{lvl}"] = float(gamma_vals[idx])
         if self._last_distill_tensor is not None:
             stats["distill_loss"] = float(self._last_distill_tensor.item())
         self.last_stats = stats
         return stats
 
-    def aux_loss(self, preds: dict[str, dict[str, Tensor]], batch: dict[str, Tensor]) -> Tensor:  # agy-allow-dup
+    def aux_loss(self, preds: dict[str, dict[str, Tensor]], batch: dict[str, Tensor]) -> Tensor:
         """Training-only dense Gaussian box-field distillation from ``one2many`` to ``one2one_cv2``."""
         del batch
         raw_o2o_gauss = self._raw_o2o_gauss

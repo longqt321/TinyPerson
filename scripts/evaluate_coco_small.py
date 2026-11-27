@@ -19,11 +19,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, help="Defaults to RUN/metrics/coco_val.json")
     args = parser.parse_args()
 
-    try:
-        from pycocotools.coco import COCO
-        from pycocotools.cocoeval import COCOeval
-    except ImportError as exc:
-        raise SystemExit("Install optional evaluator dependency: pip install pycocotools") from exc
+    from faster_coco_eval import COCO
+    from faster_coco_eval import COCOeval_faster as COCOeval
 
     predictions_path = args.predictions or args.run / "evaluation-val" / "predictions.pt"
     payload = torch.load(predictions_path, map_location="cpu", weights_only=True)

@@ -6,14 +6,31 @@ import hashlib
 import os
 import shutil
 import tarfile
+from concurrent.futures import Future
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 import torch
 
-DEFAULT_HF_DATASET_REPO = "longqt321/tinyperson-yolo"
-DEFAULT_HF_ARCHIVE_NAME = "tinyperson-yolo-v2.tar.gz"
+DEFAULT_HF_DATASET_REPO = "longqt321/tinydet-benchmarks"
+DEFAULT_HF_ARCHIVE_NAME = "tinyperson-yolo-v2.tar.zst"
+DATASET_ARCHIVE_MAP: dict[str, str] = {
+    "tinyperson-yolo-v2": "tinyperson-yolo-v2.tar.zst",
+    "tinyperson": "tinyperson-yolo-v2.tar.zst",
+    "visdrone-yolo": "visdrone-yolo.tar.zst",
+    "visdrone": "visdrone-yolo.tar.zst",
+}
+RUN_SYNC_EXACT_FILES = (
+    Path("config.yaml"),
+    Path("metadata.json"),
+    Path("environment.txt"),
+    Path("training/args.yaml"),
+    Path("training/results.csv"),
+    Path("training/completed.flag"),
+    Path("training/weights/last.pt"),
+    Path("training/weights/best.pt"),
+)
 RUN_SYNC_ALLOW_PATTERNS = [
     "config.yaml",
     "metadata.json",
@@ -27,6 +44,7 @@ RUN_SYNC_ALLOW_PATTERNS = [
     "metrics/*",
 ]
 _HF_ENSURED_REPOS: set[str] = set()
+_HF_INFLIGHT_FUTURES: dict[str, Future[Any]] = {}
 
 
 def detect_host() -> str:
@@ -59,6 +77,14 @@ def resolve_secret(name: str) -> str | None:
         value = UserSecretsClient().get_secret(name)
         if value and value.strip():
             return value.strip()
+
+    if name == "HF_TOKEN":
+        with suppress(Exception):
+            from huggingface_hub import get_token
+
+            cached = get_token()
+            if cached and cached.strip():
+                return cached.strip()
 
     return None
 
@@ -104,7 +130,6 @@ def default_output_root(host: str, repo_root: Path) -> Path:
     if host == "modal":
         return Path("/mnt/runs")
     if host == "colab":
-        # Write to fast local SSD; sync_run_to_drive() backs up to Drive FUSE.
         return Path("/content/tinydet_runs")
     if host == "kaggle":
         return Path("/kaggle/working/runs")
@@ -127,6 +152,14 @@ def stable_run_id(seed: int, host: str) -> str:
     return f"{host}-seed{seed}"
 
 
+def infer_dataset_slug(hint: str | Path | None) -> str:
+    """Map any dataset path or YAML hint onto canonical ``tinyperson-yolo-v2`` or ``visdrone-yolo``."""
+    text = str(hint or "").lower()
+    if "visdrone" in text:
+        return "visdrone-yolo"
+    return "tinyperson-yolo-v2"
+
+
 def _find_yaml_under(root: Path, preferred_dir: str = "tinyperson-yolo-v2") -> Path | None:
     if not root.is_dir():
         return None
@@ -136,10 +169,25 @@ def _find_yaml_under(root: Path, preferred_dir: str = "tinyperson-yolo-v2") -> P
     for match in sorted(root.glob(f"**/{preferred_dir}/data.yaml")):
         if match.is_file():
             return match.resolve()
-    for match in sorted(root.glob("**/data.yaml")):
-        if match.is_file():
-            return match.resolve()
     return None
+
+
+def _extract_archive(archive_path: Path, dest_parent: Path) -> None:
+    dest_parent.mkdir(parents=True, exist_ok=True)
+    name = archive_path.name
+    if name.endswith((".tar.zst", ".zst")):
+        import zstandard
+
+        dctx = zstandard.ZstdDecompressor()
+        with (
+            archive_path.open("rb") as compressed,
+            dctx.stream_reader(compressed) as reader,
+            tarfile.open(fileobj=reader, mode="r|") as tar,
+        ):
+            tar.extractall(dest_parent, filter="data")
+    else:
+        with tarfile.open(archive_path, "r:*") as tar:
+            tar.extractall(dest_parent, filter="data")
 
 
 def download_hf_dataset(
@@ -147,10 +195,10 @@ def download_hf_dataset(
     dest_parent: Path,
     archive_name: str = DEFAULT_HF_ARCHIVE_NAME,
 ) -> Path:
-    """Download and extract the verified TinyPerson YOLO archive from Hugging Face."""
+    """Download and stream-extract a ``.tar.zst`` (or ``.tar.gz``) dataset archive from Hugging Face."""
     from huggingface_hub import hf_hub_download
 
-    dataset_dir_name = archive_name.removesuffix(".tar.gz")
+    dataset_dir_name = archive_name.removesuffix(".tar.zst").removesuffix(".tar.gz")
     target_yaml = dest_parent / dataset_dir_name / "data.yaml"
     if target_yaml.is_file():
         print(f"[dataset] Using cached dataset: {target_yaml}", flush=True)
@@ -189,10 +237,8 @@ def download_hf_dataset(
     except Exception as exc:  # noqa: BLE001 - checksum file is optional on custom repos
         print(f"[dataset] Skipping SHA-256 verification ({exc})", flush=True)
 
-    dest_parent.mkdir(parents=True, exist_ok=True)
-    print(f"[dataset] Extracting to {dest_parent}...", flush=True)
-    with tarfile.open(archive_path, "r:gz") as tar:
-        tar.extractall(dest_parent, filter="data")
+    print(f"[dataset] Extracting {archive_name} to {dest_parent}...", flush=True)
+    _extract_archive(archive_path, dest_parent)
 
     if not target_yaml.is_file():
         found = _find_yaml_under(dest_parent, preferred_dir=dataset_dir_name)
@@ -210,23 +256,28 @@ def discover_dataset(
     *,
     hf_repo: str | None = DEFAULT_HF_DATASET_REPO,
 ) -> Path:
-    """Locate ``data.yaml`` locally, or auto-download from Hugging Face if absent."""
+    """Locate ``data.yaml`` locally, or auto-download the matching archive from Hugging Face."""
+    slug = infer_dataset_slug(explicit or config_data_path)
+    archive_name = DATASET_ARCHIVE_MAP.get(slug, f"{slug}.tar.zst")
+
     candidates: list[Path] = []
     if explicit is not None:
         candidates.append(explicit.expanduser())
     if env_data := os.environ.get("TINYDET_DATA"):
         candidates.append(Path(env_data).expanduser())
     if config_data_path:
-        candidates.append(Path(config_data_path).expanduser())
-        if not Path(config_data_path).is_absolute():
-            candidates.append(repo_root / config_data_path)
+        cfg_p = Path(config_data_path).expanduser()
+        if cfg_p.name == "data.yaml":
+            candidates.append(cfg_p)
+            if not cfg_p.is_absolute():
+                candidates.append(repo_root / cfg_p)
 
     candidates.extend(
         [
-            repo_root / "datasets" / "derived" / "tinyperson-yolo-v2" / "data.yaml",
-            Path("/content/data_local/tinyperson-yolo-v2/data.yaml"),
-            Path("/kaggle/working/data_local/tinyperson-yolo-v2/data.yaml"),
-            Path("/mnt/data/tinyperson-yolo-v2/data.yaml"),
+            repo_root / "datasets" / "derived" / slug / "data.yaml",
+            Path(f"/content/data_local/{slug}/data.yaml"),
+            Path(f"/kaggle/working/data_local/{slug}/data.yaml"),
+            Path(f"/mnt/data/{slug}/data.yaml"),
         ]
     )
 
@@ -243,15 +294,19 @@ def discover_dataset(
     search_roots.append(repo_root / "datasets")
 
     for root in search_roots:
-        found = _find_yaml_under(root)
+        found = _find_yaml_under(root, preferred_dir=slug)
         if found is not None:
             return found
 
     if hf_repo:
-        return download_hf_dataset(hf_repo, default_local_data_root(host, repo_root))
+        return download_hf_dataset(
+            hf_repo,
+            default_local_data_root(host, repo_root),
+            archive_name=archive_name,
+        )
 
     raise FileNotFoundError(
-        "Could not locate dataset data.yaml automatically.\n"
+        f"Could not locate dataset '{slug}/data.yaml' automatically.\n"
         "Pass --data <path/to/data.yaml>, --hf-dataset <owner/repo>, or set TINYDET_DATA."
     )
 
@@ -285,6 +340,28 @@ def default_drive_backup_root(host: str) -> Path | None:
     return (drive_root / "tinydet_runs") if drive_root.is_dir() else None
 
 
+def _atomic_copy(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.tmp")
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
+
+
+def _snapshot_run_artifacts(run_dir: Path, dest_dir: Path) -> None:
+    """Atomically snapshot essential checkpoints & metrics so concurrent training cannot corrupt uploads."""
+    for rel in RUN_SYNC_EXACT_FILES:
+        src = run_dir / rel
+        if src.is_file():
+            _atomic_copy(src, dest_dir / rel)
+    for folder_name in ("checkpoints", "metrics"):
+        folder_src = run_dir / folder_name
+        if folder_src.is_dir():
+            folder_dst = dest_dir / folder_name
+            for item in folder_src.iterdir():
+                if item.is_file():
+                    _atomic_copy(item, folder_dst / item.name)
+
+
 def sync_run_to_drive(
     run_dir: Path,
     drive_root: Path,
@@ -302,43 +379,17 @@ def sync_run_to_drive(
         return
     dest_dir = drive_root / run_dir.parent.name / run_dir.name
     try:
-        for rel in (
-            Path("config.yaml"),
-            Path("metadata.json"),
-            Path("environment.txt"),
-            Path("training/args.yaml"),
-            Path("training/results.csv"),
-            Path("training/completed.flag"),
-            Path("training/weights/last.pt"),
-            Path("training/weights/best.pt"),
-        ):
-            src = run_dir / rel
-            if src.is_file():
-                _atomic_copy(src, dest_dir / rel)
-        for folder_name in ("checkpoints", "metrics"):
-            folder_src = run_dir / folder_name
-            if folder_src.is_dir():
-                folder_dst = dest_dir / folder_name
-                for item in folder_src.iterdir():
-                    if item.is_file():
-                        _atomic_copy(item, folder_dst / item.name)
+        _snapshot_run_artifacts(run_dir, dest_dir)
     except Exception as exc:  # noqa: BLE001 - Drive FUSE hiccup must not abort training
         print(f"[sync] Warning: Drive backup failed: {exc}", flush=True)
 
 
-def _atomic_copy(src: Path, dst: Path) -> None:
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(f".{dst.name}.tmp")
-    shutil.copy2(src, tmp)
-    os.replace(tmp, dst)
-
-
 def restore_run_from_drive(run_dir: Path, drive_root: Path) -> bool:
     """Restore an interrupted run from Google Drive to local SSD if ``last.pt`` is absent."""
-    if (run_dir / "training/weights/last.pt").is_file():
+    if (run_dir / "training/weights/last.pt").is_file() or (run_dir / "training/completed.flag").is_file():
         return False
     backup_dir = drive_root / run_dir.parent.name / run_dir.name
-    if not (backup_dir / "training/weights/last.pt").is_file():
+    if not (backup_dir / "training/weights/last.pt").is_file() and not (backup_dir / "training/completed.flag").is_file():
         return False
     print(f"[restore] Restoring run from Drive: {backup_dir} -> {run_dir}", flush=True)
     shutil.copytree(backup_dir, run_dir, dirs_exist_ok=True)
@@ -380,7 +431,7 @@ def sync_run_to_hf(
     force: bool = False,
     run_as_background: bool = True,
 ) -> None:
-    """Upload essential run checkpoints, configs, and metrics to Hugging Face Hub."""
+    """Snapshot artifacts to ``_hf_staging`` and upload single-flight to Hugging Face Hub."""
     if not force and epoch_counter is not None:
         epoch_counter[0] += 1
         if epoch_counter[0] % max(1, every_n_epochs) != 0:
@@ -390,21 +441,34 @@ def sync_run_to_hf(
     try:
         from huggingface_hub import HfApi
 
+        path_in_repo = f"{run_dir.parent.name}/{run_dir.name}"
+        prev = _HF_INFLIGHT_FUTURES.pop(path_in_repo, None)
+        if prev is not None:
+            with suppress(Exception):
+                prev.result(timeout=180)
+
+        staging_dir = run_dir / "_hf_staging"
+        if staging_dir.is_dir():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        _snapshot_run_artifacts(run_dir, staging_dir)
+
         api = HfApi(token=token)
         if repo_id not in _HF_ENSURED_REPOS:
             api.create_repo(repo_id=repo_id, repo_type="model", private=True, exist_ok=True)
             _HF_ENSURED_REPOS.add(repo_id)
 
-        path_in_repo = f"{run_dir.parent.name}/{run_dir.name}"
-        api.upload_folder(
-            folder_path=str(run_dir),
+        use_future = bool(run_as_background and not force)
+        res = api.upload_folder(
+            folder_path=str(staging_dir),
             path_in_repo=path_in_repo,
             repo_id=repo_id,
             repo_type="model",
             allow_patterns=RUN_SYNC_ALLOW_PATTERNS,
             commit_message=f"Sync {path_in_repo}",
-            run_as_future=run_as_background and not force,
+            run_as_future=use_future,
         )
+        if use_future and isinstance(res, Future):
+            _HF_INFLIGHT_FUTURES[path_in_repo] = res
     except Exception as exc:  # noqa: BLE001 - HF Hub hiccup must not abort training
         print(f"[hf-sync] Warning: HF backup failed: {exc}", flush=True)
 
@@ -414,8 +478,8 @@ def restore_run_from_hf(
     repo_id: str,
     token: str | None = None,
 ) -> bool:
-    """Restore an interrupted run from Hugging Face Hub if ``last.pt`` is absent locally."""
-    if (run_dir / "training/weights/last.pt").is_file():
+    """Restore an existing or interrupted run from Hugging Face Hub if absent locally."""
+    if (run_dir / "training/weights/last.pt").is_file() or (run_dir / "training/completed.flag").is_file():
         return False
     try:
         from huggingface_hub import snapshot_download
@@ -426,12 +490,31 @@ def restore_run_from_hf(
             repo_type="model",
             token=token,
             allow_patterns=[f"{path_in_repo}/**"],
+            ignore_patterns=["**/last.pt"] if False else None,
             local_dir=str(run_dir.parent.parent),
         )
-        restored = (run_dir / "training/weights/last.pt").is_file()
+        restored = (run_dir / "training/weights/last.pt").is_file() or (
+            run_dir / "training/completed.flag"
+        ).is_file()
         if restored:
             print(f"[hf-restore] Restored run from hf://{repo_id}/{path_in_repo}", flush=True)
         return restored
     except Exception as exc:  # noqa: BLE001 - fresh runs have no remote snapshot yet
+        # Fallback: if last.pt had a legacy size-mismatch on HF Hub, restore best.pt + flags/metrics
+        with suppress(Exception):
+            from huggingface_hub import snapshot_download
+
+            path_in_repo = f"{run_dir.parent.name}/{run_dir.name}"
+            snapshot_download(
+                repo_id=repo_id,
+                repo_type="model",
+                token=token,
+                allow_patterns=[f"{path_in_repo}/**"],
+                ignore_patterns=["**/last.pt"],
+                local_dir=str(run_dir.parent.parent),
+            )
+            if (run_dir / "training/completed.flag").is_file():
+                print(f"[hf-restore] Restored completed run (skipping last.pt) from hf://{repo_id}/{path_in_repo}", flush=True)
+                return True
         print(f"[hf-restore] No remote checkpoint restored ({exc})", flush=True)
         return False

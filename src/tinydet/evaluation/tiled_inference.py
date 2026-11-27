@@ -13,7 +13,6 @@ from typing import Any
 
 import numpy as np
 import torch
-from numba import njit
 from PIL import Image
 from torchvision.ops import batched_nms as tv_batched_nms
 from torchvision.ops import box_area, nms
@@ -52,16 +51,13 @@ def batched_nms(
     return nms(boxes_t, scores_t, iou_thr).numpy().astype(np.int64, copy=False)
 
 
-@njit(cache=True)
 def _greedy_suppress_mask(sup_mat: np.ndarray) -> np.ndarray:
-    """JIT-compiled greedy suppression over an ``(N, N)`` boolean conflict matrix."""
+    """Vectorized row-wise greedy suppression over an ``(N, N)`` boolean conflict matrix."""
     n = sup_mat.shape[0]
     keep = np.ones(n, dtype=np.bool_)
-    for i in range(n):
+    for i in range(n - 1):
         if keep[i]:
-            for j in range(i + 1, n):
-                if sup_mat[i, j]:
-                    keep[j] = False
+            keep[i + 1 :] &= ~sup_mat[i, i + 1 :]
     return keep
 
 

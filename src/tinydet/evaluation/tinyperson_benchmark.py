@@ -1,53 +1,25 @@
 """TinyPerson benchmark-compatible AP on original-coordinate predictions.
 
-Class handling
---------------
-TinyPerson annotates two person categories (``sea_person`` = category 1,
-``earth_person`` = category 2) which the detector emits as class ids 0 and 1.
-``class_mode`` selects how predictions are matched against ground truth:
-
-``per_class`` (default)
-    Correct COCO/TOV behaviour. Every prediction is kept and matched only
-    against ground truth of its own category. ``result[bin]`` holds the
-    class-agnostic aggregate over all categories, and
-    ``result[bin]["per_category"]`` holds the per-category breakdown.
-``merge``
-    All categories are collapsed into a single class before matching.
-``primary``
-    Legacy behaviour: predictions whose class id is not 0 are discarded while
-    ground truth still contains both categories. This silently drops ~40% of
-    the ground truth from the recall denominator and is retained only to
-    reproduce numbers published before 2026-11-06. Do not use it for new
-    results.
+Single-process vectorized NumPy + TorchVision C++ implementation (zero Numba JIT,
+zero fork/multiprocessing) preserving bit-exact parity with the WACV 2020 protocol.
 """
+
 from __future__ import annotations
 
 import math
-import multiprocessing
-import os
-import sys
-import threading
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import orjson
-from numba import njit
-from numba.typed import List as NumbaList
 
-from tinydet.utils.geometry import (
-    iod_matrix,
-    iou_matrix,
-)
+from tinydet.utils.geometry import iod_matrix, iou_matrix
 
 IOU_THRESHOLDS = (0.25, 0.50, 0.75)
 MAX_DETECTIONS = 200
 CLASS_MODES = ("per_class", "merge", "primary")
-# TinyBenchmark official size ranges (AS = sqrt(w * h)):
-# tiny1: [2, 8), tiny2: [8, 12), tiny3: [12, 20], tiny: [2, 20], small: (20, 32], all: [2, 100000]
 SIZE_RANGES: dict[str, tuple[float, float, bool, bool]] = {
     "all": (2.0, 100000.0, True, True),
     "tiny": (2.0, 20.0, True, True),
@@ -57,31 +29,7 @@ SIZE_RANGES: dict[str, tuple[float, float, bool, bool]] = {
     "small": (20.0, 32.0, False, True),
     "reasonable": (32.0, 100000.0, False, True),
 }
-_EVAL_CONTEXT: tuple[
-    list[int],
-    dict[int, dict[int, np.ndarray]],
-    list[tuple[float, int, list[float], int]],
-    np.ndarray,
-    np.ndarray,
-    dict[int, dict[int, np.ndarray]],
-    dict[int, np.ndarray],
-    dict[int, np.ndarray],
-] | None = None
 MERGED_CATEGORY = 0
-
-
-def _is_fork_safe() -> bool:
-    """Return True only when the current process is single-threaded and has no initialized CUDA context."""
-    if "fork" not in multiprocessing.get_all_start_methods():
-        return False
-    if threading.active_count() > 1:
-        return False
-    torch_mod = sys.modules.get("torch")
-    if torch_mod is not None:
-        cuda = getattr(torch_mod, "cuda", None)
-        if cuda is not None and callable(getattr(cuda, "is_initialized", None)) and cuda.is_initialized():
-            return False
-    return True
 
 
 def _boxes_sqrt_area(boxes: Iterable[Sequence[float]] | np.ndarray) -> np.ndarray:
@@ -147,132 +95,92 @@ def _precompute_overlap_matrices(
     return local_of_row, det_sizes, gt_sizes, positive_iou, ignored_iou, ignored_iod
 
 
-@njit(cache=True)
-def _match_threshold_numba(
+def _match_threshold(
     local_of_row: np.ndarray,
     in_slot: np.ndarray,
     out_slot: np.ndarray,
     ign_slot: np.ndarray,
     det_in_bin: np.ndarray,
-    in_mats: NumbaList,
-    out_mats: NumbaList,
-    ign_iou_mats: NumbaList,
-    ign_iod_mats: NumbaList,
-    in_avail: NumbaList,
-    out_avail: NumbaList,
-    ign_avail: NumbaList,
+    in_mats: list[np.ndarray],
+    out_mats: list[np.ndarray],
+    ign_iou_mats: list[np.ndarray],
+    ign_iod_any: list[np.ndarray],
     threshold: float,
 ) -> np.ndarray:
-    """Bit-exact JIT-compiled TinyPerson greedy matcher for one size bin and IoU threshold.
-
-    Returns ``status`` of shape ``(N,)`` with ``1`` (TP), ``-1`` (FP), ``0`` (neutral/ignored).
-    """
+    """Bit-exact TinyPerson greedy matcher using vectorized NumPy column masking."""
     n = local_of_row.shape[0]
     status = np.zeros(n, dtype=np.int8)
-    for r in range(n):
-        local = local_of_row[r]
+    if n == 0:
+        return status
 
-        slot = in_slot[r]
+    in_work = [np.where(m >= threshold, m, -1.0) for m in in_mats]
+    out_work = [np.where(m >= threshold, m, -1.0) for m in out_mats]
+    ign_work = [m >= threshold for m in ign_iou_mats]
+
+    local_list = local_of_row.tolist()
+    in_list = in_slot.tolist()
+    out_list = out_slot.tolist()
+    ign_list = ign_slot.tolist()
+    det_bin_list = det_in_bin.tolist()
+
+    for r in range(n):
+        local = local_list[r]
+
+        slot = in_list[r]
         if slot >= 0:
-            mat = in_mats[slot]
-            avail = in_avail[slot]
-            best_j = -1
-            best_val = -1.0
-            for j in range(avail.shape[0]):
-                if avail[j]:
-                    v = mat[local, j]
-                    if v >= threshold and v > best_val:
-                        best_val = v
-                        best_j = j
-            if best_j >= 0:
-                avail[best_j] = False
+            row = in_work[slot][local]
+            best_j = int(row.argmax())
+            if row[best_j] >= threshold:
+                in_work[slot][:, best_j] = -1.0
                 status[r] = 1
                 continue
 
-        oslot = out_slot[r]
+        oslot = out_list[r]
         if oslot >= 0:
-            mat = out_mats[oslot]
-            avail = out_avail[oslot]
-            best_j = -1
-            best_val = -1.0
-            for j in range(avail.shape[0]):
-                if avail[j]:
-                    v = mat[local, j]
-                    if v >= threshold and v > best_val:
-                        best_val = v
-                        best_j = j
-            if best_j >= 0:
-                avail[best_j] = False
+            row = out_work[oslot][local]
+            best_j = int(row.argmax())
+            if row[best_j] >= threshold:
+                out_work[oslot][:, best_j] = -1.0
                 continue
 
-        islot = ign_slot[r]
+        islot = ign_list[r]
         if islot >= 0:
-            iou_mat = ign_iou_mats[islot]
-            avail = ign_avail[islot]
-            hit_j = -1
-            for j in range(avail.shape[0]):
-                if avail[j] and iou_mat[local, j] >= threshold:
-                    hit_j = j
-                    break
-            if hit_j >= 0:
-                avail[hit_j] = False
+            irow = ign_work[islot][local]
+            if irow.any():
+                hit_j = int(irow.argmax())
+                ign_work[islot][:, hit_j] = False
                 continue
-            iod_mat = ign_iod_mats[islot]
-            iod_hit = False
-            for j in range(iod_mat.shape[1]):
-                if iod_mat[local, j] >= threshold:
-                    iod_hit = True
-                    break
-            if iod_hit:
+            if ign_iod_any[islot][local]:
                 continue
 
-        if det_in_bin[r]:
+        if det_bin_list[r]:
             status[r] = -1
     return status
 
 
-def _empty_numba_mat_list() -> NumbaList:
-    lst = NumbaList()
-    lst.append(np.empty((0, 0), dtype=np.float64))
-    lst.clear()
-    return lst
-
-
-def _empty_numba_bool_list() -> NumbaList:
-    lst = NumbaList()
-    lst.append(np.empty(0, dtype=np.bool_))
-    lst.clear()
-    return lst
-
-
-def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
-    if _EVAL_CONTEXT is None:
-        raise RuntimeError("Evaluator worker context was not initialized")
-    (
-        eval_ids,
-        gt_sizes,
-        scored,
-        local_of_row,
-        det_sizes,
-        positive_iou,
-        ignored_iou,
-        ignored_iod,
-    ) = _EVAL_CONTEXT
+def _evaluate_size_bin(
+    bin_name: str,
+    eval_ids: list[int],
+    gt_sizes: dict[int, dict[int, np.ndarray]],
+    scored: list[tuple[float, int, list[float], int]],
+    local_of_row: np.ndarray,
+    det_sizes: np.ndarray,
+    positive_iou: dict[int, dict[int, np.ndarray]],
+    ignored_iou: dict[int, np.ndarray],
+    ignored_iod: dict[int, np.ndarray],
+) -> tuple[str, dict[str, Any]]:
     size_spec = SIZE_RANGES[bin_name]
     det_in_bin = np.ascontiguousarray(_sizes_in_range(det_sizes, size_spec), dtype=np.bool_)
     positive_count = 0
     positive_count_by_cat: dict[int, int] = defaultdict(int)
 
-    in_mats = _empty_numba_mat_list()
-    out_mats = _empty_numba_mat_list()
-    ign_iou_mats = _empty_numba_mat_list()
-    ign_iod_mats = _empty_numba_mat_list()
+    in_mats: list[np.ndarray] = []
+    out_mats: list[np.ndarray] = []
+    ign_iou_mats: list[np.ndarray] = []
+    ign_iod_mats: list[np.ndarray] = []
     in_slot_map: dict[tuple[int, int], int] = {}
     out_slot_map: dict[tuple[int, int], int] = {}
     ign_slot_map: dict[int, int] = {}
-    in_sizes: list[int] = []
-    out_sizes: list[int] = []
-    ign_sizes: list[int] = []
 
     for image_id in eval_ids:
         for category, sizes in gt_sizes[image_id].items():
@@ -283,19 +191,16 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
             positive_count += n_in
             positive_count_by_cat[category] += n_in
             if n_in:
-                in_slot_map[(image_id, category)] = len(in_sizes)
+                in_slot_map[(image_id, category)] = len(in_mats)
                 in_mats.append(np.ascontiguousarray(positive_iou[image_id][category][:, inside_idx], dtype=np.float64))
-                in_sizes.append(n_in)
             if outside_idx.size:
-                out_slot_map[(image_id, category)] = len(out_sizes)
+                out_slot_map[(image_id, category)] = len(out_mats)
                 out_mats.append(np.ascontiguousarray(positive_iou[image_id][category][:, outside_idx], dtype=np.float64))
-                out_sizes.append(int(outside_idx.size))
         n_ign = ignored_iou[image_id].shape[1]
         if n_ign > 0:
-            ign_slot_map[image_id] = len(ign_sizes)
+            ign_slot_map[image_id] = len(ign_iou_mats)
             ign_iou_mats.append(np.ascontiguousarray(ignored_iou[image_id], dtype=np.float64))
             ign_iod_mats.append(np.ascontiguousarray(ignored_iod[image_id], dtype=np.float64))
-            ign_sizes.append(n_ign)
 
     n_scored = len(scored)
     in_slot_arr = np.full(n_scored, -1, dtype=np.int32)
@@ -314,17 +219,9 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
     per_category: dict[int, dict[str, Any]] = defaultdict(dict)
     num_eval_images = len(eval_ids)
     for threshold in IOU_THRESHOLDS:
-        in_avail = _empty_numba_bool_list()
-        for sz in in_sizes:
-            in_avail.append(np.ones(sz, dtype=np.bool_))
-        out_avail = _empty_numba_bool_list()
-        for sz in out_sizes:
-            out_avail.append(np.ones(sz, dtype=np.bool_))
-        ign_avail = _empty_numba_bool_list()
-        for sz in ign_sizes:
-            ign_avail.append(np.ones(sz, dtype=np.bool_))
-
-        status = _match_threshold_numba(
+        thr = float(threshold)
+        ign_iod_any = [(m >= thr).any(axis=1) for m in ign_iod_mats]
+        status = _match_threshold(
             local_arr,
             in_slot_arr,
             out_slot_arr,
@@ -333,11 +230,8 @@ def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
             in_mats,
             out_mats,
             ign_iou_mats,
-            ign_iod_mats,
-            in_avail,
-            out_avail,
-            ign_avail,
-            float(threshold),
+            ign_iod_any,
+            thr,
         )
         active = status != 0
         tp = (status[active] == 1).astype(np.float64)
@@ -383,8 +277,6 @@ def _ap(tp: Sequence[int] | np.ndarray, fp: Sequence[int] | np.ndarray, positive
     precision = tp_cum / np.maximum(tp_cum + fp_cum, 1.0)
     precision = np.maximum.accumulate(precision[::-1])[::-1]
     points = np.linspace(0.0, 1.0, 101)
-    # Recall is non-decreasing, so the first index reaching each point is a
-    # binary search instead of 101 boolean scans over the whole curve.
     index = np.searchsorted(recall, points, side="left")
     valid = index < recall.size
     sampled = np.zeros(points.size)
@@ -410,8 +302,6 @@ def _mr(
     miss_rate = 1.0 - rec
 
     fppi_targets = np.logspace(-2, 0, 9)
-    # FPPI is non-decreasing: the last operating point at or below each target
-    # is a binary search instead of 9 boolean scans.
     index = np.searchsorted(fppi, fppi_targets, side="right") - 1
     valid = index >= 0
     sampled = np.ones(fppi_targets.size)
@@ -422,16 +312,7 @@ def _mr(
 def subset_annotations_to_split(
     annotation_source: str | Path, data_yaml: str | Path, split: str, destination: str | Path
 ) -> Path:
-    """Restrict an official COCO JSON to the images of one YOLO split.
-
-    The TinyPerson evaluator refuses partial predictions, so an official JSON
-    covering more images than the split (e.g. the 746-image train JSON against
-    an 84-image validation split) cannot be scored directly. Filtering the
-    annotations is the only way to keep the ignore/uncertain/dense metadata
-    intact on a subset.
-
-    Raises ValueError when any split image has no annotation entry.
-    """
+    """Restrict an official COCO JSON to the images of one YOLO split."""
     from tinydet.utils.dataset import dataset_images
 
     annotation_source, data_yaml, destination = Path(annotation_source), Path(data_yaml), Path(destination)
@@ -494,7 +375,6 @@ def _load_gt(source: Path | dict[str, Any]) -> dict[str, Any]:
         raw_counts[image_id] += 1
         if row["dense"]:
             dense_ids.add(image_id)
-    # The release defines a dense image as one containing more than 220 annotations.
     dense_ids.update(image_id for image_id, count in raw_counts.items() if count > 220)
     return {
         "images": images, "basename_to_id": basename_to_id, "annotations": annotations,
@@ -508,14 +388,7 @@ def evaluate_tinyperson(
     workers: int = 0,
     class_mode: str = "per_class",
 ) -> dict[str, Any]:
-    """Evaluate predictions against the original TinyPerson COCO JSON (or in-memory dicts).
-
-    Predictions must contain an images list with path, boxes (xyxy in source pixels),
-    scores and classes, matching the repository's exported test predictions.
-
-    ``class_mode`` controls how the detector's two output classes are matched
-    against the two TinyPerson categories; see the module docstring.
-    """
+    """Evaluate predictions against the original TinyPerson COCO JSON (or in-memory dicts)."""
     if workers < 0:
         raise ValueError("workers must be non-negative")
     if class_mode not in CLASS_MODES:
@@ -532,17 +405,10 @@ def evaluate_tinyperson(
     if not isinstance(rows, list):
         raise TypeError("Prediction JSON must contain an images list")
 
-    # Map the detector's zero-based class ids onto TinyPerson category ids.
-    # The detector emits class 0 for sea_person (category 1) and class 1 for
-    # earth_person (category 2), so the offset is +1. If the annotation file
-    # does not use category ids 1..N we fall back to identity.
     gt_categories = sorted({ann["category"] for anns in gt["annotations"].values()
                             for ann in anns})
     use_offset = bool(gt_categories) and min(gt_categories) == 1
 
-    # A single-class detector emits only class 0. Under `per_class` that would map
-    # every detection onto one TinyPerson category and silently halve the recall
-    # denominator, so refuse the combination instead of reporting a wrong number.
     predicted_classes = {
         int(class_id) for row in rows for class_id in row.get("classes", [])
     }
@@ -626,26 +492,20 @@ def evaluate_tinyperson(
     local_of_row, det_sizes, gt_sizes, positive_iou, ignored_iou, ignored_iod = (
         _precompute_overlap_matrices(eval_ids, gt_by_image, scored)
     )
-    global _EVAL_CONTEXT
-    _EVAL_CONTEXT = (
-        eval_ids,
-        gt_sizes,
-        scored,
-        local_of_row,
-        det_sizes,
-        positive_iou,
-        ignored_iou,
-        ignored_iod,
+    output = dict(
+        _evaluate_size_bin(
+            bin_name,
+            eval_ids,
+            gt_sizes,
+            scored,
+            local_of_row,
+            det_sizes,
+            positive_iou,
+            ignored_iou,
+            ignored_iod,
+        )
+        for bin_name in SIZE_RANGES
     )
-    worker_count = min(workers or min(len(SIZE_RANGES), os.cpu_count() or 1), len(SIZE_RANGES))
-    if len(scored) >= 5000 and worker_count > 1 and _is_fork_safe():
-        with ProcessPoolExecutor(
-            max_workers=worker_count, mp_context=multiprocessing.get_context("fork")
-        ) as executor:
-            output = dict(executor.map(_evaluate_size_bin, SIZE_RANGES))
-    else:
-        output = dict(map(_evaluate_size_bin, SIZE_RANGES))
-    _EVAL_CONTEXT = None
 
     output["protocol"] = {
         "name": "TinyPerson documented protocol; standalone implementation",

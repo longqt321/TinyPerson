@@ -12,7 +12,6 @@ import json
 import math
 import statistics
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -336,11 +335,8 @@ def audit_dataset(
         split_out_of_range = 0
         split_image_records = []
 
-        if workers and workers > 1:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                items = list(executor.map(lambda p: _audit_single_image(p, root, imgsz), image_paths))
-        else:
-            items = [_audit_single_image(p, root, imgsz) for p in image_paths]
+        del workers
+        items = [_audit_single_image(p, root, imgsz) for p in image_paths]
 
         for item, err in items:
             if item is None:
