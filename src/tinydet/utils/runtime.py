@@ -43,22 +43,22 @@ def detect_host() -> str:
 def resolve_secret(name: str) -> str | None:
     """Read a secret from environment variables, Colab ``userdata``, or Kaggle Secrets."""
     value = os.environ.get(name)
-    if value:
-        return value
+    if value and value.strip():
+        return value.strip()
 
     with suppress(Exception):
         from google.colab import userdata  # type: ignore[import-not-found]
 
         value = userdata.get(name)
-        if value:
-            return value
+        if value and value.strip():
+            return value.strip()
 
     with suppress(Exception):
         from kaggle_secrets import UserSecretsClient  # type: ignore[import-not-found]
 
         value = UserSecretsClient().get_secret(name)
-        if value:
-            return value
+        if value and value.strip():
+            return value.strip()
 
     return None
 

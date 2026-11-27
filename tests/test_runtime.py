@@ -13,6 +13,7 @@ from tinydet.utils.runtime import (
     detect_host,
     deterministic_wandb_id,
     discover_dataset,
+    resolve_secret,
     restore_run_from_drive,
     restore_run_from_hf,
     stable_run_id,
@@ -156,3 +157,10 @@ def test_hf_sync_and_restore_mocked(monkeypatch) -> None:
         fresh_run = root / "fresh" / "lgt_150e" / "colab-seed42"
         assert restore_run_from_hf(fresh_run, "user/tinydet-runs", token="hf_test") is True
         assert (fresh_run / "training" / "weights" / "last.pt").read_bytes() == b"hf-last"
+
+
+def test_resolve_secret_strips_whitespace(monkeypatch) -> None:
+    monkeypatch.setenv("HF_TOKEN", "  hf_abc123\r\n ")
+    assert resolve_secret("HF_TOKEN") == "hf_abc123"
+    monkeypatch.setenv("HF_TOKEN", "   \r\n ")
+    assert resolve_secret("HF_TOKEN") is None
