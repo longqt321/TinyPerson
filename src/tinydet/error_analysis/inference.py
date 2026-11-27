@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
+import torch
+
+from tinydet.models.ultralytics import register_ultralytics_modules
 from tinydet.utils.dataset import dataset_images
 
 
@@ -22,6 +26,7 @@ def predict_split(
     device: str | None = None,
     cpu_threads: int = 0,
 ) -> dict:
+    register_ultralytics_modules()
     if imgsz <= 0 or batch_size <= 0 or not 0.0 <= conf <= 1.0 or limit < 0:
         raise ValueError("invalid inference parameters")
     checkpoint = Path(checkpoint).resolve()
@@ -33,11 +38,14 @@ def predict_split(
     if not images:
         raise ValueError(f"No images found for split {split!r}")
     if cpu_threads:
-        import torch
-
         torch.set_num_threads(cpu_threads)
     from ultralytics import YOLO
 
+    use_half = (
+        (device != "cpu" and torch.cuda.is_available())
+        if device is None
+        else (str(device) != "cpu" and torch.cuda.is_available())
+    )
     model = YOLO(str(checkpoint))
     # Pass a list file, not a Python list: Ultralytics feeds a list source to the
     # model as ONE batch, so `batch_size` is silently ignored and a 800-image
@@ -53,10 +61,11 @@ def predict_split(
             conf=conf,
             max_det=200,
             device=device,
+            half=use_half,
             verbose=False,
         )
         rows = []
-        for result in results:
+        for result in cast(Any, results):
             boxes = result.boxes
             rows.append({
                 "path": str(Path(result.path).resolve()),

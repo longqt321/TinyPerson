@@ -8,12 +8,8 @@ import torch
 
 from tinydet.augment import resolve_augmentations
 from tinydet.models.registry import build_model
-from tinydet.modules.gauss import configure_gauss_control_param_group
 from tinydet.training.epoch_metrics import register_epoch_metrics, register_size_stratified_metrics
-from tinydet.training.gauss_gate import register_gauss_gate
-from tinydet.training.gauss_split_callbacks import register_gauss_split_callbacks
 from tinydet.training.iou_logging import log_ap_by_iou
-from tinydet.training.module_diagnostics import register_p2refine_callbacks
 from tinydet.training.wandb_media import WandbMediaCallback
 from tinydet.utils.atomic import atomic_write_text
 from tinydet.utils.config import load_config
@@ -73,49 +69,6 @@ def _log_active_head(trainer) -> None:
     print("=" * 70, flush=True)
 
 
-def _setup_gauss_optimizer(trainer, lr_mult: float = 1.0) -> None:
-    """GauSS control group: weight_decay=0.0, LR = base_lr * lr_mult, scheduler-synced."""
-    configure_gauss_control_param_group(trainer.optimizer, trainer.model, lr_mult=lr_mult)
-    # If the trainer has already constructed its lr_scheduler (LambdaLR),
-    # re-synchronize its lr_lambdas and base_lrs to match the updated param_groups.
-    if hasattr(trainer, "scheduler") and hasattr(trainer.scheduler, "lr_lambdas"):
-        sched = trainer.scheduler
-        num_groups = len(trainer.optimizer.param_groups)
-        while len(sched.lr_lambdas) < num_groups:
-            sched.lr_lambdas.append(sched.lr_lambdas[0])
-        while len(sched.base_lrs) < num_groups:
-            idx = len(sched.base_lrs)
-            sched.base_lrs.append(trainer.optimizer.param_groups[idx].get("initial_lr", trainer.optimizer.param_groups[idx]["lr"]))
-
-
-def _install_gauss_resume_hook(lr_mult: float) -> None:
-    """Ensure GauSS's 4th optimizer param group exists BEFORE Ultralytics loads ckpt["optimizer"].
-
-    Ultralytics runs ``resume_training(ckpt)`` before ``on_pretrain_routine_end``.
-    Without creating the GauSS control group first, resuming a GauSS checkpoint
-    raises ``ValueError: loaded state dict has a different number of parameter groups``
-    (3 built groups vs 4 saved groups).
-    """
-    from ultralytics.engine.trainer import BaseTrainer
-
-    orig = getattr(BaseTrainer, "_tinydet_orig_load_ckpt_state", BaseTrainer._load_checkpoint_state)
-    BaseTrainer._tinydet_orig_load_ckpt_state = orig
-    BaseTrainer._tinydet_gauss_lr_mult = lr_mult
-
-    def _wrapped(self, ckpt):
-        opt_state = ckpt.get("optimizer") if isinstance(ckpt, dict) else None
-        if (
-            opt_state is not None
-            and hasattr(self, "optimizer")
-            and len(opt_state.get("param_groups", ())) > len(self.optimizer.param_groups)
-        ):
-            _setup_gauss_optimizer(self, lr_mult=BaseTrainer._tinydet_gauss_lr_mult)
-        return orig(self, ckpt)
-
-    BaseTrainer._load_checkpoint_state = _wrapped
-
-
-
 class _TimeBudgetGuard:
     """Hard wall-clock stop: kill the run when the training exceeds the budget.
 
@@ -146,6 +99,44 @@ def _register_time_budget(model, budget_hours: float, started: float) -> _TimeBu
     guard = _TimeBudgetGuard(budget_hours, started)
     model.callbacks["on_fit_epoch_end"].append(guard.on_fit_epoch_end)
     return guard
+
+
+def _attach_callbacks(
+    model,
+    *,
+    run: Path,
+    effective_dataset_config: Path,
+    val_annotation_source: Path,
+    project: str | None,
+    time_budget_hours: float,
+    started: float,
+    on_epoch_end_callback: Callable[[], None] | None,
+) -> WandbMediaCallback | None:
+    model.callbacks["on_fit_epoch_end"].insert(
+        0, partial(log_ap_by_iou, wandb_enabled=bool(project))
+    )
+    register_epoch_metrics(model, wandb_enabled=bool(project))
+    register_size_stratified_metrics(
+        model,
+        effective_dataset_config,
+        val_annotation_source,
+        split="val",
+        wandb_enabled=bool(project),
+    )
+    model.callbacks["on_train_start"].insert(0, _log_active_head)
+    _register_time_budget(model, time_budget_hours, started)
+    if on_epoch_end_callback is not None:
+        model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
+    if not project:
+        return None
+    media = WandbMediaCallback(run, effective_dataset_config)
+    for event, callback in (
+        ("on_train_start", media.on_train_start),
+        ("on_train_epoch_start", media.on_train_epoch_start),
+        ("on_train_end", media.on_train_end),
+    ):
+        model.callbacks[event].insert(0, callback)
+    return media
 
 
 def train(
@@ -207,7 +198,6 @@ def train(
         write_json(run / "metadata.json", details)
     update_status(run, "RUNNING")
     wandb_run = None
-    diagnostics = None
     media = None
     started = monotonic()
     if torch.cuda.is_available():
@@ -216,26 +206,11 @@ def train(
     stage2_cfg = config.stage2 or config.train.get("stage2") or config.train.get("two_stage") or {}
     is_two_stage = bool(stage2_cfg.get("enabled", False))
     train_args_s1 = {k: v for k, v in config.train.items() if k not in ("stage2", "two_stage")}
-    # Expand the augmentation preset into the `augmentations` hyperparameter that
-    # Ultralytics' Albumentations hook consumes (see build_transforms). The preset
-    # key itself must not leak into model.train(), which rejects unknown args.
     preset = train_args_s1.pop("augmentations_preset", None)
     augmentations = resolve_augmentations(preset, int(config.train["imgsz"]))
     if augmentations is not None:
         train_args_s1["augmentations"] = augmentations
-    # GauSS control-group LR multiplier (v3.2): sigma gradients are
-    # intrinsically ~1e-4-scale, so the default 3x keeps the control scalars
-    # on the same epoch timescale as the conv weights. The key must not leak
-    # into model.train(), which rejects unknown args.
-    gauss_lr_mult = float(train_args_s1.pop("gauss_control_lr_mult", 3.0))
-    # Pre-registered mechanism gates (ADR-023): kill the run at e10/e20 when
-    # the v3.2 mechanism is demonstrably dead. Pop so model.train() never
-    # sees the key.
-    gauss_gate_cfg = train_args_s1.pop("gauss_gate", None)
-    # Wall-clock budget for unattended runs: pop so model.train() never sees it.
     time_budget_hours = float(train_args_s1.pop("time_budget_hours", 4.0))
-    gauss_setup = partial(_setup_gauss_optimizer, lr_mult=gauss_lr_mult)
-    _install_gauss_resume_hook(gauss_lr_mult)
 
     training_done_flag = run / "training" / "completed.flag"
     training_best_pt = run / "training" / "weights" / "best.pt"
@@ -287,32 +262,16 @@ def train(
                         project = None
                         SETTINGS.update({"wandb": False})
 
-                model.callbacks["on_fit_epoch_end"].insert(
-                    0, partial(log_ap_by_iou, wandb_enabled=bool(project))
+                media = _attach_callbacks(
+                    model,
+                    run=run,
+                    effective_dataset_config=effective_dataset_config,
+                    val_annotation_source=val_annotation_source,
+                    project=project,
+                    time_budget_hours=time_budget_hours,
+                    started=started,
+                    on_epoch_end_callback=on_epoch_end_callback,
                 )
-                register_p2refine_callbacks(model, wandb_enabled=bool(project))
-                register_epoch_metrics(model, wandb_enabled=bool(project))
-                register_size_stratified_metrics(
-                    model, effective_dataset_config, val_annotation_source, split="val",
-                    wandb_enabled=bool(project),
-                )
-                model.callbacks["on_train_start"].insert(0, _log_active_head)
-                model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
-                register_gauss_gate(model, gauss_gate_cfg)
-                register_gauss_split_callbacks(model, wandb_enabled=bool(project))
-                _register_time_budget(model, time_budget_hours, started)
-                if on_epoch_end_callback is not None:
-                    model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
-                if project:
-                    media = WandbMediaCallback(run, effective_dataset_config)
-                    events = [("on_train_start", media.on_train_start), ("on_train_end", media.on_train_end)]
-                    if media._hook is not None:
-                        events.extend([
-                            ("on_train_epoch_start", media.on_train_epoch_start),
-                            ("on_train_batch_end", media.on_train_batch_end),
-                        ])
-                    for event, callback in events:
-                        model.callbacks[event].insert(0, callback)
 
                 model.train(
                     data=str(effective_dataset_config),
@@ -333,10 +292,11 @@ def train(
                 if not stage1_best.is_file():
                     raise FileNotFoundError(f"Stage 1 best checkpoint not found under {run}/stage1/weights")
 
-                if model.trainer.validator.metrics.box.all_ap.size:
+                val_s1 = getattr(model.trainer, "validator", None)
+                if val_s1 is not None and val_s1.metrics.box.all_ap.size:
                     from tinydet.evaluation.evaluator import metric_summary
 
-                    s1_metrics = metric_summary(model.trainer.validator.metrics)
+                    s1_metrics = metric_summary(val_s1.metrics)
                     s1_metrics["source"] = "stage1_best"
                     write_json(run / "metrics" / "val_stage1.json", s1_metrics)
 
@@ -394,32 +354,16 @@ def train(
                     project = None
                     SETTINGS.update({"wandb": False})
 
-            model.callbacks["on_fit_epoch_end"].insert(
-                0, partial(log_ap_by_iou, wandb_enabled=bool(project))
+            media = _attach_callbacks(
+                model,
+                run=run,
+                effective_dataset_config=effective_dataset_config,
+                val_annotation_source=val_annotation_source,
+                project=project,
+                time_budget_hours=time_budget_hours,
+                started=started,
+                on_epoch_end_callback=on_epoch_end_callback,
             )
-            register_p2refine_callbacks(model, wandb_enabled=bool(project))
-            register_epoch_metrics(model, wandb_enabled=bool(project))
-            register_size_stratified_metrics(
-                model, effective_dataset_config, val_annotation_source, split="val",
-                wandb_enabled=bool(project),
-            )
-            model.callbacks["on_train_start"].insert(0, _log_active_head)
-            model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
-            register_gauss_gate(model, gauss_gate_cfg)
-            register_gauss_split_callbacks(model, wandb_enabled=bool(project))
-            _register_time_budget(model, time_budget_hours, started)
-            if on_epoch_end_callback is not None:
-                model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
-            if project:
-                media = WandbMediaCallback(run, effective_dataset_config)
-                events = [("on_train_start", media.on_train_start), ("on_train_end", media.on_train_end)]
-                if media._hook is not None:
-                    events.extend([
-                        ("on_train_epoch_start", media.on_train_epoch_start),
-                        ("on_train_batch_end", media.on_train_batch_end),
-                    ])
-                for event, callback in events:
-                    model.callbacks[event].insert(0, callback)
 
             model.train(
                 data=str(effective_dataset_config),
@@ -449,32 +393,17 @@ def train(
                 if wandb_run is None:
                     project = None
                     SETTINGS.update({"wandb": False})
-            model.callbacks["on_fit_epoch_end"].insert(
-                0, partial(log_ap_by_iou, wandb_enabled=bool(project))
+
+            media = _attach_callbacks(
+                model,
+                run=run,
+                effective_dataset_config=effective_dataset_config,
+                val_annotation_source=val_annotation_source,
+                project=project,
+                time_budget_hours=time_budget_hours,
+                started=started,
+                on_epoch_end_callback=on_epoch_end_callback,
             )
-            register_p2refine_callbacks(model, wandb_enabled=bool(project))
-            register_epoch_metrics(model, wandb_enabled=bool(project))
-            register_size_stratified_metrics(
-                model, effective_dataset_config, val_annotation_source, split="val",
-                wandb_enabled=bool(project),
-            )
-            model.callbacks["on_train_start"].insert(0, _log_active_head)
-            model.callbacks["on_pretrain_routine_end"].append(gauss_setup)
-            register_gauss_gate(model, gauss_gate_cfg)
-            register_gauss_split_callbacks(model, wandb_enabled=bool(project))
-            _register_time_budget(model, time_budget_hours, started)
-            if on_epoch_end_callback is not None:
-                model.callbacks["on_fit_epoch_end"].append(lambda trainer: on_epoch_end_callback())
-            if project:
-                media = WandbMediaCallback(run, effective_dataset_config)
-                events = [("on_train_start", media.on_train_start), ("on_train_end", media.on_train_end)]
-                if media._hook is not None:
-                    events.extend([
-                        ("on_train_epoch_start", media.on_train_epoch_start),
-                        ("on_train_batch_end", media.on_train_batch_end),
-                    ])
-                for event, callback in events:
-                    model.callbacks[event].insert(0, callback)
 
             model.train(
                 data=str(effective_dataset_config),
@@ -494,10 +423,11 @@ def train(
 
         # Ultralytics already validates the stripped best.pt at the end of training.
         # Keep this result for compare; explicit evaluate still performs fresh validation.
-        if Path(model.trainer.best).is_file() and model.trainer.validator.metrics.box.all_ap.size:
+        val_final = getattr(model.trainer, "validator", None)
+        if Path(model.trainer.best).is_file() and val_final is not None and val_final.metrics.box.all_ap.size:
             from tinydet.evaluation.evaluator import metric_summary
 
-            best_metrics = metric_summary(model.trainer.validator.metrics)
+            best_metrics = metric_summary(val_final.metrics)
             best_metrics["source"] = "training_final_best"
             write_json(run / "metrics" / "val.json", best_metrics)
         details = metadata(run)
@@ -517,8 +447,6 @@ def train(
         update_status(run, "FAILED", str(exc))
         raise
     finally:
-        if diagnostics is not None:
-            diagnostics.close()
         if media is not None:
             media.close()
         if wandb_run is not None:

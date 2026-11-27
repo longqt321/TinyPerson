@@ -6,7 +6,12 @@ _CSV_STATE: dict = {}
 
 def log_ap_by_iou(trainer, wandb_enabled: bool = False) -> None:
     """Save AP by IoU each epoch before Ultralytics commits the W&B step."""
-    values = ap_by_iou(trainer.validator.metrics.box)
+    validator = getattr(trainer, "validator", None)
+    metrics = getattr(validator, "metrics", None) if validator is not None else None
+    box = getattr(metrics, "box", None) if metrics is not None else None
+    if box is None:
+        return
+    values = ap_by_iou(box)
     epoch = trainer.epoch + 1
     path = trainer.save_dir.parent / "metrics" / "ap_iou.csv"
     path.parent.mkdir(parents=True, exist_ok=True)

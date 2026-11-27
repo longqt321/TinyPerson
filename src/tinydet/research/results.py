@@ -91,7 +91,7 @@ def _rank(row: dict) -> tuple:
 
 def primary_runs(rows: list[dict]) -> list[dict]:
     """Choose one run per experiment and seed without cherry-picking seeds."""
-    selected = {}
+    selected: dict[tuple, dict] = {}
     for row in rows:
         key = (row.get("experiment"), row.get("seed"))
         if key not in selected or _rank(row) > _rank(selected[key]):
@@ -135,7 +135,7 @@ def paired_deltas(rows: list[dict], comparisons: list[dict]) -> list[dict]:
             seed for experiment, seed in indexed
             if experiment in {control, treatment} and seed is not None
         })
-        deltas = {metric: [] for metric in REPORT_METRICS}
+        deltas: dict[str, list[float]] = {metric: [] for metric in REPORT_METRICS}
         used = 0
         for seed in seeds:
             before = indexed.get((control, seed))

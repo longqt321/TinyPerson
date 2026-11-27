@@ -38,31 +38,32 @@ from tinydet.utils.dataset import dataset_images
 register_ultralytics_modules()
 
 
-def _run_oracles(annotations: Path, predictions: Path, output_dir: Path, workers: int,
-                 class_mode: str = "per_class") -> dict[str, Any]:
-    """Run the AP75 diagnostic oracles (baseline / score / box / both)."""
-    import subprocess
-    import sys
+def _run_oracles(
+    annotations: Path,
+    predictions: Path,
+    output_dir: Path,
+    workers: int,
+    class_mode: str = "per_class",
+    baseline_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run the AP75 diagnostic oracles in-process, reusing ``baseline_result`` when provided."""
+    import importlib.util
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [
-            sys.executable, str(Path(__file__).parent / "oracle_ap75.py"),
-            "--annotations", str(annotations),
-            "--predictions", str(predictions),
-            "--output-dir", str(output_dir / "oracle"),
-            "--workers", str(workers),
-            "--class-mode", class_mode,
-        ],
-        capture_output=True, text=True, check=False,
+    spec = importlib.util.spec_from_file_location(
+        "oracle_ap75", Path(__file__).parent / "oracle_ap75.py"
     )
-    summary_path = output_dir / "oracle" / "oracle_summary.json"
-    if summary_path.is_file():
-        return json.loads(summary_path.read_text())
-    return {
-        "error": result.stderr.strip() or result.stdout.strip() or "oracle script failed",
-        "returncode": result.returncode,
-    }
+    if spec is None or spec.loader is None:
+        return {"error": "unable to load oracle_ap75.py", "returncode": 1}
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.run_oracles(
+        annotations,
+        predictions,
+        output_dir / "oracle",
+        workers=workers,
+        class_mode=class_mode,
+        baseline_result=baseline_result,
+    )
 
 
 def _run_error_analysis(
@@ -173,8 +174,14 @@ def main() -> None:
     oracles: dict[str, Any] | None = None
     if not args.skip_oracle:
         print("[3/4] Running AP75 diagnostic oracles")
-        oracles = _run_oracles(args.annotations, predictions_path, args.output, args.workers,
-                               args.class_mode)
+        oracles = _run_oracles(
+            args.annotations,
+            predictions_path,
+            args.output,
+            args.workers,
+            args.class_mode,
+            baseline_result=benchmark,
+        )
         (args.output / "oracle_summary.json").write_text(json.dumps(oracles, indent=2) + "\n")
 
     # Step 4: error analysis

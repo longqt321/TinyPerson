@@ -16,12 +16,12 @@ Examples
 --------
 One-command run on Google Colab / Kaggle after ``git clone``::
 
-    bash scripts/run_gpu.sh --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml
+    bash scripts/run_gpu.sh --config configs/experiment/lgt_tinyperson_150e.yaml
 
 CPU dry-run validation (no GPU required)::
 
     uv run --extra cpu python train.py \
-        --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml \
+        --config configs/experiment/lgt_tinyperson_150e.yaml \
         --data datasets/derived/tinyperson-yolo-v2/data.yaml --dry-run
 """
 
@@ -60,7 +60,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT / "configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml",
+        default=REPO_ROOT / "configs/experiment/lgt_tinyperson_150e.yaml",
         help="Experiment YAML.",
     )
     parser.add_argument("--data", type=Path, help="Override data.config (file or directory).")

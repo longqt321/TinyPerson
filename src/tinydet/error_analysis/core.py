@@ -25,10 +25,17 @@ from tinydet.evaluation.tinyperson_benchmark import (
     MAX_DETECTIONS,
     SIZE_RANGES,
     _ap,
-    _in_range,
+    _boxes_sqrt_area,
+    _sizes_in_range,
 )
 from tinydet.utils.experiment import git_info
-from tinydet.utils.geometry import best_first_max, best_last_max, iod, iou, xywh_to_xyxy
+from tinydet.utils.geometry import (
+    best_first_max,
+    best_last_max,
+    iod_matrix,
+    iou_matrix,
+    xywh_to_xyxy,
+)
 
 SCHEMA_VERSION = 1
 IMPLEMENTATION_VERSION = "tinydet-error-analysis-v1"
@@ -169,7 +176,7 @@ def _xyxy(box: list[float] | tuple[float, ...], context: str) -> tuple[float, fl
         raise ValueError(f"{context}: non-finite box: {box}")
     if values[2] <= values[0] or values[3] <= values[1]:
         raise ValueError(f"{context}: non-positive box area: {box}")
-    return values
+    return (values[0], values[1], values[2], values[3])
 
 
 def _diagnostic_size_bin(box: tuple[float, float, float, float]) -> str:
@@ -301,11 +308,11 @@ def load_annotations(path: str | Path) -> AnnotationSet:
             dense=dense,
             raw=ann,
         ))
-    for (image_id, label, box), count in duplicate_keys.items():
+    for (image_id, label, key_box), count in duplicate_keys.items():
         if count > 1:
             issues.append(_issue(
                 "duplicate_annotation",
-                f"Image {images[image_id]['basename']}: duplicate label {label} box {list(box)}",
+                f"Image {images[image_id]['basename']}: duplicate label {label} box {list(key_box)}",
                 image_id=image_id,
                 count=count,
             ))
@@ -422,41 +429,88 @@ def load_predictions(path: str | Path) -> PredictionSet:
     )
 
 
+@dataclass(frozen=True)
+class _ImageOverlaps:
+    pos_indices: np.ndarray
+    pos_labels: np.ndarray
+    pos_sizes: np.ndarray
+    pos_iou: np.ndarray
+    ign_iou: np.ndarray
+    ign_iod: np.ndarray
+    det_sizes: np.ndarray
+    det_labels: np.ndarray
+
+
+def _build_image_overlaps(
+    detections: list[Detection], ground_truths: list[GroundTruth]
+) -> _ImageOverlaps:
+    """Compute IoU/IoD matrices and sqrt-area vectors once per image across all 21 bin/IoU passes."""
+    pos_pairs = [
+        (idx, gt) for idx, gt in enumerate(ground_truths) if not (gt.ignore or gt.uncertain)
+    ]
+    ign_boxes = [gt.box for gt in ground_truths if gt.ignore or gt.uncertain]
+    det_boxes = [d.box for d in detections]
+    pos_boxes = [gt.box for _, gt in pos_pairs]
+    return _ImageOverlaps(
+        pos_indices=np.asarray([idx for idx, _ in pos_pairs], dtype=np.intp),
+        pos_labels=np.asarray([gt.label for _, gt in pos_pairs], dtype=np.int64),
+        pos_sizes=_boxes_sqrt_area(pos_boxes),
+        pos_iou=iou_matrix(det_boxes, pos_boxes),
+        ign_iou=iou_matrix(det_boxes, ign_boxes),
+        ign_iod=iod_matrix(det_boxes, ign_boxes),
+        det_sizes=_boxes_sqrt_area(det_boxes),
+        det_labels=np.asarray([d.label for d in detections], dtype=np.int64),
+    )
+
+
 def _match_image(
     detections: list[Detection],
     ground_truths: list[GroundTruth],
     config: AnalysisConfig,
     size_bin: str = "all",
     iou_threshold: float | None = None,
+    *,
+    overlaps_cache: _ImageOverlaps | None = None,
+    compute_gt_outcomes: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
     """Reproduce TinyPerson per-image greedy matching and classify each outcome."""
     threshold = config.primary_iou if iou_threshold is None else iou_threshold
     size_range = SIZE_RANGES[size_bin]
-    positives = [
-        (index, gt) for index, gt in enumerate(ground_truths)
-        if not (gt.ignore or gt.uncertain) and _in_range(list(gt.box), size_range)
-    ]
-    outside = [
-        (index, gt) for index, gt in enumerate(ground_truths)
-        if not (gt.ignore or gt.uncertain) and not _in_range(list(gt.box), size_range)
-    ]
-    ignored = [gt for gt in ground_truths if gt.ignore or gt.uncertain]
+    ov = overlaps_cache if overlaps_cache is not None else _build_image_overlaps(detections, ground_truths)
+
+    in_flags = _sizes_in_range(ov.pos_sizes, size_range)
+    in_cols = np.flatnonzero(in_flags)
+    out_cols = np.flatnonzero(~in_flags)
+
+    pos_iou_all = ov.pos_iou[:, in_cols]
+    pos_labels = ov.pos_labels[in_cols]
+    pos_gt_indices = ov.pos_indices[in_cols]
+    pos_available = np.ones(in_cols.size, dtype=bool)
+
+    out_iou_all = ov.pos_iou[:, out_cols]
+    out_gt_indices = ov.pos_indices[out_cols]
+    out_available = np.ones(out_cols.size, dtype=bool)
+
+    ign_iou_all = ov.ign_iou
+    ign_iod_all = ov.ign_iod
+    n_ign = ign_iou_all.shape[1]
+    ign_available = np.ones(n_ign, dtype=bool)
+    det_in_bin = _sizes_in_range(ov.det_sizes, size_range)
+
     matched: set[int] = set()
-    matched_outside: set[int] = set()
-    matched_ignored: set[int] = set()
     outcomes: dict[int, dict[str, Any]] = {}
-    for detection in detections:
-        same_label = [(index, gt) for index, gt in positives if gt.label == detection.label]
-        gt_indices = [index for index, _ in same_label]
-        overlaps = iou(detection.box, [gt.box for _, gt in same_label])
+    for det_row, detection in enumerate(detections):
+        same_cols = np.flatnonzero(pos_labels == detection.label) if in_cols.size else np.empty(0, dtype=np.intp)
+        overlaps = pos_iou_all[det_row, same_cols] if same_cols.size else np.empty(0, dtype=np.float64)
         if overlaps.size:
-            available = np.array([index not in matched for index in gt_indices], dtype=bool)
-            candidates = np.flatnonzero((overlaps >= threshold) & available)
+            candidates = np.flatnonzero((overlaps >= threshold) & pos_available[same_cols])
         else:
             candidates = np.empty(0, dtype=np.intp)
         if candidates.size:
             best = best_first_max(overlaps, candidates)
-            gt_index = gt_indices[best]
+            pos_col = int(same_cols[best])
+            pos_available[pos_col] = False
+            gt_index = int(pos_gt_indices[pos_col])
             matched.add(gt_index)
             outcomes[detection.source_index] = {
                 "status": "true_positive",
@@ -467,22 +521,16 @@ def _match_image(
             }
             continue
 
-        outside_gt = [index for index, _ in outside]
-        outside_overlaps = iou(detection.box, [gt.box for _, gt in outside])
+        outside_overlaps = out_iou_all[det_row]
         if outside_overlaps.size:
-            available = np.array(
-                [index not in matched_outside for index in outside_gt], dtype=bool
-            )
-            outside_candidates = np.flatnonzero(
-                (outside_overlaps >= threshold) & available
-            )
+            outside_candidates = np.flatnonzero((outside_overlaps >= threshold) & out_available)
         else:
             outside_candidates = np.empty(0, dtype=np.intp)
         if outside_candidates.size:
             best = best_last_max(outside_overlaps, outside_candidates)
-            gt_index = outside_gt[best]
+            out_available[best] = False
+            gt_index = int(out_gt_indices[best])
             overlap = float(outside_overlaps[best])
-            matched_outside.add(gt_index)
             outcomes[detection.source_index] = {
                 "status": "neutral",
                 "subtype": "outside_size_range",
@@ -492,36 +540,27 @@ def _match_image(
             }
             continue
 
-        ignored_boxes = [gt.box for gt in ignored]
-        ignored_iou = iou(detection.box, ignored_boxes)
-        if ignored_iou.size:
-            available = np.array(
-                [index not in matched_ignored for index in range(len(ignored))], dtype=bool
-            )
-            ignored_candidates = np.flatnonzero((ignored_iou >= threshold) & available)
-        else:
-            ignored_candidates = np.empty(0, dtype=np.intp)
-        if ignored_candidates.size:
-            best = best_first_max(ignored_iou, ignored_candidates)
-            gt_index = int(best)
-            overlap = float(ignored_iou[best])
-            matched_ignored.add(gt_index)
-            outcomes[detection.source_index] = {
-                "status": "neutral",
-                "subtype": "ignored_annotation",
-                "gt_index": gt_index,
-                "iou": round(overlap, 6),
-            }
-            continue
-        neutral_iod = bool(np.any(iod(detection.box, ignored_boxes) >= threshold)) if ignored else False
-        if neutral_iod:
-            outcomes[detection.source_index] = {
-                "status": "neutral",
-                "subtype": "ignored_annotation",
-                "iou": 0.0,
-            }
-            continue
-        if not _in_range(list(detection.box), size_range):
+        if n_ign > 0:
+            ignored_iou = ign_iou_all[det_row]
+            ignored_candidates = np.flatnonzero((ignored_iou >= threshold) & ign_available)
+            if ignored_candidates.size:
+                best = best_first_max(ignored_iou, ignored_candidates)
+                ign_available[best] = False
+                outcomes[detection.source_index] = {
+                    "status": "neutral",
+                    "subtype": "ignored_annotation",
+                    "gt_index": int(best),
+                    "iou": round(float(ignored_iou[best]), 6),
+                }
+                continue
+            if bool(np.any(ign_iod_all[det_row] >= threshold)):
+                outcomes[detection.source_index] = {
+                    "status": "neutral",
+                    "subtype": "ignored_annotation",
+                    "iou": 0.0,
+                }
+                continue
+        if not det_in_bin[det_row]:
             outcomes[detection.source_index] = {
                 "status": "neutral",
                 "subtype": "out_of_size_range",
@@ -529,8 +568,8 @@ def _match_image(
             }
             continue
 
-        best_iou = max(overlaps, default=0.0)
-        duplicate = any(overlap >= threshold for overlap in overlaps)
+        best_iou = float(overlaps.max()) if overlaps.size else 0.0
+        duplicate = bool(np.any(overlaps >= threshold)) if overlaps.size else False
         if duplicate:
             subtype = "duplicate"
         elif best_iou >= config.localization_iou:
@@ -543,18 +582,22 @@ def _match_image(
             "iou": round(best_iou, 6),
         }
 
+    if not compute_gt_outcomes:
+        return [outcomes[detection.source_index] for detection in detections], {}
+
+    outside_index_set = {int(i) for i in out_gt_indices}
+    pos_col_of_gt = {int(gt_idx): col for col, gt_idx in enumerate(pos_gt_indices)}
     gt_outcomes: dict[int, dict[str, Any]] = {}
     for index, gt in enumerate(ground_truths):
         if gt.ignore or gt.uncertain:
             gt_outcomes[index] = {"status": "ignored", "iou": 0.0}
             continue
-        if (index, gt) in outside:
+        if index in outside_index_set:
             gt_outcomes[index] = {"status": "outside_size_range", "iou": 0.0}
             continue
-        same_label_boxes = [
-            detection.box for detection in detections if detection.label == gt.label
-        ]
-        best_iou = float(iou(gt.box, same_label_boxes).max()) if same_label_boxes else 0.0
+        col = pos_col_of_gt[index]
+        det_mask = ov.det_labels == gt.label
+        best_iou = float(pos_iou_all[det_mask, col].max()) if np.any(det_mask) else 0.0
         gt_outcomes[index] = {
             "status": "matched" if index in matched else "missed",
             "iou": round(best_iou, 6),
@@ -657,8 +700,6 @@ def _crosscheck_reference(
     predictions: PredictionSet,
     expected_ids: list[int],
 ) -> dict[str, Any]:
-    import tempfile
-
     from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
 
     # A single-class detector cannot be scored per category; mirror that here so the
@@ -675,25 +716,21 @@ def _crosscheck_reference(
 
     expected = set(expected_ids)
     image_ids = {annotations.images[image_id]["basename"]: image_id for image_id in expected}
-    predicted = {
-        basename: row for basename, row in predictions.rows.items()
+    predicted = [
+        row for basename, row in predictions.rows.items()
         if basename in image_ids
+    ]
+    ann_payload = {
+        "images": [image for image in annotations.raw["images"] if int(image["id"]) in expected],
+        "annotations": [
+            ann for ann in annotations.raw["annotations"] if int(ann["image_id"]) in expected
+        ],
+        "categories": annotations.raw["categories"],
     }
     try:
-        with tempfile.TemporaryDirectory(prefix="tinydet-error-crosscheck-") as temporary:
-            root = Path(temporary)
-            annotation_file = root / "annotations.json"
-            prediction_file = root / "predictions.json"
-            annotation_file.write_text(json.dumps({
-                "images": [image for image in annotations.raw["images"]
-                           if int(image["id"]) in expected],
-                "annotations": [ann for ann in annotations.raw["annotations"]
-                                if int(ann["image_id"]) in expected],
-                "categories": annotations.raw["categories"],
-            }))
-            prediction_file.write_text(json.dumps({"images": list(predicted.values())}))
-            reference = evaluate_tinyperson(annotation_file, prediction_file, workers=0,
-                                            class_mode=class_mode)
+        reference = evaluate_tinyperson(
+            ann_payload, {"images": predicted}, workers=1, class_mode=class_mode
+        )
     except (KeyError, TypeError, ValueError, OSError) as error:
         return {"available": False, "reason": f"reference evaluator failed: {error}"}
     return {"available": True, "reference": reference}
@@ -709,7 +746,7 @@ def _compare_samples(
         return {"available": False, "reason": "baseline dataset provenance differs"}
     shared = sorted(set(current_by_image) & set(baseline_by_image))
     corrected, regressed = [], []
-    deltas = Counter()
+    deltas: Counter[str] = Counter()
     for basename in shared:
         misses_before, fps_before = baseline_by_image[basename]
         after = current_by_image[basename]["summary"]
@@ -739,7 +776,7 @@ def _rate(numerator: int, denominator: int) -> float | None:
 
 
 def _aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
-    counts = Counter()
+    counts: Counter[str] = Counter()
     for record in records:
         counts["true_positives"] += record["summary"]["true_positives"]
         counts["false_positives"] += record["summary"]["false_positives"]
@@ -833,14 +870,16 @@ def _aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     operating_points = []
     all_predictions = [prediction for record in records for prediction in record["predictions"]]
+    pred_scores = np.asarray([p["score"] for p in all_predictions], dtype=np.float64)
+    pred_tp = np.asarray([p["outcome"]["status"] == "true_positive" for p in all_predictions], dtype=bool)
+    pred_fp = np.asarray([p["outcome"]["status"] == "false_positive" for p in all_predictions], dtype=bool)
     for threshold in (0.001, 0.005, 0.01, 0.02, 0.05, 0.10, 0.20, 0.50):
-        selected = [prediction for prediction in all_predictions
-                    if prediction["score"] >= threshold]
-        tp = sum(prediction["outcome"]["status"] == "true_positive" for prediction in selected)
-        fp = sum(prediction["outcome"]["status"] == "false_positive" for prediction in selected)
+        sel = pred_scores >= threshold
+        tp = int(pred_tp[sel].sum())
+        fp = int(pred_fp[sel].sum())
         operating_points.append({
             "score_threshold": threshold,
-            "predictions": len(selected),
+            "predictions": int(sel.sum()),
             "true_positives": tp,
             "false_positives": fp,
             "recall": _rate(tp, positive_gt),
@@ -950,13 +989,15 @@ def analyze_files(
         ground_truths = annotations.annotations.get(image_id, [])
         positive_objects = [gt for gt in ground_truths if not (gt.ignore or gt.uncertain)]
         density_name = _density_bin(len(positive_objects))
-        boundary = _boundary(
-            (0.0, 0.0, float(image["width"]), float(image["height"])),
-            image["width"], image["height"], 0.0,
-        )
-        del boundary
+        overlaps_cache = _build_image_overlaps(detections, ground_truths)
         primary_outcomes, gt_outcomes = _match_image(
-            detections, ground_truths, config, "all", config.primary_iou,
+            detections,
+            ground_truths,
+            config,
+            "all",
+            config.primary_iou,
+            overlaps_cache=overlaps_cache,
+            compute_gt_outcomes=True,
         )
         image_boundary = any(
             _boundary(gt.box, image["width"], image["height"], config.boundary_fraction)
@@ -1008,8 +1049,6 @@ def analyze_files(
                     boundary=_boundary(gt.box, image["width"], image["height"],
                                        config.boundary_fraction),
                 ))
-            elif gt_outcomes[index]["status"] == "matched":
-                pass
         for detection, outcome in zip(detections, primary_outcomes):
             item = {
                 "source_index": detection.source_index,
@@ -1025,13 +1064,13 @@ def analyze_files(
             record["predictions"].append(item)
             if outcome["status"] == "false_positive":
                 gt_index = outcome.get("gt_index")
-                gt = ground_truths[gt_index] if gt_index is not None else None
+                fp_gt = ground_truths[gt_index] if gt_index is not None else None
                 errors.append(_record_error(
                     record, "false_positive", outcome["subtype"],
                     box=detection.box, iou=outcome["iou"], score=detection.score,
                     object_id=detection.source_index,
-                    gt_id=gt.id if gt else None,
-                    gt_box=gt.box if gt else None,
+                    gt_id=fp_gt.id if fp_gt else None,
+                    gt_box=fp_gt.box if fp_gt else None,
                     boundary=_boundary(detection.box, image["width"], image["height"],
                                        config.boundary_fraction),
                 ))
@@ -1061,16 +1100,22 @@ def analyze_files(
         records.append(record)
 
         for size_name in SIZE_RANGES:
-            positive_counts[size_name] += sum(
-                not (gt.ignore or gt.uncertain) and _in_range(list(gt.box), SIZE_RANGES[size_name])
-                for gt in ground_truths
+            positive_counts[size_name] += int(
+                _sizes_in_range(overlaps_cache.pos_sizes, SIZE_RANGES[size_name]).sum()
             )
             for threshold in config.iou_thresholds:
                 if size_name == "all" and threshold == config.primary_iou:
                     outcomes = primary_outcomes
                 else:
                     outcomes, _ = _match_image(
-                        detections, ground_truths, config, size_name, threshold)
+                        detections,
+                        ground_truths,
+                        config,
+                        size_name,
+                        threshold,
+                        overlaps_cache=overlaps_cache,
+                        compute_gt_outcomes=False,
+                    )
                 for detection, outcome in zip(detections, outcomes):
                     if outcome["status"] in {"true_positive", "false_positive"}:
                         ap_entries[size_name][threshold].append(
@@ -1084,15 +1129,15 @@ def analyze_files(
 
     ap_by_bin: dict[str, dict[str, Any]] = {}
     for size_name, thresholds in ap_entries.items():
-        row: dict[str, Any] = {}
+        ap_row: dict[str, Any] = {}
         for threshold, entries in thresholds.items():
-            row[f"AP@{threshold:.2f}"] = _ap_from_outcomes(
+            ap_row[f"AP@{threshold:.2f}"] = _ap_from_outcomes(
                 entries, positive_counts[size_name])
-        row["positive_ground_truths"] = positive_counts[size_name]
-        valid = [value for value in row.values() if isinstance(value, float)]
-        row["AP_mean_IoU_0.25_0.50_0.75"] = (
+        ap_row["positive_ground_truths"] = positive_counts[size_name]
+        valid = [value for value in ap_row.values() if isinstance(value, float)]
+        ap_row["AP_mean_IoU_0.25_0.50_0.75"] = (
             sum(valid) / len(valid) if valid else None)
-        ap_by_bin[size_name] = row
+        ap_by_bin[size_name] = ap_row
 
     crosscheck = _crosscheck_reference(annotations, predictions, expected_ids)
     if crosscheck.get("available"):

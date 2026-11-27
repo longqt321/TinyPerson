@@ -127,20 +127,26 @@ def _label_candidates(image_path: Path, root: Path) -> list[Path]:
     deduplicated = []
     seen = set()
     for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            resolved = candidate
-        if resolved not in seen:
-            seen.add(resolved)
-            deduplicated.append(resolved)
+        if candidate not in seen:
+            seen.add(candidate)
+            deduplicated.append(candidate)
     return deduplicated
 
 
-def _parse_yolo_label(path: Path, width: int, height: int) -> tuple[list[dict[str, float]], list[str]]:
+def _find_label_file(image_path: Path, root: Path) -> Path | None:
+    for candidate in _label_candidates(image_path, root):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _parse_yolo_label(
+    path: Path, width: int, height: int, text: str | None = None
+) -> tuple[list[dict[str, float]], list[str]]:
     objects: list[dict[str, float]] = []
     errors: list[str] = []
-    for line_number, line in enumerate(path.read_text().splitlines(), 1):
+    raw_text = path.read_text() if text is None else text
+    for line_number, line in enumerate(raw_text.splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -211,23 +217,20 @@ def _audit_single_image(
     except ValueError:
         relative_path = image_path.as_posix()
 
-    label_path = next(
-        (candidate for candidate in _label_candidates(image_path, root)
-         if candidate.is_file()),
-        None,
-    )
+    label_candidate = _find_label_file(image_path, root)
+    label_path = label_candidate.resolve() if label_candidate is not None else None
     objects: list[dict[str, float]] = []
     label_errors: list[str] = []
     label_rows = 0
     label_stamp = ""
     if label_path is not None:
         try:
+            label_stat = label_path.stat()
             label_text = label_path.read_text()
             label_rows = sum(1 for line in label_text.splitlines() if line.strip())
             objects, label_errors = _parse_yolo_label(
-                label_path, native_width, native_height
+                label_path, native_width, native_height, text=label_text
             )
-            label_stat = label_path.stat()
             label_stamp = f"{label_stat.st_size}\0{label_stat.st_mtime_ns}"
         except OSError as exc:
             label_errors = [f"Cannot read labels {label_path}: {exc}"]

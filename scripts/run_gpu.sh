@@ -3,8 +3,8 @@
 #
 # Usage (after `git clone`):
 #   bash scripts/run_gpu.sh
-#   bash scripts/run_gpu.sh --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml
-#   bash scripts/run_gpu.sh --config configs/experiment/baseline_tinyperson_wacv_150e.yaml --wandb-group exp1
+#   bash scripts/run_gpu.sh --config configs/experiment/lgt_tinyperson_150e.yaml
+#   bash scripts/run_gpu.sh --config configs/experiment/baseline_clean_tinyperson_150e.yaml --wandb-group exp1
 #   bash scripts/run_gpu.sh --dry-run
 set -euo pipefail
 

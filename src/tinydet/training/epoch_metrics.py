@@ -1,20 +1,13 @@
 """Per-epoch metric callbacks that Ultralytics does not provide out of the box.
 
-- `GaussDiagnosticsCallback`: dumps `GauSS.get_diagnostics()` (router entropy,
-  band weights, gates, sigmas, DySample offsets, optimizer control group) for
-  every GauSS module each epoch into `metrics/gauss_diagnostics.csv` and W&B.
-- `SystemMetricsCallback`: epoch wall time, VRAM usage, total gradient norm and
-  the AMP grad-scaler scale, plus the trainer's `fitness` / `best_fitness` so
-  that checkpoint selection can be audited after the fact.
+- `SystemMetricsCallback`: epoch wall time, VRAM usage, total gradient norm,
+  AMP grad-scaler scale, trainer `fitness` / `best_fitness`, and `LGTDetect`
+  epoch-end scalar diagnostics (`lgt/*`).
 - `SizeStratifiedValCallback`: runs the official TinyPerson benchmark
   (`evaluate_tinyperson`, class_mode="merge") on the per-image validation
-  predictions of every epoch and records AP/MR per size bucket
-  (tiny1/tiny2/tiny3/small/reasonable). This makes the paper's headline metric
-  visible during training instead of only at the end.
-
-All W&B logs use `commit=False` and rely on Ultralytics' built-in wandb
-`on_fit_epoch_end` callback (`commit=True`, step = epoch+1) to flush them at
-the correct step — the same pattern as `iou_logging.log_ap_by_iou`.
+  predictions and records AP/MR per size bucket (`tiny1/tiny2/tiny3/small/reasonable`).
+- `RealtimeLogCallback`: streams throttled newline progress lines on piped
+  notebook/CLI hosts (Colab, Kaggle, Modal).
 """
 
 import csv
@@ -28,72 +21,13 @@ from types import MethodType
 
 import torch
 
-from tinydet.modules.gauss import GauSS
+from tinydet.modules.lgt_detect import find_lgt_head
 from tinydet.training.val_predictions import build_prediction_row
 from tinydet.utils.atomic import atomic_write_text
 from tinydet.utils.csv_log import append_epoch_csv_row
 
 SIZE_BUCKETS = ("tiny1", "tiny2", "tiny3", "small", "reasonable", "all")
 IOU_THRESHOLDS = ("0.25", "0.50", "0.75")
-
-
-class GaussDiagnosticsCallback:
-    """Log GauSS internals every epoch (CSV + W&B, detached from autograd)."""
-
-    def __init__(self, wandb_enabled: bool = False) -> None:
-        self.wandb_enabled = wandb_enabled
-        self.enabled = True
-        self.gauss_modules: list[tuple[str, GauSS]] = []
-        self._csv_state: dict = {}
-
-    def on_train_start(self, trainer) -> None:
-        model = getattr(trainer, "model", None)
-        if model is None:
-            return
-        self.gauss_modules = [(name, m) for name, m in model.named_modules() if isinstance(m, GauSS)]
-        # Validation runs on the EMA copy; its diagnostics are never read, so
-        # silence them (otherwise they would sync on every val forward).
-        ema = getattr(getattr(trainer, "ema", None), "ema", None)
-        if ema is not None:
-            for module in ema.modules():
-                if isinstance(module, GauSS):
-                    module._diag_armed = False
-                    module.dy_up3._diag_armed = False
-                    module.dy_up4._diag_armed = False
-        self.on_train_epoch_start(trainer)
-
-    def on_train_epoch_start(self, trainer) -> None:
-        # Diagnostics need GPU->CPU syncs: sample the first batch of each epoch only.
-        for _, module in self.gauss_modules:
-            module.arm_diagnostics(once=True)
-
-    def on_fit_epoch_end(self, trainer) -> None:
-        if not self.gauss_modules or not self.enabled:
-            return
-        try:
-            self._write(trainer)
-        except Exception as exc:  # noqa: BLE001 - logging must never break training
-            print(f"GauSS diagnostics logging disabled after error: {exc}", flush=True)
-            self.enabled = False
-
-    def _write(self, trainer) -> None:
-        rows: dict[str, float] = {}
-        for idx, (name, module) in enumerate(self.gauss_modules):
-            diag = module.get_diagnostics(optimizer=getattr(trainer, "optimizer", None))
-            prefix = "gauss" if len(self.gauss_modules) == 1 else f"gauss/{idx:02d}_{name}"
-            for key, value in diag.items():
-                rows[f"{prefix}/{key}"] = float(value)
-
-        epoch = trainer.epoch + 1
-        path = Path(trainer.save_dir).parent / "metrics" / "gauss_diagnostics.csv"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        append_epoch_csv_row(path, epoch, rows, self._csv_state)
-
-        if self.wandb_enabled:
-            import wandb
-
-            if wandb.run is not None:
-                wandb.log(rows, commit=False)
 
 
 class SystemMetricsCallback:
@@ -181,6 +115,12 @@ class SystemMetricsCallback:
         if torch.cuda.is_available():
             rows["system/vram_allocated_gb"] = torch.cuda.memory_allocated() / 2**30
             rows["system/vram_peak_gb"] = torch.cuda.max_memory_allocated() / 2**30
+        t_model = getattr(trainer, "model", None)
+        lgt_head = find_lgt_head(t_model) if t_model is not None else None
+        if lgt_head is not None:
+            for k, v in lgt_head.get_lgt_stats().items():
+                if math.isfinite(v):
+                    rows[f"lgt/{k}"] = float(v)
         if not rows:
             return
 
@@ -237,6 +177,7 @@ class SizeStratifiedValCallback:
         self._fresh = False
         self._original_update_metrics = None
         self._annotations: Path | None = None
+        self._gt_cache: dict | None = None
         self._last_seconds: float | None = None
 
     def on_train_start(self, trainer) -> None:
@@ -248,7 +189,10 @@ class SizeStratifiedValCallback:
             self._disable(f"annotation file not found: {self.annotation_source}")
             return
         try:
-            from tinydet.evaluation.tinyperson_benchmark import subset_annotations_to_split
+            from tinydet.evaluation.tinyperson_benchmark import (
+                _load_gt,
+                subset_annotations_to_split,
+            )
 
             run = Path(trainer.save_dir).parent
             self._annotations = subset_annotations_to_split(
@@ -257,6 +201,7 @@ class SizeStratifiedValCallback:
                 self.split,
                 run / "diagnostics" / f"annotations_{self.split}.json",
             )
+            self._gt_cache = _load_gt(self._annotations)
             validator = getattr(trainer, "validator", None)
             if validator is None:
                 self._disable("trainer has no validator")
@@ -289,7 +234,7 @@ class SizeStratifiedValCallback:
                     self.rows.append(build_prediction_row(validator, index, pred, batch))
             except Exception as exc:  # noqa: BLE001 - logging is optional
                 self._disable(exc)
-        return original(preds, batch)
+        return original(preds, batch) if original is not None else None
 
     def on_fit_epoch_end(self, trainer) -> None:
         if not self.enabled or self._annotations is None or not self.rows or not self._fresh:
@@ -299,14 +244,17 @@ class SizeStratifiedValCallback:
             from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
 
             run = Path(trainer.save_dir).parent
+            payload = {"images": self.rows}
             predictions = run / "metrics" / "val_predictions_latest.json"
-            atomic_write_text(predictions, json.dumps({"images": self.rows}) + "\n")
+            atomic_write_text(predictions, json.dumps(payload) + "\n", fsync=False)
 
             started = time.monotonic()
+            gt_input = self._gt_cache if self._gt_cache is not None else self._annotations
             result = evaluate_tinyperson(
-                self._annotations, predictions, workers=self.workers, class_mode=self.class_mode
+                gt_input, payload, workers=self.workers, class_mode=self.class_mode
             )
             self._last_seconds = time.monotonic() - started
+            self.rows.clear()
 
             epoch = trainer.epoch + 1
             flat: dict[str, float] = {}
@@ -435,10 +383,6 @@ class RealtimeLogCallback:
 
 def register_epoch_metrics(model, wandb_enabled: bool = False) -> None:
     """Attach the per-epoch metric callbacks to an Ultralytics model."""
-    gauss = GaussDiagnosticsCallback(wandb_enabled)
-    model.callbacks["on_train_start"].append(gauss.on_train_start)
-    model.callbacks["on_train_epoch_start"].append(gauss.on_train_epoch_start)
-    model.callbacks["on_fit_epoch_end"].append(gauss.on_fit_epoch_end)
     system = SystemMetricsCallback(wandb_enabled)
     model.callbacks["on_train_start"].append(system.on_train_start)
     model.callbacks["on_train_epoch_start"].append(system.on_train_epoch_start)

@@ -2,9 +2,9 @@
 
 import torch
 
-from tinydet.modules.gauss_split_detect import DetectGaussSplit, find_gauss_split_head
 from tinydet.modules.lgt_detect import (
     LGTDetect,
+    SpatialShiftStencil,
     find_lgt_head,
     scale_invariant_wasserstein_xyxy,
 )
@@ -23,16 +23,15 @@ def make_tiny_floor_forward(orig_fn, floor_val):
         target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx = orig_fn(
             pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs
         )
-        if fg_mask.any():
-            bw = (target_bboxes[..., 2] - target_bboxes[..., 0]).clamp(min=0)
-            bh = (target_bboxes[..., 3] - target_bboxes[..., 1]).clamp(min=0)
-            sqrt_area = torch.sqrt(bw * bh + 1e-6)
-            is_tiny_pos = ((sqrt_area < 8.0) & fg_mask).unsqueeze(-1) & (target_scores > 0)
-            target_scores = torch.where(
-                is_tiny_pos,
-                target_scores.clamp(min=floor_val),
-                target_scores,
-            )
+        area = (target_bboxes[..., 2] - target_bboxes[..., 0]).clamp(min=0.0) * (
+            target_bboxes[..., 3] - target_bboxes[..., 1]
+        ).clamp(min=0.0)
+        is_tiny_pos = ((area < 64.0) & fg_mask).unsqueeze(-1) & (target_scores > 0)
+        target_scores = torch.where(
+            is_tiny_pos,
+            target_scores.clamp(min=floor_val),
+            target_scores,
+        )
         return target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx
 
     return patched_forward
@@ -41,8 +40,8 @@ def make_tiny_floor_forward(orig_fn, floor_val):
 def _wasserstein_sim_lowmem(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor) -> torch.Tensor:
     """Memory-minimal scale-invariant Wasserstein similarity ``1 / (1 + D)`` for TAL.
 
-    Computes x and y axes sequentially with in-place ops to cut peak VRAM ~3x inside
-    ``TaskAlignedAssigner`` where tensors reach ``(B, max_gt, 136k, 4)``.
+    Computes x and y axes sequentially with broadcast-safe in-place ops to cut peak VRAM ~3x
+    inside ``TaskAlignedAssigner`` for both 1D ``(K, 4)`` and broadcasted ``(B, M, N, 4)`` inputs.
     """
     g1 = gt_bboxes[..., 0].float()
     g2 = gt_bboxes[..., 2].float()
@@ -50,9 +49,9 @@ def _wasserstein_sim_lowmem(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor) ->
     p2 = pd_bboxes[..., 2].float()
     sig_g = (g2 - g1).mul_(0.5).clamp_(min=1e-3)
     sig_p = (p2 - p1).mul_(0.5).clamp_(min=1e-3)
-    dist = (g2 + g1).sub_(p2 + p1).mul_(0.5).square_()
+    dist = ((g2 + g1) - (p2 + p1)).mul_(0.5).square_()
     dist.add_((sig_g - sig_p).square_())
-    dist.div_(sig_g.square_().add_(sig_p.square_()).add_(1e-6))
+    dist.div_((sig_g.square() + sig_p.square()).add_(1e-6))
 
     g1 = gt_bboxes[..., 1].float()
     g2 = gt_bboxes[..., 3].float()
@@ -60,9 +59,9 @@ def _wasserstein_sim_lowmem(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor) ->
     p2 = pd_bboxes[..., 3].float()
     sig_g = (g2 - g1).mul_(0.5).clamp_(min=1e-3)
     sig_p = (p2 - p1).mul_(0.5).clamp_(min=1e-3)
-    dy = (g2 + g1).sub_(p2 + p1).mul_(0.5).square_()
+    dy = ((g2 + g1) - (p2 + p1)).mul_(0.5).square_()
     dy.add_((sig_g - sig_p).square_())
-    dy.div_(sig_g.square_().add_(sig_p.square_()).add_(1e-6))
+    dy.div_((sig_g.square() + sig_p.square()).add_(1e-6))
     dist.add_(dy)
     del dy, g1, g2, p1, p2, sig_g, sig_p
     return dist.add_(1.0).reciprocal_()
@@ -80,7 +79,7 @@ def make_wasserstein_iou_calculation(orig_iou_fn, weight: float, ref_scale_px: f
         gt_area.mul_((gt_bboxes[..., 3] - gt_bboxes[..., 1]).clamp_(min=0.0))
         alpha = gt_area.div_(ref_area).add_(1.0).reciprocal_().mul_(float(weight)).to(dtype=ciou.dtype)
         w_sim = _wasserstein_sim_lowmem(gt_bboxes, pd_bboxes).to(dtype=ciou.dtype)
-        return ciou.add(w_sim.sub_(ciou).mul_(alpha))
+        return ciou.add_(w_sim.sub_(ciou).mul_(alpha))
 
     return patched_iou_calculation
 
@@ -169,7 +168,7 @@ def _install_hooks() -> None:
                         bbox_loss.forward, loss_wasserstein, ref_scale_px=ref_scale_px
                     )
                     bbox_loss._wasserstein_patched = True
-        head = find_gauss_split_head(self) or find_lgt_head(self)
+        head = find_lgt_head(self)
         if head is not None:
             if not isinstance(criterion, E2ELoss):
                 raise TypeError(
@@ -186,68 +185,17 @@ def _install_hooks() -> None:
     def e2e_call(self, preds, batch):
         total, items = original_e2e_call(self, preds, batch)
         head = getattr(self, "_tinydet_head", None)
-        if head is None:
-            return total, items
-        if not getattr(head, "training", True):
+        if head is None or not getattr(head, "training", True):
             return total, items
         raw = preds[1] if isinstance(preds, tuple) else preds
         aux = head.aux_loss(raw, batch)
-        loss_key = "lgt_loss" if isinstance(head, LGTDetect) else "gs_loss"
-        if isinstance(head, LGTDetect):
-            bsz = max(raw["one2one"]["boxes"].shape[0], 1)
-            return total.sum() + aux, {**items, loss_key: aux.detach() / bsz}
-        return total.sum() + aux, {**items, loss_key: aux.detach()}
+        bsz = max(raw["one2one"]["boxes"].shape[0], 1)
+        return total.sum() + aux, {**items, "lgt_loss": aux.detach() / bsz}
 
     E2ELoss.__call__ = e2e_call
 
-    _install_predictor_hooks()
-    DetectionModel._tinydet_hooks = True
-
-
-def _install_predictor_hooks() -> None:
-    """Route inference through the head when the model carries a DetectGaussSplit."""
-    from ultralytics.models.yolo.detect.predict import DetectionPredictor
-    from ultralytics.models.yolo.detect.val import DetectionValidator
-    from ultralytics.utils.torch_utils import unwrap_model
-
-    original_construct = DetectionPredictor.construct_results
-
-    def construct_results(self, preds, img, orig_imgs):
-        head = find_gauss_split_head(getattr(self.model, "model", self.model))
-        if head is not None:
-            preds = head.add_second_boxes(preds)
-        return original_construct(self, preds, img, orig_imgs)
-
-    DetectionPredictor.construct_results = construct_results
-
-    # The validator receives the model as a local in __call__, so the head has to
-    # be stashed in init_metrics (called once per validation, right before the
-    # prediction loop) for postprocess to use.
-    original_init_metrics = DetectionValidator.init_metrics
-
-    def init_metrics(self, model):
-        self._tinydet_head = find_gauss_split_head(unwrap_model(model))
-        return original_init_metrics(self, model)
-
-    original_validator_postprocess = DetectionValidator.postprocess
-
-    def validator_postprocess(self, preds):
-        outputs = original_validator_postprocess(self, preds)
-        head = getattr(self, "_tinydet_head", None)
-        if head is None:
-            return outputs
-        rows = [
-            torch.cat([o["bboxes"], o["conf"][:, None], o["cls"][:, None]], 1) for o in outputs
-        ]
-        return [
-            {"bboxes": t[:, :4], "conf": t[:, 4], "cls": t[:, 5], "extra": t[:, 6:]}
-            for t in head.add_second_boxes(rows)
-        ]
-
-    DetectionValidator.init_metrics = init_metrics
-    DetectionValidator.postprocess = validator_postprocess
-
     _install_tile_train_only_hook()
+    DetectionModel._tinydet_hooks = True
 
 
 def _install_tile_train_only_hook() -> None:
@@ -282,43 +230,17 @@ def _install_tile_train_only_hook() -> None:
 
 
 def register_ultralytics_modules() -> None:
-    """Register TinyDet modules (LGTDetect, GauSS, P2Refine, DetectGaussSplit) before YAML parsing."""
+    """Register LGTDetect before Ultralytics YAML parsing and checkpoint loading."""
     from ultralytics.nn import tasks
 
-    from tinydet.modules.gauss import (
-        BandBranch,
-        DilatedContextBranch,
-        DySampleUp,
-        GauSS,
-        LearnableGaussianScaleSpace,
-        RefinementBranch,
-    )
-    from tinydet.modules.lgt_detect import SpatialShiftStencil
-    from tinydet.modules.p2_refine import P2Refine
-
-    tasks.GauSS = GauSS
-    tasks.BandBranch = BandBranch
-    tasks.DilatedContextBranch = DilatedContextBranch
-    tasks.LearnableGaussianScaleSpace = LearnableGaussianScaleSpace
-    tasks.RefinementBranch = RefinementBranch
-    tasks.P2Refine = P2Refine
-    tasks.DetectGaussSplit = DetectGaussSplit
     tasks.LGTDetect = LGTDetect
 
-    if not getattr(tasks, "_tinydet_gauss_patched", False):
+    if not getattr(tasks, "_tinydet_lgt_patched", False):
         import inspect
 
         src = inspect.getsource(tasks.parse_model)
         target = "        else:\n            c2 = ch[f]"
-        replacement = """        elif m is GauSS:
-            c1 = [ch[x] for x in f]
-            c2 = args[0] if len(args) > 0 else 32
-            args = [c1, c2, *args[1:]]
-        elif m is P2Refine:
-            c1 = [ch[x] for x in f]
-            c2 = args[0] if len(args) > 0 else 32
-            args = [c1, c2, *args[1:]]
-        elif m in {DetectGaussSplit, LGTDetect}:
+        replacement = """        elif m is LGTDetect:
             args = [args[0], reg_max, end2end, [ch[x] for x in f], *args[1:]]
             m.legacy = legacy
         else:
@@ -329,24 +251,13 @@ def register_ultralytics_modules() -> None:
             )
         new_src = src.replace(target, replacement, 1)
         glb = dict(tasks.__dict__)
-        glb["GauSS"] = GauSS
-        glb["P2Refine"] = P2Refine
-        glb["DetectGaussSplit"] = DetectGaussSplit
         glb["LGTDetect"] = LGTDetect
         exec(new_src, glb)  # noqa: S102
         tasks.parse_model = glb["parse_model"]
-        tasks._tinydet_gauss_patched = True
+        tasks._tinydet_lgt_patched = True
 
     if hasattr(torch.serialization, "add_safe_globals"):
         torch.serialization.add_safe_globals([
-            GauSS,
-            BandBranch,
-            DilatedContextBranch,
-            DySampleUp,
-            LearnableGaussianScaleSpace,
-            RefinementBranch,
-            P2Refine,
-            DetectGaussSplit,
             LGTDetect,
             SpatialShiftStencil,
         ])

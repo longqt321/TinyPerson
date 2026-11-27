@@ -47,18 +47,16 @@ def create_run(
     run_id: str | None = None,
 ) -> Path:
     commit, dirty = source_git if source_git is not None else git_info()
-    if run_id is None:
-        now = datetime.now(UTC)
-        run_id = f"{now:%Y%m%d-%H%M%S}-{commit}-seed{config.seed}"
-    else:
-        now = datetime.now(UTC)
+    now = datetime.now(UTC)
+    auto_id = run_id is None
+    base_id = f"{now:%Y%m%d-%H%M%S}-{commit}-seed{config.seed}" if auto_id else str(run_id)
     root = Path(config.output["root"]) / config.name
-    run = root / run_id
-    if run.exists() and (run / "metadata.json").is_file():
+    run = root / base_id
+    if not auto_id and run.exists() and (run / "metadata.json").is_file():
         return run
     suffix = 1
-    while run.exists() and run_id is None:
-        run = root / f"{run_id}-{suffix}"
+    while auto_id and run.exists():
+        run = root / f"{base_id}-{suffix}"
         suffix += 1
     run.mkdir(parents=True, exist_ok=True)
     (run / "config.yaml").write_text(yaml.safe_dump(asdict(config), sort_keys=False))

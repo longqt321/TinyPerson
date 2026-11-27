@@ -50,6 +50,15 @@ explicit = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/tinydet"]
 
+[tool.mypy]
+ignore_missing_imports = true
+
+# Ultralytics is extended by deliberate runtime monkey-patching (loss, trainer, parse_model
+# hooks); mypy cannot model assignments to methods/attributes of third-party classes.
+[[tool.mypy.overrides]]
+module = "tinydet.models.ultralytics"
+disable_error_code = ["method-assign", "attr-defined"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py314"

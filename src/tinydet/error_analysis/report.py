@@ -281,7 +281,7 @@ def write_outputs(result: AnalysisResult, output: str | Path, *, plots: bool = F
     atomic_write_jsonl(output / "samples.jsonl", result.samples)
     atomic_write_jsonl(output / "errors.jsonl", result.errors)
     atomic_write_text(output / "report.md", render_report(result))
-    paths = {
+    paths: dict[str, Any] = {
         "summary": str(output / "summary.json"),
         "samples": str(output / "samples.jsonl"),
         "errors": str(output / "errors.jsonl"),

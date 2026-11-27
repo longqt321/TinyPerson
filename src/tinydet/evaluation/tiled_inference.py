@@ -9,6 +9,8 @@ Tile parameters:
 """
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import torch
 from PIL import Image
@@ -45,9 +47,8 @@ def batched_nms(
     if classes is not None:
         classes_t = torch.from_numpy(classes).long()
         keep = tv_batched_nms(boxes_t, scores_t, classes_t, iou_thr).numpy()
-    else:
-        keep = nms(boxes_t, scores_t, iou_thr).numpy()
-    return np.array(sorted(keep, key=lambda k: -scores[k]), dtype=np.int64)
+        return keep[np.argsort(-scores[keep], kind="stable")].astype(np.int64, copy=False)
+    return nms(boxes_t, scores_t, iou_thr).numpy().astype(np.int64, copy=False)
 
 
 def suppress_border_truncated(
@@ -62,6 +63,7 @@ def suppress_border_truncated(
     prediction often have ``IoU < 0.50`` despite ``IOS = inter / min(area_i, area_j) ~ 1.0``.
     ``boxes``/``scores``/``classes`` must already be sorted in descending score order.
     """
+    del scores
     n = boxes.shape[0]
     if n <= 1 or ios_thr <= 0.0 or ios_thr > 1.0:
         return torch.arange(n, device=boxes.device, dtype=torch.long)
@@ -72,16 +74,13 @@ def suppress_border_truncated(
     wh = (rb - lt).clamp(min=0.0)
     inter = wh[..., 0] * wh[..., 1]
     min_area = torch.minimum(areas[:, None], areas[None, :])
-    ios = inter / min_area
-    same_cls = classes[:, None] == classes[None, :]
+    sup_mat = ((inter >= ios_thr * min_area) & (classes[:, None] == classes[None, :])).cpu().numpy()
 
-    keep_mask = torch.ones(n, dtype=torch.bool, device=boxes.device)
+    keep_np = np.ones(n, dtype=bool)
     for i in range(n):
-        if not keep_mask[i]:
-            continue
-        suppressed = (ios[i, i + 1 :] >= ios_thr) & same_cls[i, i + 1 :]
-        keep_mask[i + 1 :] &= ~suppressed
-    return torch.nonzero(keep_mask, as_tuple=False).squeeze(1)
+        if keep_np[i]:
+            keep_np[i + 1 :] &= ~sup_mat[i, i + 1 :]
+    return torch.from_numpy(np.flatnonzero(keep_np)).to(device=boxes.device, dtype=torch.long)
 
 
 def get_image_slices(img_w: int, img_h: int, tile_w: int = 640, tile_h: int = 512, overlap: int = 100) -> list[tuple[int, int, int, int]]:
@@ -125,24 +124,31 @@ def predict_tiled_image(
     all_scores = []
     all_classes = []
 
+    rgb = img.convert("RGB") if img.mode != "RGB" else img
+    img_bgr = np.asarray(rgb)[..., ::-1]
     crops = []
     offsets = []
     for x1, y1, x2, y2 in slices:
-        crops.append(img.crop((x1, y1, x2, y2)))
+        crops.append(np.ascontiguousarray(img_bgr[y1:y2, x1:x2]))
         offsets.append((x1, y1))
 
-    results = model.predict(crops, imgsz=(tile_h, tile_w), conf=conf, device=device, verbose=False)
+    use_half = torch.cuda.is_available() and not str(device).startswith("cpu")
+    results: Any = model.predict(
+        crops, imgsz=(tile_h, tile_w), conf=conf, device=device, half=use_half, verbose=False
+    )
 
     for (ox, oy), res in zip(offsets, results):
         boxes = res.boxes
-        if len(boxes) == 0:
+        if boxes is None or len(boxes) == 0:
             continue
         xyxy = boxes.xyxy.cpu().numpy()
         scores = boxes.conf.cpu().numpy()
         clses = boxes.cls.cpu().numpy().astype(int)
 
-        xyxy[:, [0, 2]] += ox
-        xyxy[:, [1, 3]] += oy
+        xyxy[:, 0] += ox
+        xyxy[:, 2] += ox
+        xyxy[:, 1] += oy
+        xyxy[:, 3] += oy
 
         all_boxes.append(xyxy)
         all_scores.append(scores)
@@ -164,6 +170,8 @@ def predict_tiled_image(
     scores_t = torch.from_numpy(cat_scores).float()
     classes_t = torch.from_numpy(cat_classes).long()
     keep_t = tv_batched_nms(boxes_t, scores_t, classes_t, merge_iou)
+    if keep_t.numel() > 1:
+        keep_t = keep_t[torch.argsort(scores_t[keep_t], descending=True, stable=True)]
 
     if merge_ios is not None and merge_ios > 0.0 and keep_t.numel() > 1:
         sub_keep = suppress_border_truncated(

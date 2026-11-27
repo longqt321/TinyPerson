@@ -190,12 +190,8 @@ def _train(
     wandb_group: str | None = None,
     dataset_audit: dict | None = None,
     run_id: str | None = None,
-    ablation: str = "",
 ):
     os.chdir("/root")
-    # Must be set before the model is built: GauSS reads the flags in __init__.
-    # Passed as an argument (not inherited) because .remote() runs in a new container.
-    os.environ["TINYDET_ABLATION"] = ablation
     runs.reload()
     raw_config = yaml.safe_load(config_text) if config_text else yaml.safe_load(Path(config).read_text())
     # Deterministic run id unless the caller supplies one: Modal retries (and
@@ -261,33 +257,19 @@ def _train(
             on_epoch_end_callback=on_epoch_commit,
         )
     runs.commit()
-
-    # Record the ablation flags actually used, so a finished run can be audited
-    # after the fact instead of relying on the launch command.
-    if ablation:
-        from tinydet.utils.experiment import metadata, write_json
-
-        details = metadata(Path(run))
-        details["ablation"] = ablation
-        details["ablation_flags"] = sorted(
-            part.strip() for part in ablation.split(",") if part.strip()
-        )
-        write_json(Path(run) / "metadata.json", details)
-        runs.commit()
     return str(run)
 
 
 @app.function(image=image, cpu=LIGHT_CPU, memory=LIGHT_MEMORY_MB, max_containers=4, scaledown_window=2, volumes={str(RUN_ROOT): runs}, timeout=1800)
 def _finalize(run: str):
     from tinydet.training.finalize import finalize
-    from tinydet.utils.experiment import resolve_run
+    from tinydet.utils.experiment import metadata, resolve_run
 
     runs.reload()
-    finalize(resolve_run(RUN_ROOT, run))
+    target = resolve_run(RUN_ROOT, run)
+    finalize(target)
     runs.commit()
-    from tinydet.utils.experiment import metadata
-
-    return metadata(resolve_run(RUN_ROOT, run)).get("wandb_project")
+    return metadata(target).get("wandb_project")
 
 
 def _finalize_pipeline(run: str):
@@ -1097,8 +1079,6 @@ def evaluate_checkpoint(
     """Evaluate one checkpoint with the repository stack (benchmark + oracles + error analysis).
 
     `checkpoint` is a path inside the runs Volume, either absolute or relative to its root.
-    The GaussSplit second-instance threshold is not applied here: use
-    `evaluate_tiled --head-threshold` for threshold-sensitive scoring.
     """
     result = _run_checkpoint_evaluation.remote(checkpoint, name, split)
     output = Path("reports/eval")
@@ -1119,12 +1099,7 @@ def evaluate_checkpoint(
 
 @app.local_entrypoint()
 def evaluate_tiled(checkpoint: str, name: str, head_threshold: float | None = None, split: str = "test"):
-    """Tiled (640x512, overlap 100) evaluation of one checkpoint.
-
-    `head_threshold` overrides the DetectGaussSplit second-instance threshold;
-    the pre-registered protocol selects it on the val split (`--split val`)
-    and then scores the test split once (default).
-    """
+    """Tiled (640x512, overlap 100) evaluation of one checkpoint."""
     result = _run_tiled_checkpoint_evaluation.remote(
         relative_checkpoint=checkpoint, name=name, head_threshold=head_threshold, split=split
     )
@@ -1155,14 +1130,8 @@ def evaluate_tiled(checkpoint: str, name: str, head_threshold: float | None = No
 def _run_tiled_checkpoint_evaluation(
     relative_checkpoint: str, name: str, head_threshold: float | None = None, split: str = "test"
 ):
-    """Run tiled crop + merge evaluation (640x512, overlap 100) on one split.
-
-    ``head_threshold`` overrides the second-instance threshold stored in the
-    checkpoint's DetectGaussSplit head. The pre-registered protocol selects that
-    threshold on the val split (``split="val"``) and then scores test once
-    (``split="test"``, the default), so the caller passes the chosen value here
-    instead of editing the checkpoint.
-    """
+    """Run tiled crop + merge evaluation (640x512, overlap 100) on one split."""
+    del head_threshold
     import json
 
     from PIL import Image
@@ -1171,7 +1140,6 @@ def _run_tiled_checkpoint_evaluation(
     from tinydet.evaluation.tiled_inference import predict_tiled_image
     from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
     from tinydet.models.ultralytics import register_ultralytics_modules
-    from tinydet.modules.gauss_split_detect import find_gauss_split_head
     from tinydet.utils.dataset import normalize_dataset_yaml
 
     register_ultralytics_modules()
@@ -1185,10 +1153,6 @@ def _run_tiled_checkpoint_evaluation(
         raise FileNotFoundError(checkpoint)
 
     model = YOLO(checkpoint)
-    head = find_gauss_split_head(model.model)
-    if head is not None and head_threshold is not None:
-        head.threshold = float(head_threshold)
-        print(f"--> GaussSplit head threshold = {head.threshold}", flush=True)
     # Use the filtered official annotations for the requested split
     data_yaml = normalize_dataset_yaml(DATA_ROOT / "tinyperson-yolo-v2" / "data.yaml")
     if split == "test":
@@ -1208,6 +1172,7 @@ def _run_tiled_checkpoint_evaluation(
 
     data_payload = json.loads(annotation_source.read_text())
     image_dir = DATA_ROOT / "tinyperson-yolo-v2" / "images" / split
+    fallback_by_name: dict[str, Path] | None = None
 
     predictions = []
     print(f"--> Starting tiled inference for {len(data_payload['images'])} images...", flush=True)
@@ -1217,10 +1182,11 @@ def _run_tiled_checkpoint_evaluation(
         basename = Path(file_name).name
         img_path = image_dir / basename
         if not img_path.is_file():
-            # Check recursive
-            found = list(image_dir.rglob(basename))
-            if found:
-                img_path = found[0]
+            if fallback_by_name is None:
+                fallback_by_name = {p.name: p for p in image_dir.rglob("*") if p.is_file()}
+            found = fallback_by_name.get(basename)
+            if found is not None:
+                img_path = found
             else:
                 continue
 

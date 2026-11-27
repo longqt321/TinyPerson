@@ -61,7 +61,6 @@ def load_comparison(path: str | Path | None = None, raw_text: str | None = None)
             m_cfg = Path(model["config"])
         if not m_cfg.is_file():
             raise ValueError(f"Model config does not exist: {model['config']}")
-            raise ValueError(f"Model config does not exist: {model['config']}")
         pretrained = model.get("pretrained")
         if pretrained is not None and not isinstance(pretrained, str):
             raise ValueError(f"pretrained must be a path string: {pretrained}")
@@ -88,7 +87,7 @@ def load_comparison(path: str | Path | None = None, raw_text: str | None = None)
         if name in comparison_names:
             raise ValueError(f"Duplicate comparison name: {name}")
         comparison_names.add(name)
-        unknown = {control, treatment} - names
+        unknown = {str(control), str(treatment)} - names
         if unknown:
             raise ValueError(f"Unknown comparison arm(s): {', '.join(sorted(unknown))}")
     return experiments

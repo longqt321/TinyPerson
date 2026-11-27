@@ -29,6 +29,7 @@ import os
 import sys
 import threading
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -57,8 +58,9 @@ SIZE_RANGES: dict[str, tuple[float, float, bool, bool]] = {
 }
 _EVAL_CONTEXT: tuple[
     list[int],
-    dict,
+    dict[int, dict[int, np.ndarray]],
     list[tuple[float, int, list[float], int]],
+    np.ndarray,
     np.ndarray,
     dict[int, dict[int, np.ndarray]],
     dict[int, np.ndarray],
@@ -81,21 +83,45 @@ def _is_fork_safe() -> bool:
     return True
 
 
+def _boxes_sqrt_area(boxes: Iterable[Sequence[float]] | np.ndarray) -> np.ndarray:
+    arr = np.asarray(boxes, dtype=np.float64).reshape(-1, 4)
+    if arr.shape[0] == 0:
+        return np.empty(0, dtype=np.float64)
+    w = np.maximum(arr[:, 2] - arr[:, 0], 0.0)
+    h = np.maximum(arr[:, 3] - arr[:, 1], 0.0)
+    return np.sqrt(w * h)
+
+
+def _sizes_in_range(sizes: np.ndarray, size_spec: tuple[float, float, bool, bool]) -> np.ndarray:
+    low, high, left_closed, right_closed = size_spec
+    left_ok = (sizes >= low) if left_closed else (sizes > low)
+    right_ok = (sizes <= high) if right_closed else (sizes < high)
+    return left_ok & right_ok
+
+
 def _precompute_overlap_matrices(
     eval_ids: list[int],
     gt_by_image: dict[int, dict[str, Any]],
     scored: list[tuple[float, int, list[float], int]],
 ) -> tuple[
     np.ndarray,
+    np.ndarray,
+    dict[int, dict[int, np.ndarray]],
     dict[int, dict[int, np.ndarray]],
     dict[int, np.ndarray],
     dict[int, np.ndarray],
 ]:
-    """Compute per-image IoU/IoD matrices once across all 7 size bins."""
+    """Compute per-image IoU/IoD matrices and sqrt-area vectors once across all 7 size bins."""
     rows_of_image: dict[int, list[int]] = defaultdict(list)
     for row, (_, image_id, _, _) in enumerate(scored):
         rows_of_image[image_id].append(row)
     local_of_row = np.empty(len(scored), dtype=np.intp)
+    det_sizes = (
+        _boxes_sqrt_area([item[2] for item in scored])
+        if scored
+        else np.empty(0, dtype=np.float64)
+    )
+    gt_sizes: dict[int, dict[int, np.ndarray]] = {}
     positive_iou: dict[int, dict[int, np.ndarray]] = {}
     ignored_iou: dict[int, np.ndarray] = {}
     ignored_iod: dict[int, np.ndarray] = {}
@@ -105,105 +131,115 @@ def _precompute_overlap_matrices(
         detections = np.asarray(
             [scored[row][2] for row in rows], dtype=np.float64
         ).reshape(-1, 4)
+        positives = gt_by_image[image_id]["positive"]
         positive_iou[image_id] = {
             category: iou_matrix(detections, boxes)
-            for category, boxes in gt_by_image[image_id]["positive"].items()
+            for category, boxes in positives.items()
+        }
+        gt_sizes[image_id] = {
+            category: _boxes_sqrt_area(boxes)
+            for category, boxes in positives.items()
         }
         ignored_boxes = gt_by_image[image_id]["ignored"]
         ignored_iou[image_id] = iou_matrix(detections, ignored_boxes)
         ignored_iod[image_id] = iod_matrix(detections, ignored_boxes)
-    return local_of_row, positive_iou, ignored_iou, ignored_iod
+    return local_of_row, det_sizes, gt_sizes, positive_iou, ignored_iou, ignored_iod
 
 
 def _evaluate_size_bin(bin_name: str) -> tuple[str, dict[str, Any]]:
     if _EVAL_CONTEXT is None:
         raise RuntimeError("Evaluator worker context was not initialized")
-    eval_ids, gt_by_image, scored, local_of_row, positive_iou, ignored_iou, ignored_iod = _EVAL_CONTEXT
+    (
+        eval_ids,
+        gt_sizes,
+        scored,
+        local_of_row,
+        det_sizes,
+        positive_iou,
+        ignored_iou,
+        ignored_iod,
+    ) = _EVAL_CONTEXT
     size_spec = SIZE_RANGES[bin_name]
-    bin_gt: dict[int, dict[str, Any]] = {}
+    det_in_bin = _sizes_in_range(det_sizes, size_spec)
     positive_count = 0
     positive_count_by_cat: dict[int, int] = defaultdict(int)
     inside_columns: dict[int, dict[int, np.ndarray]] = {}
     outside_columns: dict[int, dict[int, np.ndarray]] = {}
     for image_id in eval_ids:
-        positives = gt_by_image[image_id]["positive"]
-        inside: dict[int, list[list[float]]] = {}
-        outside: dict[int, list[list[float]]] = {}
         inside_columns[image_id] = {}
         outside_columns[image_id] = {}
-        for category, boxes in positives.items():
-            flags = np.asarray([_in_range(b, size_spec) for b in boxes], dtype=bool)
+        for category, sizes in gt_sizes[image_id].items():
+            flags = _sizes_in_range(sizes, size_spec)
             inside_idx = np.flatnonzero(flags)
-            inside[category] = [boxes[i] for i in inside_idx]
-            outside[category] = [boxes[i] for i in np.flatnonzero(~flags)]
             inside_columns[image_id][category] = inside_idx
             outside_columns[image_id][category] = np.flatnonzero(~flags)
-            positive_count += len(inside[category])
-            positive_count_by_cat[category] += len(inside[category])
-        bin_gt[image_id] = {
-            "positive": inside, "outside": outside,
-            "ignored": gt_by_image[image_id]["ignored"],
-        }
+            n_in = int(inside_idx.size)
+            positive_count += n_in
+            positive_count_by_cat[category] += n_in
 
     metrics: dict[str, Any] = {}
     per_category: dict[int, dict[str, Any]] = defaultdict(dict)
     num_eval_images = len(eval_ids)
     for threshold in IOU_THRESHOLDS:
-        matched: dict[tuple[int, int], set[int]] = defaultdict(set)
-        matched_outside: dict[tuple[int, int], set[int]] = defaultdict(set)
-        matched_ignored_iou = {image_id: set() for image_id in eval_ids}
+        avail_in: dict[tuple[int, int], np.ndarray] = {
+            (image_id, category): np.ones(cols.size, dtype=bool)
+            for image_id in eval_ids
+            for category, cols in inside_columns[image_id].items()
+            if cols.size
+        }
+        avail_out: dict[tuple[int, int], np.ndarray] = {
+            (image_id, category): np.ones(cols.size, dtype=bool)
+            for image_id in eval_ids
+            for category, cols in outside_columns[image_id].items()
+            if cols.size
+        }
+        avail_ign: dict[int, np.ndarray] = {
+            image_id: np.ones(ignored_iou[image_id].shape[1], dtype=bool)
+            for image_id in eval_ids
+            if ignored_iou[image_id].shape[1] > 0
+        }
         tp, fp = [], []
         tp_by_cat: dict[int, list[int]] = defaultdict(list)
         fp_by_cat: dict[int, list[int]] = defaultdict(list)
-        for row, (_, image_id, box, category) in enumerate(scored):
+        for row, (_, image_id, _, category) in enumerate(scored):
             local = int(local_of_row[row])
             key = (image_id, category)
-            columns = inside_columns[image_id].get(category)
-            if columns is not None and columns.size:
-                overlaps = positive_iou[image_id][category][local][columns]
-                available = np.ones(overlaps.size, dtype=bool)
-                available[list(matched[key])] = False
-                candidates = np.flatnonzero((overlaps >= threshold) & available)
+            avail = avail_in.get(key)
+            if avail is not None:
+                overlaps = positive_iou[image_id][category][local][inside_columns[image_id][category]]
+                candidates = np.flatnonzero((overlaps >= threshold) & avail)
             else:
                 candidates = np.empty(0, dtype=np.intp)
-            if candidates.size:
+            if avail is not None and candidates.size:
                 best = best_first_max(overlaps, candidates)
-                matched[key].add(best)
+                avail[best] = False
                 tp.append(1)
                 fp.append(0)
                 tp_by_cat[category].append(1)
                 fp_by_cat[category].append(0)
                 continue
 
-            outside_columns_cat = outside_columns[image_id].get(category)
-            if outside_columns_cat is not None and outside_columns_cat.size:
-                outside_overlaps = positive_iou[image_id][category][local][outside_columns_cat]
-                available = np.ones(outside_overlaps.size, dtype=bool)
-                available[list(matched_outside[key])] = False
-                outside_candidates = np.flatnonzero(
-                    (outside_overlaps >= threshold) & available
-                )
+            avail_o = avail_out.get(key)
+            if avail_o is not None:
+                outside_overlaps = positive_iou[image_id][category][local][outside_columns[image_id][category]]
+                outside_candidates = np.flatnonzero((outside_overlaps >= threshold) & avail_o)
             else:
                 outside_candidates = np.empty(0, dtype=np.intp)
-            if outside_candidates.size:
+            if avail_o is not None and outside_candidates.size:
                 best = best_first_max(outside_overlaps, outside_candidates)
-                matched_outside[key].add(best)
+                avail_o[best] = False
                 continue
 
-            ignored_row = ignored_iou[image_id][local]
-            if ignored_row.size:
-                available = np.ones(ignored_row.size, dtype=bool)
-                available[list(matched_ignored_iou[image_id])] = False
-                ignored_hits = np.flatnonzero((ignored_row >= threshold) & available)
-            else:
-                ignored_hits = np.empty(0, dtype=np.intp)
-            if ignored_hits.size:
-                matched_ignored_iou[image_id].add(int(ignored_hits[0]))
-                continue
-            neutral_iod = bool(
-                np.any(ignored_iod[image_id][local] >= threshold)
-            ) if ignored_row.size else False
-            if neutral_iod or not _in_range(box, size_spec):
+            avail_ig = avail_ign.get(image_id)
+            if avail_ig is not None:
+                ignored_row = ignored_iou[image_id][local]
+                ignored_hits = np.flatnonzero((ignored_row >= threshold) & avail_ig)
+                if ignored_hits.size:
+                    avail_ig[int(ignored_hits[0])] = False
+                    continue
+                if bool(np.any(ignored_iod[image_id][local] >= threshold)):
+                    continue
+            if not det_in_bin[row]:
                 continue
             tp.append(0)
             fp.append(1)
@@ -331,10 +367,18 @@ def subset_annotations_to_split(
     return destination
 
 
-def _load_gt(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text())
+def _load_gt(source: Path | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(source, dict) and "basename_to_id" in source and "dense_ids" in source:
+        return source
+    if isinstance(source, dict):
+        data = source
+        source_label = "<in-memory>"
+    else:
+        path = Path(source)
+        data = json.loads(path.read_text())
+        source_label = str(path.resolve())
     if not all(key in data for key in ("images", "annotations", "categories")):
-        raise ValueError(f"{path} is not COCO-style JSON")
+        raise ValueError(f"{source_label} is not COCO-style JSON")
     images, basename_to_id = {}, {}
     for image in data["images"]:
         image_id = int(image["id"])
@@ -344,7 +388,7 @@ def _load_gt(path: Path) -> dict[str, Any]:
         images[image_id] = {**image, "basename": basename}
         basename_to_id[basename] = image_id
     annotations: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    raw_counts = Counter()
+    raw_counts: Counter[int] = Counter()
     dense_ids: set[int] = set()
     for ann in data["annotations"]:
         image_id = int(ann["image_id"])
@@ -365,14 +409,17 @@ def _load_gt(path: Path) -> dict[str, Any]:
     dense_ids.update(image_id for image_id, count in raw_counts.items() if count > 220)
     return {
         "images": images, "basename_to_id": basename_to_id, "annotations": annotations,
-        "dense_ids": dense_ids, "source": str(path.resolve()),
+        "dense_ids": dense_ids, "source": source_label,
     }
 
 
-def evaluate_tinyperson(annotation_file: str | Path,
-                        predictions_file: str | Path, workers: int = 0,
-                        class_mode: str = "per_class") -> dict[str, Any]:
-    """Evaluate predictions/test.json against the original TinyPerson COCO test JSON.
+def evaluate_tinyperson(
+    annotation_file: str | Path | dict[str, Any],
+    predictions_file: str | Path | dict[str, Any],
+    workers: int = 0,
+    class_mode: str = "per_class",
+) -> dict[str, Any]:
+    """Evaluate predictions against the original TinyPerson COCO JSON (or in-memory dicts).
 
     Predictions must contain an images list with path, boxes (xyxy in source pixels),
     scores and classes, matching the repository's exported test predictions.
@@ -384,9 +431,14 @@ def evaluate_tinyperson(annotation_file: str | Path,
         raise ValueError("workers must be non-negative")
     if class_mode not in CLASS_MODES:
         raise ValueError(f"class_mode must be one of {CLASS_MODES}, got {class_mode!r}")
-    annotation_file, predictions_file = Path(annotation_file), Path(predictions_file)
-    gt = _load_gt(annotation_file)
-    payload = json.loads(predictions_file.read_text())
+    gt = _load_gt(annotation_file if isinstance(annotation_file, dict) else Path(annotation_file))
+    if isinstance(predictions_file, dict):
+        payload = predictions_file
+        pred_source = "<in-memory>"
+    else:
+        pred_path = Path(predictions_file)
+        payload = json.loads(pred_path.read_text())
+        pred_source = str(pred_path.resolve())
     rows = payload.get("images")
     if not isinstance(rows, list):
         raise TypeError("Prediction JSON must contain an images list")
@@ -434,7 +486,7 @@ def evaluate_tinyperson(annotation_file: str | Path,
         classes = row.get("classes", [0] * len(boxes))
         if not (len(boxes) == len(scores) == len(classes)):
             raise ValueError(f"boxes/scores/classes length mismatch for {basename}")
-        detections = []
+        detections: list[dict[str, Any]] = []
         for box, score, class_id in zip(boxes, scores, classes):
             if class_mode == "primary" and int(class_id) != 0:
                 continue
@@ -461,7 +513,7 @@ def evaluate_tinyperson(annotation_file: str | Path,
 
     eval_ids = sorted(expected - gt["dense_ids"])
     gt_by_image: dict[int, dict[str, Any]] = {}
-    ann_counts = Counter()
+    ann_counts: Counter[str] = Counter()
     for image_id in eval_ids:
         positives: dict[int, list[list[float]]] = defaultdict(list)
         ignored = []
@@ -482,15 +534,16 @@ def evaluate_tinyperson(annotation_file: str | Path,
          for image_id in eval_ids for d in pred_by_id[image_id]),
         key=lambda item: item[0], reverse=True,
     )
-    local_of_row, positive_iou, ignored_iou, ignored_iod = _precompute_overlap_matrices(
-        eval_ids, gt_by_image, scored
+    local_of_row, det_sizes, gt_sizes, positive_iou, ignored_iou, ignored_iod = (
+        _precompute_overlap_matrices(eval_ids, gt_by_image, scored)
     )
     global _EVAL_CONTEXT
     _EVAL_CONTEXT = (
         eval_ids,
-        gt_by_image,
+        gt_sizes,
         scored,
         local_of_row,
+        det_sizes,
         positive_iou,
         ignored_iou,
         ignored_iod,
@@ -508,7 +561,7 @@ def evaluate_tinyperson(annotation_file: str | Path,
     output["protocol"] = {
         "name": "TinyPerson documented protocol; standalone implementation",
         "annotation_file": gt["source"],
-        "predictions_file": str(predictions_file.resolve()),
+        "predictions_file": pred_source,
         "source_images": len(gt["images"]),
         "dense_images_excluded": len(gt["dense_ids"]),
         "images_evaluated": len(eval_ids),

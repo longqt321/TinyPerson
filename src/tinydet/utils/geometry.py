@@ -13,7 +13,7 @@ from collections.abc import Iterable, Sequence
 
 import numpy as np
 import torch
-from torchvision.ops import box_convert, box_iou
+from torchvision.ops import box_iou
 
 Box = Sequence[float]
 
@@ -27,19 +27,16 @@ def as_boxes(boxes: Iterable[Box] | np.ndarray) -> np.ndarray:
 
 
 def xywh_to_xyxy(box: Sequence[float], *, validate: bool = True) -> tuple[float, float, float, float]:
-    """Convert a single ``[x, y, w, h]`` COCO box to ``(x1, y1, x2, y2)`` via ``torchvision.ops``."""
+    """Convert a single ``[x, y, w, h]`` COCO box to ``(x1, y1, x2, y2)`` in IEEE-754 float64."""
     if len(box) != 4:
         raise ValueError(f"bbox must have four values: {box}")
-    vals = [float(v) for v in box]
+    x, y, w, h = float(box[0]), float(box[1]), float(box[2]), float(box[3])
     if validate:
-        if not all(math.isfinite(v) for v in vals):
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(w) and math.isfinite(h)):
             raise ValueError(f"bbox values must be finite: {box}")
-        if vals[2] <= 0 or vals[3] <= 0:
+        if w <= 0.0 or h <= 0.0:
             raise ValueError(f"non-positive COCO bbox: {box}")
-    converted = box_convert(
-        torch.tensor(vals, dtype=torch.float64), in_fmt="xywh", out_fmt="xyxy"
-    ).tolist()
-    return (converted[0], converted[1], converted[2], converted[3])
+    return (x, y, x + w, y + h)
 
 
 def iou_matrix(boxes: Iterable[Box] | np.ndarray, gt: Iterable[Box] | np.ndarray) -> np.ndarray:

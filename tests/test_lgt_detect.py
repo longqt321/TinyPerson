@@ -258,16 +258,121 @@ def test_lowmem_wasserstein_and_cache_serialization_equivalence():
     lowmem = _wasserstein_sim_lowmem(gt, pd)
     assert torch.allclose(exact, lowmem, atol=1e-6)
 
+    # Also verify unexpanded broadcast shapes (B, M, 1, 4) vs (B, 1, N, 4)
+    gt_bc = gt[:, :, :1, :]
+    pd_bc = pd[:, :1, :, :]
+    assert torch.allclose(wasserstein_similarity_xyxy(gt_bc, pd_bc), _wasserstein_sim_lowmem(gt_bc, pd_bc), atol=1e-6)
+
     head = LGTDetect(nc=1, reg_max=1, end2end=True, ch=(32, 64))
     head.stride = torch.tensor([4.0, 8.0])
     feats = [torch.randn(1, 32, 8, 8), torch.randn(1, 64, 4, 4)]
     head.forward_lgt_one2one(feats)
     assert len(head.lgt_stencil._valid_cache) == 2
     assert len(head._parent_grid_cache) == 1
+    assert len(head._level_mask_cache) == 2
     assert head._stride_ratios == [2.0]
 
     restored = pickle.loads(pickle.dumps(head))
     assert restored.lgt_stencil._valid_cache == {}
     assert restored._parent_grid_cache == {}
+    assert restored._level_mask_cache == {}
     assert restored._stride_ratios is None
+
+
+def test_tinyperson_benchmark_preallocated_boolean_matching(tmp_path):
+    """Verify optimized evaluate_tinyperson matching across tiny1/small/ignore/outside bins."""
+    import json
+
+    from tinydet.evaluation.tinyperson_benchmark import evaluate_tinyperson
+
+    ann_file = tmp_path / "ann.json"
+    pred_file = tmp_path / "pred.json"
+    ann_file.write_text(json.dumps({
+        "images": [{"id": 1, "file_name": "img1.jpg", "width": 200, "height": 200}],
+        "categories": [{"id": 1, "name": "sea_person"}, {"id": 2, "name": "earth_person"}],
+        "annotations": [
+            {"id": 1, "image_id": 1, "category_id": 1, "bbox": [10.0, 10.0, 5.0, 5.0], "ignore": False},   # tiny1 (AS=5)
+            {"id": 2, "image_id": 1, "category_id": 2, "bbox": [50.0, 50.0, 24.0, 24.0], "ignore": False}, # small (AS=24)
+            {"id": 3, "image_id": 1, "category_id": 1, "bbox": [120.0, 120.0, 20.0, 20.0], "ignore": True},
+        ],
+    }))
+    pred_file.write_text(json.dumps({
+        "images": [{
+            "path": "img1.jpg",
+            "boxes": [
+                [10.0, 10.0, 15.0, 15.0],    # exact TP on tiny1
+                [122.0, 122.0, 128.0, 128.0], # inside ignore box -> IoD neutral, must NOT be FP!
+                [50.0, 50.0, 74.0, 74.0],    # exact TP on small (neutral when scoring tiny1)
+            ],
+            "scores": [0.95, 0.90, 0.85],
+            "classes": [0, 0, 1],
+        }]
+    }))
+    res = evaluate_tinyperson(ann_file, pred_file, workers=1, class_mode="merge")
+    assert res["all"]["AP@0.50"] == 1.0
+    assert res["tiny1"]["AP@0.50"] == 1.0
+    assert res["small"]["AP@0.50"] == 1.0
+
+    # Also verify full analyze_files + cached _ImageOverlaps + oracle_ap75 reuse
+    import importlib.util
+
+    from tinydet.error_analysis.core import analyze_files
+
+    analysis = analyze_files(ann_file, pred_file)
+    assert analysis.summary["integrity"]["valid"] is True
+    assert all(analysis.summary["integrity"]["invariants"].values())
+    assert analysis.summary["metric_crosscheck"]["status"] == "match"
+
+    spec = importlib.util.spec_from_file_location("oracle_ap75", REPO_ROOT / "scripts/oracle_ap75.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    oracles = mod.run_oracles(ann_file, pred_file, tmp_path / "oracle", workers=1, class_mode="merge", baseline_result=res)
+    assert oracles["baseline"]["metrics"]["all"]["AP@0.50"] == 1.0
+    assert oracles["both"]["metrics"]["all"]["AP@0.75"] == 1.0
+
+    # Verify zero-disk in-memory dict mode + val=False safety on log_ap_by_iou
+    res_mem = evaluate_tinyperson(
+        json.loads(ann_file.read_text()),
+        json.loads(pred_file.read_text()),
+        workers=1,
+        class_mode="merge",
+    )
+    assert res_mem["all"]["AP@0.50"] == 1.0
+    assert res_mem["protocol"]["predictions_file"] == "<in-memory>"
+
+    from tinydet.training.iou_logging import log_ap_by_iou
+
+    class NoValTrainer:
+        validator = None
+
+    log_ap_by_iou(NoValTrainer(), wandb_enabled=False)
+
+
+def test_vectorized_error_matching_and_xywh_conversion():
+    """Verify fast float64 xywh_to_xyxy and vectorized error_analysis._match_image."""
+    from tinydet.error_analysis.core import AnalysisConfig, Detection, GroundTruth, _match_image
+    from tinydet.utils.geometry import xywh_to_xyxy
+
+    assert xywh_to_xyxy([10.5, 20.25, 4.0, 6.5]) == (10.5, 20.25, 14.5, 26.75)
+
+    gts = [
+        GroundTruth(id=1, box=(10.0, 10.0, 16.0, 16.0), label=0, ignore=False, uncertain=False, dense=False, raw={}),
+        GroundTruth(id=2, box=(40.0, 40.0, 46.0, 46.0), label=0, ignore=False, uncertain=False, dense=False, raw={}),
+        GroundTruth(id=3, box=(80.0, 80.0, 90.0, 90.0), label=0, ignore=True, uncertain=False, dense=False, raw={}),
+    ]
+    dets = [
+        Detection(source_index=0, box=(10.0, 10.0, 16.0, 16.0), score=0.95, label=0),  # TP on GT 1
+        Detection(source_index=1, box=(10.5, 10.5, 16.0, 16.0), score=0.80, label=0),  # Duplicate on GT 1
+        Detection(source_index=2, box=(82.0, 82.0, 88.0, 88.0), score=0.70, label=0),  # Neutral (IoD inside ignored GT 3)
+        Detection(source_index=3, box=(0.0, 0.0, 5.0, 5.0), score=0.60, label=0),      # Background FP
+    ]
+    det_out, gt_out = _match_image(dets, gts, AnalysisConfig(), size_bin="all")
+    assert [d["status"] for d in det_out] == ["true_positive", "false_positive", "neutral", "false_positive"]
+    assert det_out[1]["subtype"] == "duplicate"
+    assert det_out[3]["subtype"] == "background"
+    assert gt_out[0]["status"] == "matched"
+    assert gt_out[1]["status"] == "missed"
+    assert gt_out[2]["status"] == "ignored"
+
 

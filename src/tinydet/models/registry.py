@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 from ultralytics import YOLO
 from ultralytics.cfg import get_cfg
@@ -13,10 +14,11 @@ def build_model(config: dict):
         raise ValueError(f"Model config does not exist: {model_path}")
 
     model = YOLO(str(model_path))
-    if isinstance(getattr(model.model, "args", None), dict):
-        model.model.args = get_cfg(overrides=model.model.args)
-    if getattr(model.model, "yaml", {}).get("e2e_eval", False):
-        model.model.model[-1].end2end = True
+    net = cast(Any, model.model)  # Ultralytics stubs type YOLO.model as `str | None`
+    if isinstance(getattr(net, "args", None), dict):
+        net.args = get_cfg(overrides=net.args)
+    if getattr(net, "yaml", {}).get("e2e_eval", False):
+        net.model[-1].end2end = True
 
     pretrained = config.get("pretrained")
     if pretrained:

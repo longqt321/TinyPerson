@@ -60,7 +60,7 @@ def main() -> None:
     if args.device in (None, "cpu") and args.cpu_threads:
         torch.set_num_threads(args.cpu_threads)
 
-    use_half = (args.device != "cpu" and torch.cuda.is_available()) if args.device is None else (args.device != "cpu")
+    use_half = torch.cuda.is_available() and str(args.device or "0") != "cpu"
     model = YOLO(str(args.checkpoint))
     predictions = []
     with tempfile.TemporaryDirectory(prefix="tinyperson-test-") as temporary:
@@ -77,7 +77,7 @@ def main() -> None:
                 "path": str(Path(result.path).resolve()),
                 "boxes": boxes.xyxy.cpu().tolist() if boxes is not None else [],
                 "scores": boxes.conf.cpu().tolist() if boxes is not None else [],
-                "classes": boxes.cls.cpu().tolist() if boxes is not None else [],
+                "classes": [int(v) for v in boxes.cls.cpu().tolist()] if boxes is not None else [],
             })
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({"images": predictions}, indent=2) + "\n")

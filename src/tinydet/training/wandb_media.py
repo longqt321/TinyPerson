@@ -8,30 +8,9 @@ from pathlib import Path
 from types import MethodType
 
 import numpy as np
-import torch
-import torch.nn.functional as F
 
 from tinydet.training.val_predictions import build_prediction_row
 from tinydet.utils.atomic import atomic_write_text
-
-FEATURE_INTERVAL_EPOCHS = 10
-FEATURE_IMAGES = 2
-FEATURE_SIDE = 160
-
-
-def feature_heatmaps(output: torch.Tensor, count: int = FEATURE_IMAGES) -> list[np.ndarray]:
-    """Return mean absolute activation maps as RGB uint8 arrays."""
-    if output.ndim != 4 or output.shape[0] == 0:
-        return []
-    activation = output[:count].detach().float().abs().mean(1, keepdim=True)
-    pooled = F.adaptive_avg_pool2d(activation, (FEATURE_SIDE, FEATURE_SIDE))
-    images = []
-    for heat in pooled.squeeze(1).cpu().numpy():
-        low, high = float(heat.min()), float(heat.max())
-        scaled = (heat - low) / (high - low) if high > low else np.zeros_like(heat)
-        gray = np.asarray(scaled * 255, dtype=np.uint8)
-        images.append(np.repeat(gray[..., None], 3, axis=2))
-    return images
 
 
 def analysis_inputs(dataset_config: Path) -> tuple[Path, Path] | None:
@@ -51,16 +30,13 @@ def analysis_inputs(dataset_config: Path) -> tuple[Path, Path] | None:
 
 
 class WandbMediaCallback:
-    """Log final-validation tables/histograms, error analysis, and sampled feature maps."""
+    """Log final-validation tables/histograms and error analysis once at train end."""
 
     def __init__(self, run: Path, dataset_config: Path) -> None:
         self.run = Path(run)
         self.dataset_config = Path(dataset_config)
         self.enabled = True
-        self._hook = None
-        self._label = "features/p2"
-        self._armed = False
-        self._pending: list[np.ndarray] | None = None
+        self._collect_active = False
         self._validator = None
         self._original_update_metrics = None
         self._rows: list[dict] = []
@@ -81,37 +57,16 @@ class WandbMediaCallback:
             self._disable(exc)
 
     def on_train_epoch_start(self, trainer) -> None:
-        self._armed = self._hook is not None and trainer.epoch % FEATURE_INTERVAL_EPOCHS == 0
-
-    def _capture(self, _module, _inputs, output) -> None:
-        if not self._armed or not torch.is_tensor(output):
-            return
-        self._armed = False
-        try:
-            self._pending = feature_heatmaps(output)
-        except Exception as exc:  # noqa: BLE001 - logging is optional
-            self._disable(exc)
-
-    def on_train_batch_end(self, trainer) -> None:
-        if not self._pending:
-            return
-        try:
-            import wandb
-
-            if wandb.run is not None:
-                wandb.log(
-                    {self._label: [wandb.Image(image) for image in self._pending]},
-                    step=trainer.epoch + 1,
-                    commit=False,
-                )
-        except Exception as exc:  # noqa: BLE001 - logging is optional
-            self._disable(exc)
-        finally:
-            self._pending = None
+        epochs = int(getattr(trainer, "epochs", 0) or 0)
+        epoch = int(getattr(trainer, "epoch", 0)) + 1
+        self._collect_active = (epochs > 0 and epoch >= epochs) or bool(getattr(trainer, "stop", False))
 
     def _update_metrics(self, validator, preds, batch) -> None:
         original = self._original_update_metrics
-        if self.enabled:
+        # Collect only during final_eval() (where validator.training is False) or the last epoch,
+        # avoiding 149 wasted full-split GPU->CPU prediction copies across intermediate epochs.
+        should_collect = self._collect_active or not getattr(validator, "training", True)
+        if self.enabled and should_collect:
             try:
                 if validator.seen == 0:
                     self._rows.clear()
@@ -127,7 +82,7 @@ class WandbMediaCallback:
                     self._rows.append(row)
             except Exception as exc:  # noqa: BLE001 - logging is optional
                 self._disable(exc)
-        return original(preds, batch)
+        return original(preds, batch) if original is not None else None
 
     def on_train_end(self, trainer) -> None:
         try:
@@ -208,9 +163,6 @@ class WandbMediaCallback:
         self.close()
 
     def close(self) -> None:
-        if self._hook is not None:
-            self._hook.remove()
-            self._hook = None
         if self._validator is not None and self._original_update_metrics is not None:
             self._validator.update_metrics = self._original_update_metrics
             self._validator = None

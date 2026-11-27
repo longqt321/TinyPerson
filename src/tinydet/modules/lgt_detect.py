@@ -46,6 +46,7 @@ with ``mu = ((r - l)/2, (b - t)/2)`` and ``sigma = ((l + r)/2, (t + b)/2)``, and
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -120,6 +121,10 @@ class SpatialShiftStencil(nn.Module):
     Stored as a non-parameter buffer (``register_buffer``) rather than an ``nn.Parameter`` so
     Ultralytics ``BaseTrainer`` never forces ``requires_grad=True`` on the Dirac shift stencil.
     """
+
+    shift_weight: Tensor
+    dx: Tensor
+    dy: Tensor
 
     def __init__(self, channels: int = 5) -> None:
         super().__init__()
@@ -231,6 +236,7 @@ class LGTDetect(Detect):
         self._raw_o2o_gauss: list[tuple[Tensor, Tensor]] | None = None
         self._stride_ratios: list[float] | None = None
         self._parent_grid_cache: dict[tuple[int, int, int, int, int, torch.device, torch.dtype], tuple[Tensor, Tensor, Tensor]] = {}
+        self._level_mask_cache: dict[tuple[int, int, int, torch.device], tuple[Tensor, Tensor, Tensor]] = {}
         self._last_distill_tensor: Tensor | None = None
         self.last_stats: dict[str, float] = {}
 
@@ -238,7 +244,8 @@ class LGTDetect(Detect):
     def _build_cls_gate(in_ch: int, hidden: int, out_ch: int) -> nn.Sequential:
         out_conv = nn.Conv2d(hidden, out_ch, kernel_size=1, bias=True)
         nn.init.zeros_(out_conv.weight)
-        nn.init.zeros_(out_conv.bias)
+        if out_conv.bias is not None:
+            nn.init.zeros_(out_conv.bias)
         return nn.Sequential(
             nn.Conv2d(in_ch, hidden, kernel_size=1, bias=False),
             nn.BatchNorm2d(hidden),
@@ -251,6 +258,7 @@ class LGTDetect(Detect):
         state["_raw_o2o_gauss"] = None
         state["_stride_ratios"] = None
         state["_parent_grid_cache"] = {}
+        state["_level_mask_cache"] = {}
         state["_last_distill_tensor"] = None
         return state
 
@@ -349,6 +357,27 @@ class LGTDetect(Detect):
         tilde_sig_p = (ratio * up_sig).clamp(min=0.05).unsqueeze(2)
         return tilde_mu_p, tilde_sig_p, up_smax, valid_p
 
+    def _get_level_masks(
+        self,
+        level_idx: int,
+        height: int,
+        width: int,
+        valid_sp: Tensor,
+        valid_p: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Cache static ``(valid, valid_nb, denom_nb)`` tensors per FPN grid resolution."""
+        key = (level_idx, height, width, valid_sp.device)
+        cached = self._level_mask_cache.get(key)
+        if cached is not None:
+            return cached
+        valid = torch.cat((valid_sp, valid_p), dim=1)  # (1, 10, H, W)
+        valid_nb = valid[:, 1:].to(dtype=torch.float32)  # (1, 9, H, W)
+        denom_nb = valid_nb.sum(dim=1, keepdim=True).clamp(min=1.0)  # (1, 1, H, W)
+        if len(self._level_mask_cache) >= 32:
+            self._level_mask_cache.clear()
+        self._level_mask_cache[key] = (valid, valid_nb, denom_nb)
+        return valid, valid_nb, denom_nb
+
     def _refine_level(
         self,
         level_idx: int,
@@ -365,78 +394,92 @@ class LGTDetect(Detect):
         s_0 = smax_list[level_idx]  # (B, 1, H, W) fp32
         _, _, height, width = mu_0.shape
 
-        # All transported neighbor Gaussians and pairwise Wasserstein distances are detached
-        # inputs to the learnable barycenter/gate parameters; wrapping in no_grad() avoids
-        # storing ~2-3 GB of 5D P2 activation graphs that are discarded before backward().
-        with torch.no_grad():
-            packed = torch.cat((mu_0.detach(), sig_0.detach(), s_0.detach()), dim=1)
-            shifted, valid_sp = self.lgt_stencil(packed)  # (B, 5, 9, H, W), (1, 9, H, W)
+        with torch.autocast(device_type=mu_0.device.type, enabled=False):
+            # All transported neighbor Gaussians and pairwise Wasserstein distances are detached
+            # inputs to the learnable barycenter/gate parameters; wrapping in no_grad() and
+            # freeing 5D intermediates early saves ~3 GB of P2 activation/workspace VRAM.
+            with torch.no_grad():
+                packed = torch.cat((mu_0.detach(), sig_0.detach(), s_0.detach()), dim=1)
+                shifted, valid_sp = self.lgt_stencil(packed)  # (B, 5, 9, H, W), (1, 9, H, W)
+                del packed
 
-            tilde_mu_sp = torch.stack(
-                (shifted[:, 0] + self.lgt_stencil.dx, shifted[:, 1] + self.lgt_stencil.dy),
-                dim=1,
-            )  # (B, 2, 9, H, W)
-            tilde_sig_sp = shifted[:, 2:4].clamp(min=0.05)  # (B, 2, 9, H, W)
-            cand_s_sp = shifted[:, 4]  # (B, 9, H, W)
+                # Skip k=0 (self: dx=0, dy=0, dist=0) so we compute only the 8 spatial neighbors
+                tilde_mu_sp_nb = torch.stack(
+                    (
+                        shifted[:, 0, 1:] + self.lgt_stencil.dx[:, 1:],
+                        shifted[:, 1, 1:] + self.lgt_stencil.dy[:, 1:],
+                    ),
+                    dim=1,
+                )  # (B, 2, 8, H, W)
+                tilde_sig_sp_nb = shifted[:, 2:4, 1:].clamp(min=0.05)  # (B, 2, 8, H, W)
+                cand_s_sp = shifted[:, 4].clone()  # (B, 9, H, W)
+                del shifted
 
-            tilde_mu_p, tilde_sig_p, cand_s_p, valid_p = self._parent_candidate(
-                level_idx, height, width, mu_list, sigma_list, smax_list
-            )
+                tilde_mu_p, tilde_sig_p, cand_s_p, valid_p = self._parent_candidate(
+                    level_idx, height, width, mu_list, sigma_list, smax_list
+                )
 
-            tilde_mu = torch.cat((tilde_mu_sp, tilde_mu_p), dim=2)  # (B, 2, 10, H, W)
-            tilde_sig = torch.cat((tilde_sig_sp, tilde_sig_p), dim=2)  # (B, 2, 10, H, W)
-            cand_s = torch.cat((cand_s_sp, cand_s_p), dim=1)  # (B, 10, H, W)
-            valid = torch.cat((valid_sp, valid_p), dim=1)  # (1, 10, H, W)
+                tilde_mu_nb = torch.cat((tilde_mu_sp_nb, tilde_mu_p), dim=2)  # (B, 2, 9, H, W)
+                tilde_sig_nb = torch.cat((tilde_sig_sp_nb, tilde_sig_p), dim=2)  # (B, 2, 9, H, W)
+                cand_s = torch.cat((cand_s_sp, cand_s_p), dim=1)  # (B, 10, H, W)
+                del tilde_mu_sp_nb, tilde_sig_sp_nb, cand_s_sp, tilde_mu_p, tilde_sig_p, cand_s_p
 
-            mu_c = mu_0.detach().unsqueeze(2)  # (B, 2, 1, H, W)
-            sig_c = sig_0.detach().unsqueeze(2)  # (B, 2, 1, H, W)
-            num = (tilde_mu - mu_c).square() + (tilde_sig - sig_c).square()
-            den = sig_c.square() + tilde_sig.square() + 1e-6
-            dist_all = (num / den).sum(dim=1)  # (B, 10, H, W)
-            dist_all[:, 0].zero_()
-            dist_masked = dist_all.masked_fill(~valid, 1e4)
+                valid, valid_nb, denom_nb = self._get_level_masks(
+                    level_idx, height, width, valid_sp, valid_p
+                )
 
-            log_q = F.logsigmoid(cand_s)
-            nb_delta_mu = tilde_mu[:, :, 1:] - mu_c
-            nb_delta_sig = tilde_sig[:, :, 1:] - sig_c
-            dist_nb = dist_masked[:, 1:]
-            valid_nb = valid[:, 1:].to(dtype=torch.float32)  # (1, 9, H, W)
-            score_diff = F.relu(cand_s[:, 1:] - s_0.detach()) * valid_nb  # (B, 9, H, W)
-            prob_nb = torch.sigmoid(cand_s[:, 1:]) * valid_nb  # (B, 9, H, W)
-            denom_nb = valid_nb.sum(dim=1, keepdim=True).clamp(min=1.0)
+                mu_c = mu_0.detach().unsqueeze(2)  # (B, 2, 1, H, W)
+                sig_c = sig_0.detach().unsqueeze(2)  # (B, 2, 1, H, W)
+                nb_delta_mu = tilde_mu_nb - mu_c  # (B, 2, 9, H, W)
+                nb_delta_sig = tilde_sig_nb - sig_c  # (B, 2, 9, H, W)
+                num = nb_delta_mu.square() + nb_delta_sig.square()
+                den = sig_c.square() + tilde_sig_nb.square() + 1e-6
+                del tilde_mu_nb, tilde_sig_nb
+                dist_nb = (num / den).sum(dim=1).masked_fill(~valid[:, 1:], 1e4)  # (B, 9, H, W)
+                del num, den
 
-        # 1. Local Wasserstein Barycenter box refinement (for DFL-free reg_max == 1)
-        if self.reg_max <= 1:
-            tau_box = F.softplus(self.lgt_log_tau_box[level_idx]) + 0.1
-            gamma_box = F.softplus(self.lgt_log_gamma_box[level_idx])
-            beta_box = torch.sigmoid(self.lgt_logit_beta_box[level_idx])
+                log_q = F.logsigmoid(cand_s)  # (B, 10, H, W)
+                score_diff = F.relu(cand_s[:, 1:] - s_0.detach()) * valid_nb  # (B, 9, H, W)
+                prob_nb = torch.sigmoid(cand_s[:, 1:]) * valid_nb  # (B, 9, H, W)
+                del cand_s
 
-            logits_w = (gamma_box * log_q - tau_box * dist_masked).masked_fill(~valid, -1e4)
-            weights_nb = torch.softmax(logits_w, dim=1)[:, 1:].unsqueeze(1)  # (B, 1, 9, H, W)
+            # 1. Local Wasserstein Barycenter box refinement (for DFL-free reg_max == 1)
+            if self.reg_max <= 1:
+                tau_box = F.softplus(self.lgt_log_tau_box[level_idx]) + 0.1
+                gamma_box = F.softplus(self.lgt_log_gamma_box[level_idx])
+                beta_box = torch.sigmoid(self.lgt_logit_beta_box[level_idx])
 
-            delta_mu = (weights_nb * nb_delta_mu).sum(dim=2)
-            delta_sig = (weights_nb * nb_delta_sig).sum(dim=2)
-            mu_ref = mu_0 + beta_box * delta_mu
-            sig_ref = (sig_0 + beta_box * delta_sig).clamp(min=0.05)
-            refined_box = gaussian_to_ltrb(mu_ref, sig_ref).to(raw_box.dtype)
-        else:
-            refined_box = raw_box
+                logit_0 = gamma_box * log_q[:, :1]  # k=0 self has D_0 == 0 and valid_0 == True
+                logit_nb = (gamma_box * log_q[:, 1:] - tau_box * dist_nb).masked_fill(
+                    ~valid[:, 1:], -1e4
+                )
+                logits_w = torch.cat((logit_0, logit_nb), dim=1)
+                weights_nb = torch.softmax(logits_w, dim=1)[:, 1:].unsqueeze(1)  # (B, 1, 9, H, W)
 
-        # 2. Differentiable NMS Dominance & Consensus Gate on classification logits
-        tau_cls = F.softplus(self.lgt_log_tau_cls[level_idx]) + 0.1
-        aff_nb = torch.exp(-tau_cls * dist_nb) * valid_nb  # (B, 9, H, W)
+                delta_mu = (weights_nb * nb_delta_mu).sum(dim=2)
+                delta_sig = (weights_nb * nb_delta_sig).sum(dim=2)
+                mu_ref = mu_0 + beta_box * delta_mu
+                sig_ref = (sig_0 + beta_box * delta_sig).clamp(min=0.05)
+                refined_box = gaussian_to_ltrb(mu_ref, sig_ref).to(raw_box.dtype)
+            else:
+                refined_box = raw_box
 
-        dom_pairs = aff_nb * score_diff
-        m_dom = dom_pairs.amax(dim=1, keepdim=True)  # (B, 1, H, W)
-        m_sup = (aff_nb * prob_nb).sum(dim=1, keepdim=True) / denom_nb  # (B, 1, H, W)
+            # 2. Differentiable NMS Dominance & Consensus Gate features in fp32
+            tau_cls = F.softplus(self.lgt_log_tau_cls[level_idx]) + 0.1
+            aff_nb = torch.exp(-tau_cls * dist_nb) * valid_nb  # (B, 9, H, W)
 
-        rel_feat = torch.cat((aff_nb, dom_pairs, m_dom, m_sup), dim=1).to(orig_dtype)
+            dom_pairs = aff_nb * score_diff
+            m_dom = dom_pairs.amax(dim=1, keepdim=True)  # (B, 1, H, W)
+            m_sup = (aff_nb * prob_nb).sum(dim=1, keepdim=True) / denom_nb  # (B, 1, H, W)
+
+            rel_feat = torch.cat((aff_nb, dom_pairs, m_dom, m_sup), dim=1).to(orig_dtype)
+
         cls_delta = self.lgt_cls_gate[level_idx](rel_feat)
         refined_cls = raw_cls + cls_delta
 
         return refined_box, refined_cls
 
-    def forward_lgt_one2one(self, x: list[Tensor]) -> dict[str, Tensor]:
+    def forward_lgt_one2one(self, x: list[Tensor]) -> dict[str, Any]:
         """Run ``one2one`` branch with cross-scale Local Gaussian Transport."""
         if self.one2one_cv2 is None or self.one2one_cv3 is None:
             return {}
@@ -480,7 +523,7 @@ class LGTDetect(Detect):
         self, x: list[Tensor]
     ) -> dict[str, Tensor] | Tensor | tuple[Tensor, dict[str, Tensor]]:
         """Run dual-head forward in training/eval and single-branch LGT forward after ``fuse()``."""
-        preds = self.forward_head(x, **self.one2many)
+        preds: dict[str, Any] = self.forward_head(x, **self.one2many)
         if getattr(self, "one2one_cv2", None) is not None:
             x_detach = [xi.detach() for xi in x] if self.training else x
             one2one = self.forward_lgt_one2one(x_detach)
@@ -509,11 +552,11 @@ class LGTDetect(Detect):
         raw_o2o_gauss = self._raw_o2o_gauss
         self._raw_o2o_gauss = None
         if self.distill_gain <= 0.0 or raw_o2o_gauss is None or "one2many" not in preds:
-            return torch.zeros((), device=next(self.parameters()).device)
+            return torch.zeros((), device=self.lgt_log_tau_box.device)
 
         o2m = preds["one2many"]
         if not o2m or "boxes" not in o2m or "scores" not in o2m:
-            return torch.zeros((), device=next(self.parameters()).device)
+            return torch.zeros((), device=self.lgt_log_tau_box.device)
 
         device_type = raw_o2o_gauss[0][0].device.type
         with torch.autocast(device_type=device_type, enabled=False):
@@ -552,7 +595,15 @@ class LGTDetect(Detect):
 
 
 def find_lgt_head(model: nn.Module) -> LGTDetect | None:
-    """Return the ``LGTDetect`` head of a ``DetectionModel``, or ``None`` if absent."""
+    """Return the ``LGTDetect`` head of a ``DetectionModel`` in O(1), or ``None`` if absent."""
+    if isinstance(model, LGTDetect):
+        return model
+    seq = getattr(model, "model", None)
+    if isinstance(seq, (nn.Sequential, nn.ModuleList)) and len(seq) > 0:
+        last = seq[-1]
+        if isinstance(last, LGTDetect):
+            return last
+        return None
     for module in model.modules():
         if isinstance(module, LGTDetect):
             return module
