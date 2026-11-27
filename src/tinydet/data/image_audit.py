@@ -335,7 +335,7 @@ def audit_dataset(
         split_out_of_range = 0
         split_image_records = []
 
-        del workers
+        _ = workers
         items = [_audit_single_image(p, root, imgsz) for p in image_paths]
 
         for item, err in items:
