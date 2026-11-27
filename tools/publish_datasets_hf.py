@@ -232,12 +232,7 @@ def prepare_and_upload(repo_id: str, out_dir: Path, skip_upload: bool = False) -
 
         vd_archive = out_dir / "visdrone-yolo.tar.zst"
         print(f"[hf-publish] Compressing {vd_archive.name}...", flush=True)
-        cctx = zstandard.ZstdCompressor(level=3, threads=-1)
-        with vd_archive.open("wb") as raw_out, cctx.stream_writer(raw_out) as compressor:
-            with tarfile.open(fileobj=compressor, mode="w|", dereference=True) as tar:
-                tar.add(stage_vd, arcname="visdrone-yolo")
-        vd_sha = _sha256_file(vd_archive)
-        vd_archive.with_name(f"{vd_archive.name}.sha256").write_text(f"{vd_sha}  {vd_archive.name}\n")
+        vd_sha = _compress_dir_tar_zst(stage_vd, vd_archive, threads=-1, level=3, dereference=True)
         summary["archives"][vd_archive.name] = {
             "sha256": vd_sha,
             "size_mb": round(vd_archive.stat().st_size / 1024**2, 2),

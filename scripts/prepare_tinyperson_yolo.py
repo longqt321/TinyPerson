@@ -6,7 +6,6 @@ import os
 import random
 import shutil
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import orjson
@@ -116,30 +115,26 @@ def _prepare_test_split(test_annotations: Path, test_image_root: Path, output: P
         if len(anns) > 220 or any(bool(ann.get("in_dense_image", False)) for ann in anns)
     }
 
+    del worker_count
     records = []
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        inspected = executor.map(
-            _image_size,
-            ((image, test_image_root) for image in data["images"]
-             if int(image["id"]) not in dense_ids),
-        )
-        for image, width, height in inspected:
-            image_id = int(image["id"])
-            file_name = str(image["file_name"])
-            records.append({
-                "id": image_id, "file_name": file_name, "basename": Path(file_name).name,
-                "width": width, "height": height, "group": _group_key(file_name),
-                "annotations": by_image.get(image_id, []),
-            })
+    for image in data["images"]:
+        if int(image["id"]) in dense_ids:
+            continue
+        image, width, height = _image_size((image, test_image_root))
+        image_id = int(image["id"])
+        file_name = str(image["file_name"])
+        records.append({
+            "id": image_id, "file_name": file_name, "basename": Path(file_name).name,
+            "width": width, "height": height, "group": _group_key(file_name),
+            "annotations": by_image.get(image_id, []),
+        })
 
     manifest = []
     objects = 0
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        for row, count in executor.map(
-            _write_test_record, ((r, test_image_root, output) for r in records)
-        ):
-            manifest.append(row)
-            objects += count
+    for r in records:
+        row, count = _write_test_record((r, test_image_root, output))
+        manifest.append(row)
+        objects += count
 
     # Store the annotation JSON already restricted to the copied images. The official
     # benchmark excludes dense images from scoring anyway, so this subset is what the
@@ -207,19 +202,18 @@ def prepare(annotations_path: Path, image_root: Path, output: Path,
     worker_count = workers or min(16, os.cpu_count() or 1)
     if worker_count < 1:
         raise ValueError("workers must be non-negative")
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        inspected_images = executor.map(_image_size, ((image, image_root) for image in images))
-        for image, width, height in inspected_images:
-            image_id = int(image["id"])
-            file_name = str(image["file_name"])
-            group = _group_key(file_name)
-            record = {
-                "id": image_id, "file_name": file_name, "basename": Path(file_name).name,
-                "width": width, "height": height, "group": group,
-                "annotations": by_image.get(image_id, []),
-            }
-            image_records.append(record)
-            group_to_images[group].append(record)
+    for raw_image in images:
+        image, width, height = _image_size((raw_image, image_root))
+        image_id = int(image["id"])
+        file_name = str(image["file_name"])
+        group = _group_key(file_name)
+        record = {
+            "id": image_id, "file_name": file_name, "basename": Path(file_name).name,
+            "width": width, "height": height, "group": group,
+            "annotations": by_image.get(image_id, []),
+        }
+        image_records.append(record)
+        group_to_images[group].append(record)
 
     groups = list(group_to_images)
     if len(groups) < 2:
@@ -245,15 +239,11 @@ def prepare(annotations_path: Path, image_root: Path, output: Path,
     manifest = []
     split_counts = Counter()
     object_counts = Counter()
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        written = executor.map(
-            _write_record,
-            ((record, image_root, output, val_groups) for record in image_records),
-        )
-        for row, split, objects in written:
-            manifest.append(row)
-            split_counts[split] += 1
-            object_counts[split] += objects
+    for record in image_records:
+        row, split, objects = _write_record((record, image_root, output, val_groups))
+        manifest.append(row)
+        split_counts[split] += 1
+        object_counts[split] += objects
 
     data_yaml = {
         "path": ".", "train": "images/train",

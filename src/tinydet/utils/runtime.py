@@ -457,18 +457,28 @@ def sync_run_to_hf(
             api.create_repo(repo_id=repo_id, repo_type="model", private=True, exist_ok=True)
             _HF_ENSURED_REPOS.add(repo_id)
 
-        use_future = bool(run_as_background and not force)
-        res = api.upload_folder(
-            folder_path=str(staging_dir),
-            path_in_repo=path_in_repo,
-            repo_id=repo_id,
-            repo_type="model",
-            allow_patterns=RUN_SYNC_ALLOW_PATTERNS,
-            commit_message=f"Sync {path_in_repo}",
-            run_as_future=use_future,
-        )
-        if use_future and isinstance(res, Future):
-            _HF_INFLIGHT_FUTURES[path_in_repo] = res
+        if bool(run_as_background and not force):
+            fut = api.upload_folder(
+                folder_path=str(staging_dir),
+                path_in_repo=path_in_repo,
+                repo_id=repo_id,
+                repo_type="model",
+                allow_patterns=RUN_SYNC_ALLOW_PATTERNS,
+                commit_message=f"Sync {path_in_repo}",
+                run_as_future=True,
+            )
+            if isinstance(fut, Future):
+                _HF_INFLIGHT_FUTURES[path_in_repo] = fut
+        else:
+            api.upload_folder(
+                folder_path=str(staging_dir),
+                path_in_repo=path_in_repo,
+                repo_id=repo_id,
+                repo_type="model",
+                allow_patterns=RUN_SYNC_ALLOW_PATTERNS,
+                commit_message=f"Sync {path_in_repo}",
+                run_as_future=False,
+            )
     except Exception as exc:  # noqa: BLE001 - HF Hub hiccup must not abort training
         print(f"[hf-sync] Warning: HF backup failed: {exc}", flush=True)
 

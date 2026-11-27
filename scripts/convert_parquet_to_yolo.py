@@ -25,7 +25,6 @@ import argparse
 import glob
 import random
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import polars as pl
@@ -194,11 +193,10 @@ def convert_tinyperson(
                 "objects": len(yolo_lines),
             })
             totals[f"{split}_objects"] += len(yolo_lines)
+        del workers
         print(f"Writing {len(tasks)} images for split '{split}'...")
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_write_single_image, *t) for t in tasks]
-            for future in futures:
-                future.result()
+        for t in tasks:
+            _write_single_image(*t)
         totals[f"{split}_images"] = len(tasks)
         manifest[split] = records
 
@@ -301,11 +299,10 @@ def convert_visdrone(
                 tasks.append((img_dest, lbl_dest, img_bytes, yolo_lines))
                 total_boxes += len(yolo_lines)
 
+        del workers
         print(f"Writing {len(tasks)} images for split '{split}'...")
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_write_single_image, *t) for t in tasks]
-            for f in futures:
-                f.result()
+        for t in tasks:
+            _write_single_image(*t)
         total_images += len(tasks)
 
     data_yaml = {
@@ -386,10 +383,8 @@ def convert_aitod(
                 total_boxes += len(yolo_lines)
 
             if tasks:
-                with ThreadPoolExecutor(max_workers=workers) as executor:
-                    futures = [executor.submit(_write_single_image, *t) for t in tasks]
-                    for f in futures:
-                        f.result()
+                for t in tasks:
+                    _write_single_image(*t)
                 split_written += len(tasks)
                 print(
                     f"  [{split} file {idx + 1}/{len(files)}] Wrote {len(tasks)} images (split total: {split_written})"
