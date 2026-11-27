@@ -152,6 +152,7 @@ def test_hf_sync_and_restore_mocked(monkeypatch) -> None:
         sync_run_to_hf(run_dir, "user/tinydet-runs", token="hf_test", force=True)
         assert len(uploaded) == 1
         assert uploaded[0]["path_in_repo"] == "lgt_150e/colab-seed42"
+        assert uploaded[0]["run_as_future"] is False
 
         fresh_run = root / "fresh" / "lgt_150e" / "colab-seed42"
         assert restore_run_from_hf(fresh_run, "user/tinydet-runs", token="hf_test") is True
