@@ -396,15 +396,26 @@ def sync_run_to_hf(
             _HF_ENSURED_REPOS.add(repo_id)
 
         path_in_repo = f"{run_dir.parent.name}/{run_dir.name}"
-        api.upload_folder(
-            folder_path=str(run_dir),
-            path_in_repo=path_in_repo,
-            repo_id=repo_id,
-            repo_type="model",
-            allow_patterns=RUN_SYNC_ALLOW_PATTERNS,
-            commit_message=f"Sync {path_in_repo}",
-            run_as_background=run_as_background and not force,
-        )
+        upload_kwargs = {
+            "folder_path": str(run_dir),
+            "path_in_repo": path_in_repo,
+            "repo_id": repo_id,
+            "repo_type": "model",
+            "allow_patterns": RUN_SYNC_ALLOW_PATTERNS,
+            "commit_message": f"Sync {path_in_repo}",
+        }
+        if run_as_background and not force:
+            import threading
+
+            def _bg_upload() -> None:
+                try:
+                    api.upload_folder(**upload_kwargs)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[hf-sync] Warning: HF background backup failed: {exc}", flush=True)
+
+            threading.Thread(target=_bg_upload, daemon=True).start()
+        else:
+            api.upload_folder(**upload_kwargs)
     except Exception as exc:  # noqa: BLE001 - HF Hub hiccup must not abort training
         print(f"[hf-sync] Warning: HF backup failed: {exc}", flush=True)
 
