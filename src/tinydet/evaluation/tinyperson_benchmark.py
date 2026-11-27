@@ -372,19 +372,6 @@ def _xywh_to_xyxy(box: list[float]) -> list[float]:
     return list(xywh_to_xyxy(box, validate=True))
 
 
-def _sqrt_area(box: list[float]) -> float:
-    return math.sqrt(max(box[2] - box[0], 0.0) * max(box[3] - box[1], 0.0))
-
-
-def _in_range(box: list[float], size_spec: tuple[float, float, bool, bool]) -> bool:
-    """Check if sqrt(w * h) falls into the half-open or closed interval."""
-    low, high, left_closed, right_closed = size_spec
-    size = _sqrt_area(box)
-    left_ok = (size >= low) if left_closed else (size > low)
-    right_ok = (size <= high) if right_closed else (size < high)
-    return left_ok and right_ok
-
-
 def _ap(tp: Sequence[int] | np.ndarray, fp: Sequence[int] | np.ndarray, positive_count: int) -> float | None:
     if positive_count == 0:
         return None

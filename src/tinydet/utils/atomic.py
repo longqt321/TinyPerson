@@ -6,13 +6,14 @@ Uses Python's standard ``tempfile`` + ``os.fsync`` + ``os.replace`` idiom
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any
+
+import orjson
 
 
 @contextmanager
@@ -43,8 +44,21 @@ def atomic_write_text(path: str | Path, text: str, *, fsync: bool = True) -> Non
 def atomic_write_jsonl(
     path: str | Path, records: Iterable[dict[str, Any]], *, fsync: bool = True
 ) -> None:
-    """Stream records as JSON Lines into ``path`` atomically in O(1) memory."""
-    with _atomic_open(path, fsync=fsync) as stream:
-        for record in records:
-            stream.write(json.dumps(record))
-            stream.write("\n")
+    """Stream records as UTF-8 JSON Lines into ``path`` atomically via ``orjson``."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            for record in records:
+                stream.write(orjson.dumps(record, option=orjson.OPT_SERIALIZE_NUMPY))
+                stream.write(b"\n")
+            stream.flush()
+            if fsync:
+                os.fsync(stream.fileno())
+        os.replace(tmp_path, destination)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise

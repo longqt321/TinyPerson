@@ -1,5 +1,4 @@
 import hashlib
-import json
 import platform
 import subprocess
 from dataclasses import asdict
@@ -7,6 +6,7 @@ from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 
+import orjson
 import torch
 import yaml
 
@@ -24,11 +24,16 @@ def git_info() -> tuple[str, bool]:
 
 
 def write_json(path: Path, value: dict) -> None:
-    atomic_write_text(path, json.dumps(value, indent=2, default=str) + "\n")
+    atomic_write_text(
+        path,
+        orjson.dumps(
+            value, option=orjson.OPT_INDENT_2 | orjson.OPT_SERIALIZE_NUMPY, default=str
+        ).decode() + "\n",
+    )
 
 
 def metadata(run: Path) -> dict:
-    return json.loads((run / "metadata.json").read_text())
+    return orjson.loads((run / "metadata.json").read_bytes())
 
 
 def update_status(run: Path, status: str, error: str | None = None) -> None:

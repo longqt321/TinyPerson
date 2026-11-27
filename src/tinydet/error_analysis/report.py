@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
+
+import orjson
 
 from tinydet.error_analysis.core import AnalysisResult
 from tinydet.utils.atomic import atomic_write_jsonl, atomic_write_text
@@ -172,7 +173,7 @@ def render_report(result: AnalysisResult) -> str:
                 f"- Shared images: {comparison['shared_images']}",
                 f"- Clean → error (regressed): {comparison['regressed_images']}",
                 f"- Error → clean (corrected): {comparison['corrected_images']}",
-                f"- Count deltas: `{json.dumps(comparison['count_deltas'], sort_keys=True)}`",
+                f"- Count deltas: `{orjson.dumps(comparison['count_deltas'], option=orjson.OPT_SORT_KEYS).decode()}`",
             ])
         else:
             lines.append(f"Unavailable: {comparison.get('reason')}")
@@ -277,7 +278,12 @@ def _plots(result: AnalysisResult, output: Path) -> list[str]:
 def write_outputs(result: AnalysisResult, output: str | Path, *, plots: bool = False) -> dict[str, Any]:
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(output / "summary.json", json.dumps(result.summary, indent=2) + "\n")
+    atomic_write_text(
+        output / "summary.json",
+        orjson.dumps(
+            result.summary, option=orjson.OPT_INDENT_2 | orjson.OPT_SERIALIZE_NUMPY
+        ).decode() + "\n",
+    )
     atomic_write_jsonl(output / "samples.jsonl", result.samples)
     atomic_write_jsonl(output / "errors.jsonl", result.errors)
     atomic_write_text(output / "report.md", render_report(result))

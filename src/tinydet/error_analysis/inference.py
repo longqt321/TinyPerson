@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 from typing import Any, cast
 
+import orjson
 import torch
 
 from tinydet.models.ultralytics import register_ultralytics_modules
@@ -89,5 +89,10 @@ def predict_split(
         "device": device,
         "limit": limit,
     }
-    output.write_text(json.dumps({"images": rows, "inference": inference}, indent=2) + "\n")
+    output.write_bytes(
+        orjson.dumps(
+            {"images": rows, "inference": inference},
+            option=orjson.OPT_INDENT_2 | orjson.OPT_SERIALIZE_NUMPY,
+        ) + b"\n"
+    )
     return {**inference, "predictions": str(output.resolve())}
