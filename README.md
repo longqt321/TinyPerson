@@ -1,63 +1,47 @@
-# Tiny Person Detection Research: GauSS
+# Tiny Person Detection Research: GauCon
 
-Nghiên cứu phát hiện người rất nhỏ (Tiny Person Detection) bằng YOLO26n trên TinyPerson với tầng đặc trưng P2 kết hợp **GauSS** (*Gaussian Scale-Space Alignment & Refinement*, triển khai trong [`src/tinydet/modules/gauss.py`](src/tinydet/modules/gauss.py)).
+Nghiên cứu phát hiện người cực nhỏ trong ảnh hàng hải bằng YOLO26n-P2. Phương pháp hiện tại gồm đầu phát hiện đồng thuận Gauss cục bộ **GauCon** và cơ chế gán nhãn Wasserstein tách rời **DW-TAL**. Tài liệu nghiên cứu chính:
 
-Repo này là **research project**. Ưu tiên là câu hỏi khoa học, kiểm soát biến đối chứng, reproducibility, tốc độ vòng lặp thí nghiệm và tính chuẩn xác của số liệu. Đọc [Research practices](docs/RESEARCH_PRACTICES.md), [Báo cáo đồ án](docs/report/course_report_vi.md) và [Paper](paper/main.tex).
+- Báo cáo đồ án tiếng Việt: [docs/report/course_report_vi.md](docs/report/course_report_vi.md).
+- Bài báo tiếng Anh: [paper/main.tex](paper/main.tex).
+- Trạng thái thí nghiệm và provenance: [docs/report/00_state.md](docs/report/00_state.md).
 
----
+## 1. Phương pháp
 
-## 1. Phương pháp Đề xuất: GauSS (v3.1 / v3.2)
+GauCon hoạt động trên hai tầng đặc trưng $P_2$ và $P_3$ của YOLO26n-P2. Mỗi hộp dự đoán được biểu diễn bằng một phân phối Gauss 2D. Các hộp từ ô lân cận và ô cha được quy đổi về cùng hệ tọa độ, so sánh bằng khoảng cách Wasserstein chuẩn hóa theo phương sai cục bộ, rồi kết hợp bằng nội suy có hệ số học được. Nhánh phân loại dùng thông tin quan hệ lân cận để điều chỉnh logit.
 
-Module tinh chỉnh đặc trưng P2 của neck từ **C2 (stride 4), P3 (stride 8) và P4 (stride 16)**, khai thác phân rã đa băng tần Gaussian:
+DW-TAL dùng độ tương đồng Wasserstein có điều biến theo kích thước đối tượng trong bước chọn ứng viên dương. Mục tiêu phân loại sau đó được hiệu chuẩn theo IoU thực tế. Chưng cất phân phối hộp từ nhánh giám sát đa mẫu chỉ được dùng trong huấn luyện.
 
-1. **Gaussian Scale-Space Decomposition**: hai bộ lọc tách biệt khởi tạo ở $\sigma_1 = 0.65$, $\sigma_2 = 1.45$ tạo 3 dải $B_{\text{high}}, B_{\text{mid}}, B_{\text{low}}$.
-2. **Sub-pixel Band Encoders**: `PixelUnshuffle(2)` + depthwise conv cho từng dải; upsampling bằng DySample.
-3. **Dilated Context Branch**: depthwise conv đa tốc độ giãn $r \in \{1, 3, 5\}$.
-4. **Hybrid Energy Router**: sinh trọng số trộn 3 dải theo từng vị trí không gian.
-5. **Bounded Residual Output**: $X_0 + \alpha z + \gamma_{\text{out}} B_{\text{high}}$ với cổng $0.5 \tanh(\cdot)$.
+## 2. Kết quả thực nghiệm
 
-Mã nguồn triển khai: [`src/tinydet/modules/gauss.py`](src/tinydet/modules/gauss.py).
-Cấu hình chuẩn khớp checkpoint báo cáo (v3.1): [`configs/model/yolo26n_tiny_A2_p2_gauss_v31_tinyperson.yaml`](configs/model/yolo26n_tiny_A2_p2_gauss_v31_tinyperson.yaml).
+Chiến dịch đối chứng hiện tại dùng 80 epoch, trọng số khởi tạo COCO, batch size 16, seed 42 và GPU NVIDIA L4. TinyPerson được đánh giá trên 786 ảnh kiểm tra, với một lớp person. Giao thức tiled sử dụng NMS để ghép kết quả từ các lát cắt; giao thức full-frame chạy một lượt không dùng NMS.
 
----
+| Chỉ số | Base | + NWD | + GauCon |
+|---|---:|---:|---:|
+| Tiled $AP_{50}^{all}$ | 45,58% | 48,45% | **48,53%** |
+| Tiled $AP_{75}^{all}$ | 6,40% | 6,09% | **7,37%** |
+| Full-frame $AP_{50}^{all}$ | 43,08% | 43,24% | **44,13%** |
+| Full-frame $AP_{75}^{all}$ | 4,44% | 4,13% | **4,78%** |
 
-## 2. Kết quả Thực nghiệm Chính thức trên TinyPerson Test (Merge Protocol)
+GauCon thêm 714 tham số, đưa tổng số tham số sau hợp nhất lên 2.402.374. Phép đo một phiên trên L4 ghi nhận 73,95 FPS ở đầu vào 1280, nhưng chưa có profiling đa phiên để kết luận về chênh lệch tốc độ.
 
-Giao thức: mô hình 1 lớp (`person`) huấn luyện 150 epoch (letterbox 1280, seed 42), đánh giá bằng `class_mode="merge"` trên 786 ảnh test (13,687 positive GT). Nguồn JSON: `reports/eval/{baseline,gauss_v3}_tinyperson_wacv_150e_{tiled,full}.json`.
+### Giới hạn hiện tại
 
-### Tiled Slicing ($640 \times 512$, overlap 100, global NMS IoU 0.50)
-
-| Mô hình | Tham số | AP50 (all) | AP50 (tiny) | AP50 (tiny1) | AP50 (tiny2) | AP50 (tiny3) | AP50 (small) | AP50 (reasonable) | MR50 (all) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline YOLO26n-P2** | 2.516M | 40.63% | **37.57%** | **22.30%** | 36.92% | **48.14%** | 51.63% | 44.14% | **92.73%** |
-| **+ GauSS (v3.1)** | 2.553M | **41.08%** | 37.40% | 22.26% | **37.67%** | 47.05% | **52.51%** | **47.59%** | 93.04% |
-
-### Full-Frame (letterbox 1280)
-
-| Mô hình | AP50 (all) | AP50 (tiny) | AP50 (tiny1) | AP50 (tiny2) | AP50 (tiny3) | AP50 (small) | AP50 (reasonable) | MR50 (all) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline YOLO26n-P2** | 35.32% | 30.02% | **17.05%** | 30.02% | 38.46% | **42.96%** | 47.56% | **93.40%** |
-| **+ GauSS (v3.1)** | **35.45%** | **30.23%** | 16.76% | **30.45%** | **38.82%** | 42.33% | **49.10%** | 93.90% |
-
-* **Overhead (v3.1 checkpoint)**: +36,878 tham số (+1.47%; bao gồm nhánh C3k2 trung gian 8,704 params không dùng; cấu hình làm sạch v3.2 tăng +28,174 params, +1.12%).
-* Kết quả **một seed duy nhất (seed 42)** trên evaluator standalone; chưa có kiểm định ý nghĩa thống kê đa seed.
-
-Chi tiết đầy đủ nằm trong:
-- Báo cáo đồ án (tiếng Việt): [`docs/report/course_report_vi.md`](docs/report/course_report_vi.md) và bản xuất [`BaoCao_DoAn_GauSS_TinyPerson.pdf`](BaoCao_DoAn_GauSS_TinyPerson.pdf) / [`.docx`](BaoCao_DoAn_GauSS_TinyPerson.docx).
-- Paper LaTeX (tiếng Anh): [`paper/main.tex`](paper/main.tex).
-- Nhật ký trạng thái & provenance: [`docs/report/00_state.md`](docs/report/00_state.md).
-
----
+- Mỗi cấu hình mới có một lần huấn luyện với seed 42; chưa đo biến thiên giữa các seed.
+- Chưa có thí nghiệm ablation để tách đóng góp của từng thành phần.
+- GauCon thấp hơn NWD ở nhóm tiny1 và làm tăng false positives nền trong giao thức tiled.
+- Bootstrap hiện lấy mẫu theo ảnh, chưa mô hình hóa tương quan giữa các khung hình cùng video.
+- Lợi thế AP50 của GauCon so với NWD chưa được xác nhận rõ bằng khoảng tin cậy ở cả hai giao thức.
 
 ## 3. Cấu trúc Repo
 
-- `configs/model/`: cấu hình Ultralytics YAML cho Baseline YOLO26n-P2, GauSS v3.1/v3.2, P2Refine, GaussSplit.
-- `configs/experiment/`: cấu hình thực nghiệm TinyPerson, VisDrone và `ablation/`.
-- `src/tinydet/`: mã nguồn gói chính (`modules/`, `training/`, `evaluation/`, `error_analysis/`, `augment/`, `data/`, `models/`, `utils/`).
-- `train.py`: cổng vào huấn luyện độc lập môi trường (Modal, Colab, Kaggle, RunPod).
-- `modal/app.py` & `launch_campaign.py`: entrypoints chạy chiến dịch huấn luyện/đánh giá detached trên Modal Cloud.
-- `reports/eval/` & `reports/data/`: dữ liệu đánh giá JSON, ablation và log training phục vụ báo cáo.
-- `paper/` & `docs/report/`: nguồn bài báo LaTeX và báo cáo đồ án tiếng Việt.
+- `configs/model/yolo26n_p2_lgt_v2.yaml`: cấu hình YOLO26n-P2 với GauCon và DW-TAL.
+- `configs/experiment/paper_fast/`: cấu hình chiến dịch đối chứng 80 epoch.
+- `src/tinydet/modules/lgt_detect.py`: đầu phát hiện GauCon.
+- `src/tinydet/models/ultralytics.py`: tích hợp DW-TAL và các hàm mất mát.
+- `scripts/build_dut_report.py`: tạo DOCX và PDF theo định dạng báo cáo DUT.
+- `docs/report/`: nguồn báo cáo, trạng thái thí nghiệm và hình minh họa.
+- `paper/`: nguồn bài báo LaTeX.
 
 ---
 
