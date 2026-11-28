@@ -982,7 +982,7 @@ def render_docx(
     clear_footer(body)
     bp = body.footer.paragraphs[0]
     bp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r_ft = bp.add_run("Sinh viên thực hiện: Trần Đức Long, Phan Thị Thảo Tiên     –     GVHD: TS. Huỳnh Hữu Hùng")
+    r_ft = bp.add_run("Sinh viên thực hiện: Trần Đức Long, Phan Thị Thảo Tiên, GVHD: TS. Huỳnh Hữu Hùng")
     set_font(r_ft, size=Pt(10), italic=True)
     bp.add_run().add_break()
     add_page_number_field(bp, size=Pt(10))
