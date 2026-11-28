@@ -1,18 +1,21 @@
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-from scripts.build_dut_report import (
-    build_toc,
-    configure_heading_styles,
-    normalize_docx_zip,
-    parse_md,
-    validate_heading_numbering,
-)
-
 ROOT = Path(__file__).resolve().parents[1]
+SPEC = spec_from_file_location("dut_report_builder", ROOT / "scripts/build_dut_report.py")
+if SPEC is None or SPEC.loader is None:
+    raise ImportError("Cannot load scripts/build_dut_report.py")
+BUILDER = module_from_spec(SPEC)
+SPEC.loader.exec_module(BUILDER)
+build_toc = BUILDER.build_toc
+configure_heading_styles = BUILDER.configure_heading_styles
+normalize_docx_zip = BUILDER.normalize_docx_zip
+parse_md = BUILDER.parse_md
+validate_heading_numbering = BUILDER.validate_heading_numbering
 
 
 def test_current_report_heading_numbering_is_contiguous() -> None:
