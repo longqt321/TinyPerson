@@ -927,6 +927,12 @@ def render_docx(
     front_map: dict[str, str] | None = None,
 ) -> None:
     doc = Document()
+    properties = doc.core_properties
+    properties.title = "Báo cáo đồ án môn học: GauCon và DW-TAL cho phát hiện người cực nhỏ trên ảnh hàng hải"
+    properties.subject = "Thị giác máy tính"
+    properties.author = "Trần Đức Long; Phan Thị Thảo Tiên"
+    properties.last_modified_by = "Trần Đức Long; Phan Thị Thảo Tiên"
+    properties.keywords = "TinyPerson, GauCon, DW-TAL, YOLO26n-P2, phát hiện người cực nhỏ"
     style = doc.styles["Normal"]
     style.font.name = FONT
     style.font.size = BODY
