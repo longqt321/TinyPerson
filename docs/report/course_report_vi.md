@@ -499,10 +499,7 @@ Hình 3.7 ghi nhận động học thực tế của các tham số khả học 
 
 Hình 3.8: Minh họa đối chiếu định tính trên ba bối cảnh tập kiểm tra TinyPerson (ngưỡng độ tin cậy cố định $\mathrm{conf} \ge 0{,}25$ cho mọi mô hình): *Hàng 1*: cụm 5 người ven bờ ánh chiều (lát cắt $640 \times 512$); *Hàng 2*: bãi biển đông người có đá nền phức tạp (lát cắt $640 \times 512$); *Hàng 3*: toàn khung $1280 \times 1280$ nhiều mục tiêu phân tán trên sóng biển
 
-Hình 3.8 kết xuất trực tiếp kết quả dự đoán trên tập kiểm tra của ba mô hình tại cùng ngưỡng độ tin cậy $0{,}25$:
-- Hàng 1 (Cảnh ven sóng tương phản thấp, lát cắt): Trong khung cảnh ánh sáng yếu ven mép sóng với 5 hộp GT, Base chỉ bắt được 2/5 người (điểm 0,52 và 0,29), NWD không có hộp nào vượt ngưỡng 0,25 (0/5), còn GauCon phát hiện đủ cả 5/5 người với độ tin cậy $0{,}30\text{–}0{,}55$ và không tạo hộp trùng.
-- Hàng 2 (Cảnh bãi biển đông có vách đá, lát cắt): Trên vùng chứa 18 người nằm xen cạnh vách đá và các vùng bỏ qua *ignore* (nét đứt vàng cam), Base phát hiện 14 hộp, còn NWD (màu tím) phát sinh tới 58 hộp dự đoán dày đặc lên vùng nền và đá. GauCon giảm xuống còn 30 hộp, giảm bớt mật độ báo nhầm trên nền đá so với NWD, nhưng vẫn còn khoảng 12 dự đoán dương giả tại vùng đá phức tạp. Do Hình 3.8 chỉ chọn minh họa ba bối cảnh điển hình, các kết luận định lượng dựa trên toàn bộ 786 ảnh trong Bảng 3.2–3.4.
-- Hàng 3 (Cảnh biển góc rộng nhiều mục tiêu, toàn khung 1280): Ở chế độ toàn khung trên cảnh chứa 19 GT vừa và nhỏ, GauCon dự đoán 18 hộp khớp sát vị trí người (18/19), trong khi Base bỏ sót còn 13/19 và NWD sinh lặp thành 23/19. Ở rìa mép trên nơi đối tượng co xuống chỉ còn 2–3 pixel sau *letterbox*, một vài cá thể rất nhỏ vẫn bị bỏ qua dưới cả ba mô hình, minh họa giới hạn độ phân giải vật lý của chế độ toàn khung một lượt.
+Hình 3.8 đặt kết quả dự đoán của Base, NWD và GauCon cạnh nhau tại cùng ngưỡng độ tin cậy $0{,}25$. Ba hàng minh họa các tình huống khác nhau: vùng ven bờ có độ tương phản thấp, bãi biển đông người với nền đá phức tạp và ảnh toàn khung có các mục tiêu phân tán. Hình được dùng để quan sát trực quan các dạng bỏ sót, hộp trùng và báo nhầm nền; các ví dụ được chọn không đại diện cho toàn bộ tập kiểm tra. Vì vậy, kết luận định lượng trong báo cáo chỉ dựa trên kết quả tổng hợp của 786 ảnh ở Bảng 3.2–3.4.
 
 ### 3.7. Hiệu năng phần cứng và độ phức tạp tính toán trước/sau hợp nhất
 
