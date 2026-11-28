@@ -2,18 +2,18 @@
 
 ## THỊ GIÁC MÁY TÍNH
 
-Đề tài: GauCon: Đầu phát hiện đồng thuận Gauss cục bộ và gán nhãn Wasserstein tách rời cho phát hiện người cực nhỏ trên ảnh hàng hải
+**Đề tài:** GauCon: Đầu phát hiện đồng thuận Gauss cục bộ và gán nhãn Wasserstein tách rời cho phát hiện người cực nhỏ trên ảnh hàng hải
 
-Giảng viên hướng dẫn: TS. Huỳnh Hữu Hùng
+**Giảng viên hướng dẫn:** TS. Huỳnh Hữu Hùng
 
-Nhóm sinh viên thực hiện:
+**Nhóm sinh viên thực hiện:**
 
 - Trần Đức Long
 - Phan Thị Thảo Tiên
 
-Đơn vị: Trường Đại học Bách khoa, Đại học Đà Nẵng
+**Đơn vị:** Trường Đại học Bách khoa, Đại học Đà Nẵng
 
-Năm học: 2026–2027
+**Năm học:** 2026–2027
 
 ---
 
@@ -27,9 +27,9 @@ Báo cáo đề xuất GauCon, đầu phát hiện đồng thuận Gauss cục b
 
 Các mô hình được huấn luyện trong 80 epoch, khởi tạo từ trọng số COCO, với batch size 16 và seed 42 trên NVIDIA L4. Trên tập kiểm tra TinyPerson gồm 786 ảnh và 13.687 hộp người hợp lệ, GauCon có thêm 714 tham số, nâng tổng số tham số sau hợp nhất lên 2.402.374. Với giao thức lát cắt $640 \times 512$ có NMS khi ghép kết quả giữa các lát, $AP_{50}^{all}$ tăng từ 45,58% lên 48,53% (+2,95 điểm phần trăm) so với mô hình cơ sở; $AP_{75}^{all}$ đạt 7,37%, cao hơn cấu hình NWD 1,28 điểm. Với suy luận toàn khung $1280 \times 1280$ không dùng NMS, $AP_{50}^{all}$ tăng từ 43,08% lên 44,13%. Chênh lệch AP50 giữa GauCon và NWD ở cả hai giao thức chưa có bằng chứng bootstrap đủ để kết luận là khác biệt có ý nghĩa. Kết quả cũng cho thấy GauCon còn hạn chế ở nhóm tiny1 và vẫn làm tăng báo nhầm nền trong giao thức lát cắt.
 
-Abstract. TinyPerson contains distant people in maritime scenes, many of whom occupy only 2–20 pixels against waves, foam, and reflections. Although one-to-one detectors can operate without Non-Maximum Suppression (NMS), independent box regression at each feature-map cell does not use geometric evidence from neighboring cells. Directly replacing overlap with Wasserstein similarity in task-aligned assignment can also assign high classification targets to low-IoU predictions. This report presents GauCon, a local Gaussian consensus head, and DW-TAL on YOLO26n-P2. GauCon maps predicted boxes to diagonal 2D Gaussians, aligns spatial neighbors and a parent cell in a common coordinate frame, and applies damped interpolation toward a local Wasserstein barycenter. DW-TAL uses Wasserstein similarity during positive-sample selection and calibrates classification targets against true IoU. The models were trained for 80 epochs from COCO-pretrained weights with batch size 16 and seed 42. On the 786-image test set, GauCon adds 714 parameters. Under tiled $640\times512$ evaluation, which uses NMS to merge overlapping crops, $AP_{50}^{all}$ increases from 45.58% to 48.53% (+2.95 percentage points), while $AP_{75}^{all}$ reaches 7.37%. Under single-pass full-frame $1280\times1280$ inference without NMS, $AP_{50}^{all}$ increases from 43.08% to 44.13%. Bootstrap intervals do not establish a clear $AP_{50}$ advantage over NWD in either protocol. GauCon also trails NWD on the smallest size group and increases background false positives in tiled evaluation.
+**Abstract.** TinyPerson contains distant people in maritime scenes, many of whom occupy only 2–20 pixels against waves, foam, and reflections. Although one-to-one detectors can operate without Non-Maximum Suppression (NMS), independent box regression at each feature-map cell does not use geometric evidence from neighboring cells. Directly replacing overlap with Wasserstein similarity in task-aligned assignment can also assign high classification targets to low-IoU predictions. This report presents GauCon, a local Gaussian consensus head, and DW-TAL on YOLO26n-P2. GauCon maps predicted boxes to diagonal 2D Gaussians, aligns spatial neighbors and a parent cell in a common coordinate frame, and applies damped interpolation toward a local Wasserstein barycenter. DW-TAL uses Wasserstein similarity during positive-sample selection and calibrates classification targets against true IoU. The models were trained for 80 epochs from COCO-pretrained weights with batch size 16 and seed 42. On the 786-image test set, GauCon adds 714 parameters. Under tiled $640\times512$ evaluation, which uses NMS to merge overlapping crops, $AP_{50}^{all}$ increases from 45.58% to 48.53% (+2.95 percentage points), while $AP_{75}^{all}$ reaches 7.37%. Under single-pass full-frame $1280\times1280$ inference without NMS, $AP_{50}^{all}$ increases from 43.08% to 44.13%. Bootstrap intervals do not establish a clear $AP_{50}$ advantage over NWD in either protocol. GauCon also trails NWD on the smallest size group and increases background false positives in tiled evaluation.
 
-Từ khóa: phát hiện người cực nhỏ; bộ phát hiện đầu-cuối không dùng NMS; trọng tâm Wasserstein cục bộ; gán nhãn tách rời DW-TAL; TinyPerson; YOLO26n.
+**Từ khóa:** phát hiện người cực nhỏ; bộ phát hiện đầu-cuối không dùng NMS; trọng tâm Wasserstein cục bộ; gán nhãn tách rời DW-TAL; TinyPerson; YOLO26n.
 
 ---
 
