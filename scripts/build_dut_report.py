@@ -51,11 +51,6 @@ COVER_TITLE = (
     "người cực nhỏ trên ảnh hàng hải"
 )
 
-CHAPTERS = {
-    "1": "TỔNG QUAN NGHIÊN CỨU LIÊN QUAN",
-    "2": "GIẢI PHÁP ĐỀ XUẤT",
-    "3": "THỰC NGHIỆM VÀ ĐÁNH GIÁ KẾT QUẢ",
-}
 UNNUMBERED_H1 = {
     "TÓM TẮT",
     "KẾT LUẬN VÀ HƯỚNG PHÁT TRIỂN",
@@ -672,7 +667,7 @@ def _plain_toc_text(text: str) -> str:
 def toc_entry_for_heading(level: int, text: str) -> tuple[int, str] | None:
     if level == 2:
         match = re.match(r"^(\d+)\.\s+(.*)$", text)
-        if match and match.group(1) in CHAPTERS:
+        if match:
             return 2, f"Chương {match.group(1)}: {match.group(2).strip()}"
         if text in UNNUMBERED_H1:
             return 2, text
@@ -1123,9 +1118,13 @@ def parse_md(md_text: str) -> list[tuple]:
             while index < len(raw_lines) and raw_lines[index].strip().startswith("|"):
                 table_rows.append(split_md_table_row(raw_lines[index]))
                 index += 1
-            if len(table_rows) < 2 or not all(
-                re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
-                for cell in table_rows[1]
+            if (
+                len(table_rows) < 2
+                or len(table_rows[1]) != len(table_rows[0])
+                or not all(
+                    re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
+                    for cell in table_rows[1]
+                )
             ):
                 raise ValueError(f"Invalid Markdown table separator at line {table_start + 1}")
             header = table_rows[0]
