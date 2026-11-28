@@ -351,6 +351,7 @@ Bảng 2.4: Cấu hình huấn luyện dùng chung cho các mô hình đối ch�
 | Thời lượng & Batch size | 80 epoch, batch size 16, FP16 AMP | Thống nhất batch size 16 trên GPU NVIDIA L4 24 GB |
 | Bộ tối ưu & Lịch học | AdamW [29], $\text{lr}_0 = 0{,}0015$, $\text{lrf} = 0{,}05$ (cosine), *warmup* 3 epoch | Tinh chỉnh trọng số tiền huấn luyện ổn định mà không phá vỡ các tầng Backbone đầu |
 | Tăng cường dữ liệu | Lật ngang $0{,}5$, dịch $0{,}05$, tỉ lệ $0{,}15$, HSV $(0{,}005; 0{,}10; 0{,}15)$; tắt Mosaic & MixUp | Ghép Mosaic thu nhỏ vật thêm 2–4 lần khiến người 2–6 px rơi xuống dưới 1 px |
+| Tham số TAL dùng chung | $\alpha = 0{,}5$, $\beta = 4{,}0$ cho Base, NWD và GauCon | Giữ nguyên hệ số căn chỉnh giữa các cấu hình đối chứng |
 | Tham số GauCon & DW-TAL | Kích hoạt $P_2, P_3$, bật FG-Gate; $\tau_{\mathrm{px}} = 20{,}0$, $\beta_{\mathrm{px}} = 3{,}5$, $\beta_{\mathrm{box}}$ khởi tạo 0,06, $\lambda_{\mathrm{tal}} = 0{,}45$, $\lambda_{\mathrm{reg}} = 0{,}20$, $\lambda_{\mathrm{dist}} = 0{,}25$ | Khoanh vùng tác động vào dải $\le 20$ px trên $P_2, P_3$ |
 | Đối chứng NWD chuẩn | Trọng số gán nhãn $\alpha_{\mathrm{NWD}} = 0{,}50$, mất mát $\lambda_{\mathrm{NWD}} = 0{,}50$, $C = 12{,}8$ px | Cấu hình gốc của bài báo NWD [13, 14] |
 | Chọn mô hình đánh giá | Chọn mô hình tốt nhất theo $mAP_{50}$ trên 84 ảnh kiểm định (*val*), seed = 42 | Tập kiểm tra (*test*) 786 ảnh chỉ chạy đánh giá một lần sau khi kết thúc huấn luyện |
