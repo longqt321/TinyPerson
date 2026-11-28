@@ -224,7 +224,7 @@ Trong đó: $\boldsymbol{\Delta}_p(u) = \rho(u_p + 0{,}5) - (u + 0{,}5) \in \{-0
 
 Hình 2.3: Minh họa hình học cơ chế hoạt động của GauCon và DW-TAL: *(a)* Quy đổi tọa độ lân cận $3\times 3$ và ô cha $P_3$ trên lưới $P_2$ phân tách người đứng sát nhau ($D_k \gg 1 \implies w_k \approx 0$); *(b)* Trọng tâm Wasserstein giữ nguyên bề rộng hộp $\sigma^\star$ so với phép trộn mật độ gây giãn hộp; *(c)* Tác dụng giới hạn mục tiêu mềm của DW-TAL theo $\mathrm{IoU}$ thực tại ô lệch tâm trên vật 4 px ($\mathrm{IoU} \approx 0$)
 
-#### 2.3.2. Khoảng cách Wasserstein chuẩn hóa theo phương sai (bất biến tỉ lệ)
+#### 2.3.2. Khoảng cách Wasserstein chuẩn hóa theo phương sai (gần bất biến theo tỉ lệ)
 
 Từ phương trình (2.2), để loại bỏ hằng số $C$ phụ thuộc bộ dữ liệu của NWD [13], GauCon chuẩn hóa sai lệch trên từng trục $a \in \{x, y\}$ bằng tổng phương sai cục bộ của chính cặp phân phối đang xét:
 $$D_k(u) = \sum_{a \in \{x, y\}} \frac{\big(\tilde{\mu}_{ka}(u) - \mu_{0a}(u)\big)^2 + \big(\tilde{\sigma}_{ka}(u) - \sigma_{0a}(u)\big)^2}{\sigma_{0a}(u)^2 + \tilde{\sigma}_{ka}(u)^2 + \epsilon}$$ (2.9)
@@ -513,10 +513,10 @@ Bảng 3.5: Độ phức tạp tính toán, bộ nhớ GPU và tốc độ suy l
 |---|---|---|---|---|---|---|---|---|
 | YOLO26n-P2 Base | 2.515.976 | 2.401.660 | 31,948 / 27,683 | **166,75** | 14,39 | 69,51 | 43,08 | 45,58 |
 | YOLO26n-P2 + NWD | 2.515.976 | 2.401.660 | 31,948 / 27,683 | 166,75 | **13,45** | **74,36** | 43,24 | 48,45 |
-| **YOLO26n-P2 + GauCon** | **2.516.690** | **2.402.374** | 32,034 / 27,769 | 186,23 | 13,52 | 73,95 | **44,13** | **48,53** |
+| **YOLO26n-P2 + GauCon** | **2.516.690** | **2.402.374** | 32,034 / 27,683 | 186,23 | 13,52 | 73,95 | **44,13** | **48,53** |
 
 Kết quả Bảng 3.5 mô tả chi phí tính toán và phép đo suy luận trong một phiên:
-- GauCon chỉ cộng thêm chính xác +0,086 GFLOPs tại $1280 \times 1280$ (32,034 so với 31,948 trước hợp nhất và 27,769 so với 27,683 sau hợp nhất, tức +0,31%), tương ứng ~43 triệu phép nhân-cộng MAC từ hai khối $\mathrm{PWConv}_{20\to 16\to 1}$ của $\mathcal{M}_s$ trên $P_2, P_3$, và +0,022 GFLOPs tại $640 \times 640$ (7,640 so với 7,618).
+- Trước hợp nhất, bộ đo ghi nhận 32,034 GFLOPs cho GauCon và 31,948 GFLOPs cho Base. Sau hợp nhất, bộ đo báo 27,683 GFLOPs cho cả hai; công cụ hiện dùng không tính phần chi phí của MLP $1\times1$ tùy biến trong đầu GauCon. Ước lượng riêng từ số phép nhân-cộng của MLP cho thấy phần này cần khoảng 43 triệu MAC, tương đương 0,086 GFLOPs ở đầu vào $1280\times1280$ và 0,022 GFLOPs ở $640\times640$. Phần MLP vẫn nằm trong đường suy luận.
 - Về tốc độ một phiên trên L4, GauCon đạt 73,95 FPS (13,52 ms/khung hình) và tiêu tốn thêm +19,48 MB VRAM cho bộ đệm trung gian 20 kênh tại $P_2$. Việc Base đo được 14,39 ms (69,51 FPS) chậm hơn GauCon 0,86 ms dù ít tầng hơn cho thấy phép đo 1 phiên (100 lượt) chịu nhiễu biến động xung nhịp/trạng thái GPU; kết luận tốc độ cần được kiểm định lại bằng nhiều phiên đo độc lập kèm độ lệch chuẩn (*mean ± std*).
 
 ### 3.8. Hạn chế và các yếu tố ảnh hưởng đến độ tin cậy của kết quả
@@ -539,7 +539,7 @@ Bảng 3.6: Tổng hợp các hạn chế thực nghiệm và hướng khắc ph
 Đồ án đã đề xuất và đánh giá GauCon cùng DW-TAL trên YOLO26n-P2 cho bài toán phát hiện người cực nhỏ trong bộ dữ liệu TinyPerson. Đối chiếu theo bốn mục tiêu đề ra ở Mục 1.4:
 
 1. Mục tiêu 1 (Đường cơ sở và quy trình đánh giá chống rò rỉ): Đã xây dựng quy trình huấn luyện và chấm điểm thống nhất trên tập TinyPerson tách biệt hoàn toàn theo tiền tố chuỗi video (662 ảnh *train*, 84 ảnh *val*, 786 ảnh *test* với 13.687 nhãn người GT), đo đồng bộ ở cả giao thức lát cắt $640 \times 512$, toàn khung $1280 \times 1280$, COCO $AP_{50:95}$ và phân rã TIDE.
-2. Mục tiêu 2 (Đầu phát hiện GauCon siêu nhẹ bảo toàn tốc độ suy luận): Chỉ áp dụng chọn lọc trên $P_2, P_3$ bằng phép dịch chỉ số lân cận $0$ FLOP, khoảng cách Wasserstein chuẩn hóa theo phương sai cục bộ (bất biến tỉ lệ), trọng tâm Wasserstein cục bộ và cổng FG-Gate không dùng chuẩn hóa theo batch, GauCon chỉ cộng thêm 714 tham số (+0,030% sau hợp nhất, tổng 2.402.374 tham số) và vận hành ở tốc độ 73,95 FPS (13,52 ms/khung hình) trên NVIDIA L4.
+2. Mục tiêu 2 (Đầu phát hiện GauCon siêu nhẹ bảo toàn tốc độ suy luận): Chỉ áp dụng chọn lọc trên $P_2, P_3$ bằng cách lấy mẫu các ô lân cận theo chỉ số, sử dụng khoảng cách Wasserstein chuẩn hóa theo phương sai cục bộ (gần bất biến theo tỉ lệ), trọng tâm Wasserstein cục bộ và cổng FG-Gate không dùng chuẩn hóa theo batch, GauCon chỉ cộng thêm 714 tham số (+0,030% sau hợp nhất, tổng 2.402.374 tham số). Phép đo một phiên trên NVIDIA L4 ghi nhận 73,95 FPS (13,52 ms/khung hình); cần đo nhiều phiên độc lập trước khi kết luận về tốc độ tương đối.
 3. Mục tiêu 3 (Gán nhãn tách rời DW-TAL và chưng cất không phát sinh chi phí suy luận): Cổng điều biến kích thước logistic ($\tau_{\mathrm{px}} = 20$ px) kết hợp giới hạn mục tiêu mềm theo $\mathrm{IoU}$ thực được sử dụng trong cấu hình thực nghiệm; trên chế độ toàn khung, GauCon giữ $E_{\mathrm{bkg}} = 8.683$ thấp hơn NWD (9.021) dù vẫn cao hơn Base (7.341), và trong chế độ lát cắt $E_{\mathrm{bkg}}$ tăng +28,7% so với Base (16.422 lên 21.130).
 4. Mục tiêu 4 (Kết quả thực nghiệm đối chứng trong phạm vi đơn seed): Ở chế độ lát cắt $640 \times 512$, GauCon nâng $AP_{50}^{all}$ từ 45,58% lên 48,53% (+2,95 điểm, 95% CI [+1,92; +4,02]) và $AP_{75}^{all}$ lên 7,37% (vượt Base +0,97 điểm và NWD +1,28 điểm). Trên toàn khung $1280 \times 1280$, GauCon đạt 44,13% $AP_{50}^{all}$ (cao hơn cả Base 43,08%, Base + Soft-NMS 43,37% lẫn NWD 43,24%), giảm 22,2% hộp trùng (1.027 xuống 799), đồng thời ghi nhận rõ các hạn chế cần hoàn thiện về nhóm *tiny1* và hiện tượng tăng gián tiếp trên nhóm *reasonable*.
 
