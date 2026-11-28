@@ -50,7 +50,7 @@ To address these design constraints jointly, we propose \textbf{GauCon} and \tex
 
 Our contributions are:
 \begin{itemize}
-  \item We present \textbf{GauCon} (Section~\ref{sec:method_head}), a selective $P_2/P_3$ intra-head module combining zero-FLOP coordinate alignment, scale-invariant Wasserstein discrepancy, damped barycentric interpolation, and BatchNorm-free foreground-gated logit modulation for $+714$ parameters ($+0.030\%$ fused, $+0.086$ pre-fuse GFLOPs at $1280$).
+  \item We present \textbf{GauCon} (Section~\ref{sec:method_head}), a selective $P_2/P_3$ intra-head module combining index-based coordinate alignment, locally variance-normalized Wasserstein discrepancy, damped barycentric interpolation, and BatchNorm-free foreground-gated logit modulation for $+714$ parameters ($+0.030\%$ fused, $+0.086$ pre-fuse GFLOPs at $1280$).
   \item We formulate \textbf{DW-TAL} (Section~\ref{sec:method_dwtal}), decoupling logistic scale-gated Wasserstein candidate selection from true-IoU soft-target capping, supported by epoch-scheduled \texttt{one2many} Gaussian distillation removed during inference fusion.
   \item Under controlled $80$-epoch COCO-pretrained benchmarking on TinyPerson against Base, Base + Soft-NMS, and + NWD across tiled ($640\times 512$) and full-frame ($1280\times 1280$) protocols (Figure~\ref{fig:diagnostics_ext}, Tables~\ref{tab:main_results}--\ref{tab:diagnostics}), we analyze both improvements ($+2.95$ pp tiled $AP_{50}^{all}$, $+1.28$ pp tiled $AP_{75}^{all}$ over NWD) and remaining failure modes (\textit{tiny1} recall trade-off, tiled background false positives, and indirect large-object gains lacking component-wise ablations).
 \end{itemize}
@@ -83,7 +83,7 @@ Figure~\ref{fig:gaucon_arch} presents our architecture built on YOLO26n-P2~\cite
   \label{fig:gaucon_head}
 \end{figure*}
 
-\subsection{Zero-FLOP Coordinate Alignment and Scale-Invariant Metric}
+\subsection{Coordinate Alignment and Locally Variance-Normalized Wasserstein Metric}
 \label{sec:method_transport}
 
 As shown in Figure~\ref{fig:gaucon_head}, $\mathbf{d}_0(u)$ maps bijectively to a 2D diagonal Gaussian $\mathcal{G}_0(u) = \mathcal{N}(\boldsymbol{\mu}_0(u), \mathrm{diag}(\boldsymbol{\sigma}_0(u)^2))$~\cite{yang2021gwd,wang2021nwd} relative to cell center $(x + 0.5, y + 0.5)$:
@@ -104,7 +104,7 @@ where $\boldsymbol{\Delta}_p(u) = \rho(u_p + 0.5) - (u + 0.5)$. When cell $u$ an
 \begin{figure}[t]
   \centering
   \includegraphics[width=\linewidth]{figures/fig_gaucon_theory_curves.pdf}
-  \caption{\textbf{Properties of our formulation.} \textbf{(a)} Logistic scale gate $g(s_{\mathrm{gt}})$ ($\tau_{\mathrm{px}}{=}20$) cleanly isolates tiny targets compared to a heavy-tailed rational decay. \textbf{(b)} Under a fixed $25\%$ relative center shift, self-normalized $S_W=(1+D)^{-1}$ stays constant across box scales whereas fixed-$C$ NWD ($C{=}12.8$) decays sharply.}
+  \caption{\textbf{Properties of our formulation.} \textbf{(a)} Logistic scale gate $g(s_{\mathrm{gt}})$ ($\tau_{\mathrm{px}}{=}20$) cleanly isolates tiny targets compared to a heavy-tailed rational decay. \textbf{(b)} Under a fixed $25\%$ relative center shift, self-normalized $S_W=(1+D)^{-1}$ remains approximately constant across box scales whereas fixed-$C$ NWD ($C{=}12.8$) decays sharply.}
   \label{fig:theory}
 \end{figure}
 
