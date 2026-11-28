@@ -83,7 +83,7 @@ Trong đó: $\boldsymbol{\mu} = (c_x, c_y)^\top$ là tọa độ tâm hộp (tí
 
 #### 1.2.5. Gán nhãn căn chỉnh tác vụ và xung đột hiệu chuẩn mục tiêu mềm
 
-Trong YOLO26 [9] và TOOD [17], bộ gán nhãn động căn chỉnh tác vụ (TAL) chấm điểm từng vị trí neo qua chỉ số căn chỉnh $t = s^\alpha u^\beta$ (mặc định $\alpha = 0{,}5, \beta = 6{,}0$), giữ lại top-$k$ ứng viên nằm trong Ground Truth (GT), rồi chuẩn hóa để gán mục tiêu phân loại mềm (*soft target*) $\mathbf{t}_{\mathrm{cls}}$ cho hàm mất mát BCE:
+Trong YOLO26 [9] và TOOD [17], bộ gán nhãn động căn chỉnh tác vụ (TAL) chấm điểm từng vị trí neo qua chỉ số căn chỉnh $t = s^\alpha u^\beta$ (với các tham số $\alpha, \beta$ do cấu hình quy định), giữ lại top-$k$ ứng viên nằm trong Ground Truth (GT). Trong các thực nghiệm của đồ án, cả Base, NWD và GauCon đều dùng $\alpha = 0{,}5$ và $\beta = 4{,}0$, rồi chuẩn hóa để gán mục tiêu phân loại mềm (*soft target*) $\mathbf{t}_{\mathrm{cls}}$ cho hàm mất mát BCE:
 $$t_{\mathrm{cls}}(u) = \hat{t}(u) = \frac{t(u)}{\max_{v \in \Omega_{\mathrm{pos}}} t(v) + \epsilon} \cdot \max_{v \in \Omega_{\mathrm{pos}}} u(v)$$ (1.2)
 Trong đó: $\Omega_{\mathrm{pos}}$ là tập mẫu dương được gán cho cùng một đối tượng GT, $s(u)$ là xác suất dự đoán và $u(u)$ là độ chồng lấn hình học tại ô $u$.
 
@@ -346,12 +346,12 @@ Bảng 2.4: Cấu hình huấn luyện dùng chung cho các mô hình đối ch�
 
 | Nhóm cấu hình | Giá trị thiết lập | Căn cứ kỹ thuật |
 |---|---|---|
-| Trọng số khởi tạo | MS COCO (YOLO26n / YOLO11n) | Cung cấp bộ lọc đặc trưng cạnh và kết cấu ổn định trong 80 epoch trên 662 ảnh |
+| Trọng số khởi tạo | Trọng số YOLO26n huấn luyện trên MS COCO | Các tầng tương ứng được nạp từ checkpoint COCO; nhánh $P_2$ và các phần thay đổi được khởi tạo theo cùng quy trình |
 | Độ phân giải đầu vào | $1280 \times 1280$ (*letterbox* giữ tỉ lệ) | Bội số 32; đảm bảo lưới $P_2$ đạt $320 \times 320$ |
 | Thời lượng & Batch size | 80 epoch, batch size 16, FP16 AMP | Thống nhất batch size 16 trên GPU NVIDIA L4 24 GB |
 | Bộ tối ưu & Lịch học | AdamW [29], $\text{lr}_0 = 0{,}0015$, $\text{lrf} = 0{,}05$ (cosine), *warmup* 3 epoch | Tinh chỉnh trọng số tiền huấn luyện ổn định mà không phá vỡ các tầng Backbone đầu |
 | Tăng cường dữ liệu | Lật ngang $0{,}5$, dịch $0{,}05$, tỉ lệ $0{,}15$, HSV $(0{,}005; 0{,}10; 0{,}15)$; tắt Mosaic & MixUp | Ghép Mosaic thu nhỏ vật thêm 2–4 lần khiến người 2–6 px rơi xuống dưới 1 px |
-| Tham số GauCon & DW-TAL | Kích hoạt $P_2, P_3$, bật FG-Gate; TAL có $\beta = 4{,}0$; $\tau_{\mathrm{px}} = 20{,}0$, $\beta_{\mathrm{px}} = 3{,}5$, $\beta_{\mathrm{box}}$ khởi tạo 0,06, $\lambda_{\mathrm{tal}} = 0{,}45$, $\lambda_{\mathrm{reg}} = 0{,}20$, $\lambda_{\mathrm{dist}} = 0{,}25$ | Khoanh vùng tác động vào dải $\le 20$ px trên $P_2, P_3$ |
+| Tham số GauCon & DW-TAL | Kích hoạt $P_2, P_3$, bật FG-Gate; $\tau_{\mathrm{px}} = 20{,}0$, $\beta_{\mathrm{px}} = 3{,}5$, $\beta_{\mathrm{box}}$ khởi tạo 0,06, $\lambda_{\mathrm{tal}} = 0{,}45$, $\lambda_{\mathrm{reg}} = 0{,}20$, $\lambda_{\mathrm{dist}} = 0{,}25$ | Khoanh vùng tác động vào dải $\le 20$ px trên $P_2, P_3$ |
 | Đối chứng NWD chuẩn | Trọng số gán nhãn $\alpha_{\mathrm{NWD}} = 0{,}50$, mất mát $\lambda_{\mathrm{NWD}} = 0{,}50$, $C = 12{,}8$ px | Cấu hình gốc của bài báo NWD [13, 14] |
 | Chọn mô hình đánh giá | Chọn mô hình tốt nhất theo $mAP_{50}$ trên 84 ảnh kiểm định (*val*), seed = 42 | Tập kiểm tra (*test*) 786 ảnh chỉ chạy đánh giá một lần sau khi kết thúc huấn luyện |
 
