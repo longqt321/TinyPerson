@@ -52,7 +52,7 @@ GauCon thêm 714 tham số, đưa tổng số tham số sau hợp nhất lên 2.
 2. Chạy đúng 1 lệnh sau khi `git clone`:
 ```bash
 git clone <repo-url> && cd thigiacmaytinh
-bash scripts/run_gpu.sh --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml
+bash scripts/run_gpu.sh --config configs/experiment/paper_fast/tp80_yolo26n_lgt.yaml
 ```
 - **Tự động hoàn toàn**: cài `uv`, `uv sync --extra gpu --frozen` (Python 3.14 + `torch+cu128` theo `uv.lock`), phát hiện môi trường (`colab`/`kaggle`), tự tìm dataset local hoặc **tự tải `tinyperson-yolo-v2.tar.gz` từ Hugging Face (`longqt321/tinyperson-yolo`) + xác minh SHA-256 + giải nén vào SSD local**, chạy `audit_dataset` + model preflight, đăng nhập W&B từ Secrets với tag `host:colab`/`host:kaggle` và deterministic run ID (`resume="allow"`) đồng bộ hoàn toàn với Modal, lưu checkpoint bền vững (Google Drive / `/kaggle/working/runs`), và gọi `finalize()`.
 - Chạy lại đúng lệnh trên sau khi bị ngắt session sẽ **tự động resume** từ `last.pt`.
@@ -62,7 +62,7 @@ bash scripts/run_gpu.sh --config configs/experiment/gauss_v3_tinyperson_wacv_150
 ```bash
 uv sync --extra cpu --group dev
 uv run --extra cpu --group dev ruff check .
-bash scripts/run_gpu.sh --config configs/experiment/gauss_v3_tinyperson_wacv_150e.yaml --dry-run
+bash scripts/run_gpu.sh --config configs/experiment/paper_fast/tp80_yolo26n_lgt.yaml --dry-run
 ```
 
 Train trên CPU bị chặn có chủ đích: cả `train.py` và `tinydet.training.trainer.train` đều từ chối khi không có CUDA.
