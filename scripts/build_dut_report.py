@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from docx import Document
@@ -30,7 +30,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 MD_PATH = ROOT_DIR / "docs/report/course_report_vi.md"
 OUT_DOCX = ROOT_DIR / "docs/report/course_report_vi.docx"
 OUT_PDF = ROOT_DIR / "docs/report/course_report_vi.pdf"
-BUILD_TIMESTAMP = datetime(2000, 1, 1, tzinfo=timezone.utc)
+BUILD_TIMESTAMP = datetime(2000, 1, 1, tzinfo=UTC)
 SOURCE_DATE_EPOCH = "946684800"
 
 FONT = "Times New Roman"
@@ -270,10 +270,12 @@ def add_internal_hyperlink(
     text: str,
     anchor: str,
     *,
-    size=Pt(12),
+    size=None,
     bold: bool = False,
     italic: bool = False,
 ) -> None:
+    if size is None:
+        size = Pt(12)
     run = paragraph.add_run(text)
     set_font(run, size=size, bold=bold, italic=italic)
     r_pr = run._r.get_or_add_rPr()
@@ -315,24 +317,20 @@ def configure_heading_styles(doc) -> None:
 
 def normalize_docx_zip(path: Path) -> None:
     normalized = path.with_suffix(path.suffix + ".normalized")
-    with zipfile.ZipFile(path, "r") as source_zip:
-        with zipfile.ZipFile(
-            normalized,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-            compresslevel=9,
-        ) as target_zip:
-            for name in sorted(source_zip.namelist()):
-                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                info.create_system = 3
-                info.external_attr = 0o600 << 16
-                target_zip.writestr(
-                    info,
-                    source_zip.read(name),
-                    compress_type=zipfile.ZIP_DEFLATED,
-                    compresslevel=9,
-                )
+    with zipfile.ZipFile(path, "r") as source_zip, zipfile.ZipFile(
+        normalized, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as target_zip:
+        for name in sorted(source_zip.namelist()):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = 0o600 << 16
+            target_zip.writestr(
+                info,
+                source_zip.read(name),
+                compress_type=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            )
     normalized.replace(path)
 
 
@@ -674,9 +672,8 @@ def toc_entry_for_heading(level: int, text: str) -> tuple[int, str] | None:
     elif level == 3:
         if re.match(r"^\d+\.\d+\.\s+", text) or re.match(r"^Phụ lục [A-Z]", text):
             return 3, text
-    elif level == 4:
-        if re.match(r"^\d+\.\d+\.\d+\.\s+", text):
-            return 4, text
+    elif level == 4 and re.match(r"^\d+\.\d+\.\d+\.\s+", text):
+        return 4, text
     return None
 
 
@@ -1006,10 +1003,7 @@ def tight_ranges(text: str) -> str:
 
 def split_md_table_row(line: str) -> list[str]:
     value = line.strip()
-    if value.startswith("|"):
-        value = value[1:]
-    if value.endswith("|"):
-        value = value[:-1]
+    value = value.removeprefix("|").removesuffix("|")
     cells: list[str] = []
     current: list[str] = []
     escaped = False
@@ -1036,11 +1030,9 @@ def split_md_table_row(line: str) -> list[str]:
 
 def is_md_block_start(line: str) -> bool:
     return (
-        line.startswith(("```", "$$", "|", "!["))
+        line.startswith(("```", "$", "|", "![", ":::::", "- ", "* ", "+ ", "**Bảng", "Bảng"))
         or line == "---"
-        or line.startswith(":::::")
         or bool(re.match(r"^#{1,4}\s+", line))
-        or line.startswith(("- ", "* ", "+ ", "**Bảng", "Bảng"))
         or bool(re.match(r"^\d+\.\s+", line))
         or bool(CAP_FIG_RE.match(line))
         or bool(CAP_TAB_RE.match(line))
