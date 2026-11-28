@@ -91,7 +91,7 @@ Generalized Focal Loss [28] và VarifocalNet [36] chứng minh rằng độ tin 
 
 #### 1.2.6. Suy luận theo lát cắt chồng lấn (*Tiled Slicing*)
 
-SAHI [38] và quy trình đánh giá gốc của TinyPerson [1] chia ảnh lớn thành nhiều lát cắt nhỏ chồng lấn (như $640 \times 512$ chồng lấn 100 pixel) để bảo toàn tỉ lệ ảnh 1:1 cho từng vùng, sau đó gộp kết quả bằng NMS toàn cục. Cách làm này cải thiện rõ độ phủ ở dải dưới 12 pixel nhưng tăng số lượt suy luận theo số lát cắt (~20–23 lát cắt cho mỗi ảnh 4K) và phát sinh hộp bị cắt đôi dọc biên lát cắt. Do đó, bài toán đòi hỏi đánh giá trên cả hai giao thức: suy luận theo lát cắt độ phân giải gốc (tối ưu độ phủ) và suy luận toàn khung $1280 \times 1280$ một lượt (tối ưu tốc độ thời gian thực).
+SAHI [38] và quy trình đánh giá gốc của TinyPerson [1] chia ảnh lớn thành các lát cắt nhỏ có phần chồng lấn, sau đó gộp dự đoán bằng NMS toàn cục. Cách làm này giữ độ phân giải của đối tượng nhỏ nhưng làm tăng số lượt suy luận và có thể tạo hộp bị cắt tại biên lát. Vì vậy, báo cáo đánh giá cả giao thức lát cắt ở độ phân giải gốc và giao thức suy luận toàn khung $1280 \times 1280$ trong một lượt.
 
 ### 1.3. Khoảng trống nghiên cứu
 
@@ -128,13 +128,13 @@ Bảng 1.2: Tổng hợp kết quả tham khảo đã công bố trên tập ki�
 
 *Ghi chú: Bảng 1.2 chỉ mang tính tham chiếu bối cảnh từ các công bố trước vì mỗi nhóm khác nhau về số lớp (2 lớp so với 1 lớp), độ phân giải ảnh, bộ dữ liệu khởi tạo (ImageNet so với COCO hoặc huấn luyện từ đầu 300 epoch) và bộ tiêu chí chấm điểm. Dấu (*) ở nhóm (c) thể hiện bài báo gốc [5] báo cáo $mAP_{50}$ tổng hợp trên một lớp person ở 300 epoch từ đầu.*
 
-Từ các công trình được khảo sát, báo cáo tập trung vào một hướng kết hợp còn ít được phân tích: chưa có đầu phát hiện siêu nhẹ nào tích hợp trực tiếp phép đồng thuận trọng tâm Wasserstein cục bộ và cổng quan hệ hình học vào nhánh $\mathcal{H}_{1:1}$ không dùng NMS, đồng thời tách rời bước chọn mẫu dựa trên Wasserstein khỏi bước hiệu chuẩn mục tiêu phân loại theo $\mathrm{IoU}$ thực. Thao tác trực tiếp trên không gian hộp bao đã giải mã ở $P_2, P_3$ giúp tận dụng cấu trúc hình học lân cận mà không phải thêm hàng chục nghìn tham số tích chập vào Neck.
+Từ các công trình được khảo sát, đồ án tập trung đánh giá hai ý tưởng trong cùng một đầu phát hiện gọn nhẹ. Thứ nhất, thông tin hình học từ các ô lân cận được đưa trực tiếp vào nhánh dự đoán đơn mục tiêu tại $P_2$ và $P_3$. Thứ hai, độ tương đồng Wasserstein được dùng để hỗ trợ chọn ứng viên dương, trong khi mục tiêu phân loại cuối cùng vẫn được hiệu chuẩn theo IoU thực tế. Phạm vi này mô tả đóng góp của đồ án, không hàm ý rằng từng thành phần riêng lẻ chưa từng xuất hiện trong các công trình trước.
 
 ### 1.4. Mục tiêu, đối tượng và phạm vi nghiên cứu
 
 Đồ án xác định bốn mục tiêu kỹ thuật kiểm chứng xuyên suốt qua Chương 2, Chương 3 và Kết luận:
 1. Thiết lập mô hình cơ sở (*baseline*) và quy trình đánh giá chống rò rỉ dữ liệu: Xây dựng quy trình huấn luyện và đánh giá thống nhất trên TinyPerson tách tập huấn luyện/kiểm định theo tiền tố chuỗi video (662 ảnh *train*, 84 ảnh *val*, 786 ảnh *test*), hỗ trợ cả hai chế độ suy luận theo lát cắt $640 \times 512$ và toàn khung $1280 \times 1280$.
-2. Thiết kế đầu phát hiện GauCon chi phí cực thấp: Bổ sung cơ chế đồng thuận hộp trọng tâm Wasserstein và cổng điều biến FG-Gate không dùng chuẩn hóa theo batch chọn lọc trên $P_2, P_3$, giới hạn mức tăng tham số dưới 0,05% (< 1.000 tham số) và bảo toàn thông lượng suy luận sau khi hợp nhất mô hình.
+2. Thiết kế đầu phát hiện GauCon chi phí cực thấp: Bổ sung cơ chế đồng thuận hộp trọng tâm Wasserstein và cổng điều biến FG-Gate không dùng chuẩn hóa theo batch chọn lọc trên $P_2, P_3$, giới hạn mức tăng tham số dưới 0,05% (< 1.000 tham số) và giữ chi phí tham số và tính toán bổ sung ở mức thấp.
 3. Thiết kế cơ chế gán nhãn tách rời DW-TAL và chưng cất phân phối hộp: Kết hợp cổng kích thước logistic ($\tau_{\mathrm{px}} = 20$ px) vào khâu chọn mẫu dương, tái hiệu chuẩn mục tiêu mềm phân loại theo $\mathrm{IoU}$ thực để hạn chế báo nhầm nền, và chưng cất phân phối Gauss từ nhánh $\mathcal{H}_{1:M}$ không tốn chi phí khi suy luận.
 4. Kiểm định thực nghiệm đa chiều: So sánh trực tiếp YOLO26n-P2 Base, biến thể ghép NWD [13, 14], hậu xử lý đối chứng Base + Soft-NMS và mô hình đề xuất dưới cùng điều kiện huấn luyện (80 epoch pretrained COCO, batch size 16, random seed 42 trên GPU NVIDIA L4), phân rã chi tiết qua TIDE [37], $d_{\mathrm{NN}}$, các dải con *reasonable*, 1.000 lần Paired Image Bootstrap, đường cong IoU và chi phí phần cứng.
 
@@ -318,7 +318,7 @@ Bảng 2.2: Luồng biến đổi tensor qua Head GauCon với đầu vào $1280
 | Dự đoán thô nhánh $\mathcal{H}_{1:1}$ | $\mathbf{D}_0^{(s)},\, \mathbf{S}_{\mathrm{raw}}^{(s)}$ | $B \times 4 \times 320^2$, $B \times 1 \times 320^2$ | $B \times 4 \times 160^2$, $B \times 1 \times 160^2$ | Khoảng cách $(l,t,r,b)$ và logit thô |
 | Tham số Gauss gốc | $\boldsymbol{\mu}_0^{(s)},\, \boldsymbol{\sigma}_0^{(s)}$ | $B \times 2 \times 320 \times 320$ | $B \times 2 \times 160 \times 160$ | Ánh xạ (2.5) ở độ chính xác FP32 |
 | Trượt lấy mẫu theo chỉ số + Ô cha | $\tilde{\boldsymbol{\mu}}_{1..9},\, \tilde{\boldsymbol{\sigma}}_{1..9}$ | $B \times 2 \times 9 \times 320 \times 320$ | $B \times 2 \times 9 \times 160 \times 160$ | 8 ô $3 \times 3$ + 1 ô cha mức $s + 1$ |
-| Khoảng cách vận chuyển | $\mathbf{D}_{1..9}$ | $B \times 9 \times 320 \times 320$ | $B \times 9 \times 160 \times 160$ | Khoảng cách (2.9) bất biến tỉ lệ |
+| Khoảng cách vận chuyển | $\mathbf{D}_{1..9}$ | $B \times 9 \times 320 \times 320$ | $B \times 9 \times 160 \times 160$ | Khoảng cách (2.9) gần bất biến theo tỉ lệ |
 | Đặc trưng quan hệ lân cận | $\mathbf{r}_u$ | $B \times 20 \times 320 \times 320$ | $B \times 20 \times 160 \times 160$ | Ghép $[F_k, M_k, M_{\mathrm{dom}}, M_{\mathrm{sup}}]$ |
 | Tầng ẩn cổng phân loại | $\mathbf{h}_u$ | $B \times 16 \times 320 \times 320$ | $B \times 16 \times 160 \times 160$ | $\mathrm{SiLU}(\mathrm{PWConv}_{20\to 16}(\mathbf{r}_u))$ |
 | Đầu ra tinh chỉnh | $\mathbf{D}_{\mathrm{ref}}^{(s)},\, \mathbf{S}_{\mathrm{ref}}^{(s)}$ | $B \times 4 \times 320^2$, $B \times 1 \times 320^2$ | $B \times 4 \times 160^2$, $B \times 1 \times 160^2$ | Trọng tâm (2.12) & cổng tiền cảnh (2.16) |
