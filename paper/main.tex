@@ -50,7 +50,7 @@ To address these constraints, we propose \textbf{GauCon} and \textbf{DW-TAL} on 
 
 Our contributions are:
 \begin{itemize}
-  \item We present \textbf{GauCon} (Section~\ref{sec:method_head}), a selective $P_2/P_3$ intra-head module combining index-based coordinate alignment, locally variance-normalized Wasserstein discrepancy, damped barycentric interpolation, and BatchNorm-free foreground-gated logit modulation for $+714$ parameters ($+0.030\%$ fused, $+0.086$ pre-fuse GFLOPs at $1280$).
+  \item We present \textbf{GauCon} (Section~\ref{sec:method_head}), a selective $P_2/P_3$ intra-head module combining index-based coordinate alignment, locally variance-normalized Wasserstein discrepancy, damped barycentric interpolation, and BatchNorm-free foreground-gated logit modulation for $+714$ parameters ($+0.030\%$ fused, $+0.086$ estimated GFLOPs at $1280$).
   \item We formulate \textbf{DW-TAL} (Section~\ref{sec:method_dwtal}), decoupling logistic scale-gated Wasserstein candidate selection from true-IoU soft-target capping, supported by epoch-scheduled one-to-many Gaussian distillation removed before deployment.
   \item Under controlled $80$-epoch COCO-pretrained benchmarking on TinyPerson against Base, Base + Soft-NMS, and + NWD across tiled ($640\times 512$) and full-frame ($1280\times 1280$) protocols (Figure~\ref{fig:diagnostics_ext}, Tables~\ref{tab:main_results}--\ref{tab:diagnostics}), we analyze both improvements ($+2.95$ pp tiled $AP_{50}^{all}$, $+1.28$ pp tiled $AP_{75}^{all}$ over NWD) and remaining failure modes (\textit{tiny1} recall trade-off, tiled background false positives, and indirect large-object gains lacking component-wise ablations).
 \end{itemize}
@@ -74,12 +74,12 @@ Our contributions are:
 \section{Methodology}
 \label{sec:method}
 
-Figure~\ref{fig:gaucon_arch} presents our architecture built on YOLO26n-P2~\cite{ultralytics2026yolo} with pyramid levels $\{P_2, P_3, P_4, P_5\}$ at strides $r_s \in \{4, 8, 16, 32\}$ and head input channels $\{32, 64, 128, 256\}$. All experiments here use direct scalar regression ($\text{reg\_max}=1$) predicting stride-normalized edge offsets $\mathbf{d}_0(u) = (l, t, r, b) \in \mathbb{R}_{\ge 0}^4$ and logits $\mathbf{s}_{\mathrm{raw}}(u) \in \mathbb{R}^C$ at cell $u = (y, x)$ (as an implementation compatibility feature, the module also supports DFL heads with $\text{reg\_max}>1$~\cite{wang2024yolov10} by taking $\mathbf{d}_0$ after linear DFL expectation).
+Figure~\ref{fig:gaucon_arch} presents our architecture built on YOLO26n-P2~\cite{ultralytics2026yolo} with pyramid levels $\{P_2, P_3, P_4, P_5\}$ at strides $r_s \in \{4, 8, 16, 32\}$ and head input channels $\{32, 64, 128, 256\}$. All experiments use direct scalar regression to predict stride-normalized edge offsets $\mathbf{d}_0(u) = (l, t, r, b) \in \mathbb{R}_{\ge 0}^4$ and class logits $\mathbf{s}_{\mathrm{raw}}(u) \in \mathbb{R}^C$ at cell $u = (y, x)$.
 
 \begin{figure*}[t]
   \centering
   \includegraphics[width=0.98\linewidth]{figures/fig_gaucon_head.pdf}
-  \caption{\textbf{Internal GauCon Head Mechanism at Cell $u = (y, x)$ ($s \in \{P_2, P_3\}$).} Raw box offsets lift into a 2D Gaussian, align $3\times 3$ index-aligned spatial neighbors and the $2\times$ parent cell from $P_{s+1}$, and branch into damped Wasserstein barycentric interpolation (top) and a BatchNorm-free foreground-gated relational MLP (bottom).}
+  \caption{\textbf{Local operations in the GauCon head at cell $u = (y, x)$ ($s \in \{P_2, P_3\}$).} Raw box offsets lift into a 2D Gaussian, align $3\times 3$ index-aligned spatial neighbors and the $2\times$ parent cell from $P_{s+1}$, and branch into damped Wasserstein barycentric interpolation (top) and a BatchNorm-free foreground-gated relational MLP (bottom).}
   \label{fig:gaucon_head}
 \end{figure*}
 
@@ -146,7 +146,7 @@ Background cells ($\sigma(s_0) \approx 0$) remain anchored to raw logits while f
 \end{align}
 where $u_{\mathrm{blend}} = (1 - \alpha_{\mathrm{tal}})\mathrm{IoU} + \alpha_{\mathrm{tal}} S_W + 10^{-4}$ and $\eta = 0.08$. Outlying anchors selected via $S_W$ while having $\mathrm{IoU} \approx 0$ are capped at $0.08$ instead of $0.4\text{--}0.6$, preserving Varifocal score calibration~\cite{zhang2021varifocalnet}. Box loss adds bounded $\lambda_{\mathrm{reg}} g(s_{\mathrm{gt}}) \frac{D}{1 + D}$ ($\lambda_{\mathrm{reg}}=0.20$).
 
-\textbf{Zero-Inference-Cost Annealed Distillation.} During training, dense one-to-many Gaussians distill into raw one-to-one $P_2/P_3$ Gaussians over confident foreground cells ($w_u = \hat{p}_{\mathrm{o2m}}(u)^2\,\mathbb{I}[\hat{p}_{\mathrm{o2m}}(u) > 0.20]$) with weight $\lambda_{\mathrm{dist}} \kappa(e)$ ($\lambda_{\mathrm{dist}}=0.25$), where $\kappa(e) = \mathrm{clip}(\gamma_{\mathrm{o2m}}(e)/\gamma_{\mathrm{o2m}}(0), 0.05, 1.0)$ tracks the epoch-scheduled auxiliary loss gain $\gamma_{\mathrm{o2m}}(e)$ relative to $\gamma_{\mathrm{o2m}}(0)=0.8$; auxiliary branches are removed before deployment.
+\textbf{Training-Only Annealed Gaussian Distillation.} During training, dense one-to-many Gaussians distill into raw one-to-one $P_2/P_3$ Gaussians over confident foreground cells ($w_u = \hat{p}_{\mathrm{o2m}}(u)^2\,\mathbb{I}[\hat{p}_{\mathrm{o2m}}(u) > 0.20]$) with weight $\lambda_{\mathrm{dist}} \kappa(e)$ ($\lambda_{\mathrm{dist}}=0.25$), where $\kappa(e) = \mathrm{clip}(\gamma_{\mathrm{o2m}}(e)/\gamma_{\mathrm{o2m}}(0), 0.05, 1.0)$ tracks the epoch-scheduled auxiliary loss gain $\gamma_{\mathrm{o2m}}(e)$ relative to $\gamma_{\mathrm{o2m}}(0)=0.8$; auxiliary branches are removed before deployment.
 
 \section{Experimental Setup}
 \label{sec:setup}
@@ -248,7 +248,7 @@ Because GauCon leaves $P_4/P_5$ unmodified at inference, the gain cannot be attr
 \centering
 \scriptsize
 \setlength{\tabcolsep}{1.2pt}
-\caption{\textbf{Complexity and single-session L4 latency} ($1280{\times}1280$, FP16, batch $1$; pre-fuse FLOPs reflect actual MLP cost).}
+\caption{\textbf{Complexity and single-session L4 latency} ($1280{\times}1280$, FP16, batch $1$; post-fusion estimate includes the custom MLP).}
 \label{tab:hardware}
 \begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lccccc@{}}
 \toprule
@@ -256,10 +256,12 @@ Because GauCon leaves $P_4/P_5$ unmodified at inference, the gain cannot be attr
 \midrule
 Base  & 2,401,660 & 31.948 / 27.683 & \textbf{166.8M} & 69.5 & 39.96 \\
 + NWD & 2,401,660 & 31.948 / 27.683 & \textbf{166.8M} & \textbf{74.4} & 39.67 \\
-\textbf{+ GauCon} & 2,402,374 & 32.034 / 27.683$^\dagger$ & 186.2M & 74.0 & \textbf{42.24} \\
+\textbf{+ GauCon} & 2,402,374 & 32.034 / 27.769$^\ast$ & 186.2M & 74.0 & \textbf{42.24} \\
 \bottomrule
 \end{tabular*}
 \end{table}
+
+\noindent $^\ast$ The post-fusion profiler reports $27.683$ GFLOPs but omits the custom $1\times1$ MLP. Adding its separately estimated $0.086$ GFLOPs gives approximately $27.769$ GFLOPs for GauCon.
 
 Single-session timing records $13.52$ ms ($73.95$ FPS) for GauCon versus $14.39$ ms ($69.51$ FPS) for Base. This apparent $0.86$ ms latency advantage is not reliable evidence of a speedup because timing was collected in one session; repeated independent profiling runs are needed.
 
