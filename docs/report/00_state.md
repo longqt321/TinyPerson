@@ -5,7 +5,7 @@
 - **Deliverables**:
   1. English WACV camera-ready paper (`paper/main.tex` -> `paper/main.pdf`, clean hypothesis-driven framing without exploratory prototypes, exact `136,000` grid cells, pre-fuse `+0.086` GFLOPs disclosure, `Base + Soft-NMS` post-hoc control `43.37%`, `reasonable` sub-bin breakdown, and `1,000`-resample paired image-level bootstrap `95%` CIs, zero code-artifact leaks).
   2. Vietnamese Course Report (`docs/report/course_report_vi.md` -> `docs/report/course_report_vi.pdf` & `.docx`, DUT QĐ 209/QĐ-ĐHBK format, zero code/file-path leaks, zero inline backticks, standard mathematical notation $\mathcal{H}_{1:1}$ / $\mathcal{H}_{1:M}$ and pure-math `Thuật toán 2.1`, Appendix A architectural table `Bảng 3.7` & full Appendix B `Bảng 3.8`–`3.9`, no Appendix C, zero `v1` history, standard terminology avoiding `"hạt nhân ngẫu nhiên"`).
-- **Phase**: COMPLETED — Audited under Zero-Code-Artifacts + Option A (`Mức A`) fixes and verified across `xelatex`, `build_dut_report.py`, `pdflatex`, `ruff`, and `pytest`.
+- **Phase**: SOURCE REVISED; PDF/DOCX rebuild and visual QA pending.
 
 ## Verified Experimental Campaign (`tp80_*`, 80e COCO-pretrained, `batch=16`, `seed=42`, NVIDIA L4)
 
@@ -31,3 +31,12 @@
 - **L3 Seminal**: `lin2014coco`, `ren2015faster`, `lin2017fpn`, `lin2017focal`, `liu2018panet`, `tian2019fcos`, `cai2019cascade`, `zheng2020diou`, `li2020gfl`, `loshchilov2017adamw`, `neubeck2006nms`, `bodla2017softnms`, `ioffe2015batch`, `dai2021dyhead`.
 - **L4 Adjacent**: `solovyev2021wbf` (IVC 2021), `hosang2017learning` (CVPR 2017), `zhang2021varifocalnet` (CVPR 2021).
 - **L5 Critiques & Diagnostics**: `bolya2020tide` (ECCV 2020), `akyon2022sahi` (ICIP 2022).
+
+
+## Editorial revision (2026-11-29)
+
+- Updated `docs/report/course_report_vi.md` to remove source-code identifiers, prompt-like wording, unsupported implementation claims, excessive bold formatting, and inaccurate parameter explanations.
+- Reconciled the reported TAL exponent, GauCon initialization, NWD comparison settings, bootstrap interpretation, and the NWD scale-shift example against the checked-in configurations and implementation.
+- Updated `paper/main.tex` to align terminology and claims with the report, remove unsupported FLOP and transformer-complexity claims, and qualify causal and latency interpretations.
+- Updated `scripts/build_dut_report.py` so plain figure/table captions remain recognized, and removed unverified cover metadata.
+- Static source checks passed. The committed `course_report_vi.docx` and `course_report_vi.pdf` have not yet been regenerated from this revision or visually inspected. `paper/main.pdf` is not present in the repository at this commit.
