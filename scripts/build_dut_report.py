@@ -1030,7 +1030,7 @@ def split_md_table_row(line: str) -> list[str]:
 
 def is_md_block_start(line: str) -> bool:
     return (
-        line.startswith(("```", "$", "|", "![", ":::::", "- ", "* ", "+ ", "**Bảng", "Bảng"))
+        line.startswith(("```", "$$", "|", "![", ":::::", "- ", "* ", "+ ", "**Bảng", "Bảng"))
         or line == "---"
         or bool(re.match(r"^#{1,4}\s+", line))
         or bool(re.match(r"^\d+\.\s+", line))
