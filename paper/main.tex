@@ -94,7 +94,7 @@ As shown in Figure~\ref{fig:gaucon_head}, $\mathbf{d}_0(u)$ maps bijectively to 
 \end{equation}
 with $\epsilon_\sigma = 0.05$ stride units and linear inverse $\mathcal{G}^{-1}(\boldsymbol{\mu}, \boldsymbol{\sigma}) = (\sigma_x - \mu_x, \sigma_y - \mu_y, \sigma_x + \mu_x, \sigma_y + \mu_y)$.
 
-Around cell $u$, we gather $8$ spatial neighbors $\delta_k = (\Delta x_k, \Delta y_k) \in \{-1, 0, +1\}^2 \setminus \{(0,0)\}$ ($k=1,\dots,8$) and the co-located parent cell $u_p = (\lfloor y/2 \rfloor, \lfloor x/2 \rfloor)$ from level $s+1$ ($k=9$, stride ratio $\rho = r_{s+1}/r_s = 2$). Rather than executing a sparse depthwise $3\times 3$ convolution ($405$ multiply-adds per cell on $320\times 320$ $P_2$), we pad by $1$ cell and extract a sliding-window view through index-based window extraction, without an additional convolution. Aligning neighbor $k$ into cell $u$'s local coordinate frame yields:
+We collect these candidates through spatial neighborhood extraction, without adding a learned convolution to the detection head.
 \begin{align}
   \tilde{\boldsymbol{\mu}}_k(u) &= \boldsymbol{\mu}_0(u + \delta_k) + \delta_k, \quad \tilde{\boldsymbol{\sigma}}_k(u) = \boldsymbol{\sigma}_0(u + \delta_k), \label{eq:spatial_transport}\\
   \tilde{\boldsymbol{\mu}}_9(u) &= \rho\,\boldsymbol{\mu}_0^{(s+1)}(u_p) + \boldsymbol{\Delta}_p(u), \; \tilde{\boldsymbol{\sigma}}_9(u) = \rho\,\boldsymbol{\sigma}_0^{(s+1)}(u_p), \label{eq:parent_transport}
@@ -242,7 +242,7 @@ Table~\ref{tab:diagnostics} and Figure~\ref{fig:diagnostics} expose both gains a
   \label{fig:diagnostics_ext}
 \end{figure*}
 
-Figure~\ref{fig:diagnostics_ext}a investigates why \textit{reasonable} ($>32$ px) jumps by $+8.33$ pp tiled and $+4.32$ pp full despite $P_4/P_5$ remaining unmodified one-to-one heads and $g(s_{\mathrm{gt}})$ decaying below $0.02$ above $35$ px. Partitioning \textit{reasonable} into $32\text{--}48$ ($1{,}293$ GT), $48\text{--}64$ ($557$ GT), and $>64$ px ($474$ GT) reveals that gains are actually largest on $>48$ px targets ($+9.84$ pp on $48\text{--}64$ and $+10.68$ pp on $>64$ px tiled; $+7.47$ pp on $>64$ px full, where + NWD also gains $+6.00$ pp). Because GauCon leaves $P_4/P_5$ unmodified at inference, this gain cannot stem from local $P_2/P_3$ barycenters directly; rather, shared backbone/neck representation changes under DW-TAL/one-to-many distillation and cross-level score calibration during top-$K$/tiled NMS shift large-object precision indirectly—an effect requiring component ablations to isolate.
+Because GauCon leaves $P_4/P_5$ unmodified at inference, the gain cannot be attributed directly to local barycentric refinement at those levels. It may be associated with changes to shared backbone and neck representations during joint training, but this remains a hypothesis until component ablations isolate the contributing mechanisms.
 
 \begin{table}[t]
 \centering
@@ -261,7 +261,7 @@ Base  & 2,401,660 & 31.948 / 27.683 & \textbf{166.8M} & 69.5 & 39.96 \\
 \end{tabular*}
 \end{table}
 
-Figure~\ref{fig:iou_curve} and Table~\ref{tab:hardware} summarize validation IoU curves and complexity. GauCon adds $714$ fused parameters ($+0.030\%$) and $+0.086$ pre-fuse GFLOPs at $1280$ ($+0.022$ at $640$; $\sim 43$M MACs from the $1\times 1$ MLPs), i.e., $\sim +0.31\%$ relative to the $27.683$ GFLOPs fused baseline ($^\dagger$the default Ultralytics FLOP profiler omits the decoupled $1\times 1$ gate MLP after head fusion, printing $27.683$ for both). Peak VRAM increases by $19.5$ MB. Single-session L4 timing records $13.52$ ms ($73.95$ FPS) for GauCon versus $14.39$ ms ($69.51$ FPS) for Base; because GauCon adds layers onto Base, Base appearing $0.86$ ms slower reflects single-run GPU clock variance rather than an actual speedup, so repeated multi-run mean$\pm$std profiling remains needed. By epoch $80$, learned scalars converge to $\tau_{\mathrm{box}}=(1.52, 1.60)$, $\tau_{\mathrm{cls}}=(1.49, 1.37)$, and conservative $\beta_{\mathrm{box}}=(0.041, 0.046)$ ($\approx 4\%$ barycentric interpolation step). Figure~\ref{fig:qualitative} shows a qualitative example at $\text{conf}\ge 0.25$.
+Single-session timing records $13.52$ ms ($73.95$ FPS) for GauCon versus $14.39$ ms ($69.51$ FPS) for Base. This apparent $0.86$ ms latency advantage is not reliable evidence of a speedup because timing was collected in one session; repeated independent profiling runs are needed.
 
 \begin{figure*}[t]
   \centering
