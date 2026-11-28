@@ -381,7 +381,7 @@ Mỗi mô hình tốt nhất trên tập kiểm định được đánh giá ở
 1. Suy luận theo lát cắt độ phân giải gốc (Tiled 640×512): Chia ảnh gốc thành các lát cắt $640 \times 512$ chồng lấn $100 \times 100$ pixel, suy luận FP16 theo batch trên GPU rồi hợp nhất bằng NMS theo lớp ($\mathrm{IoU} = 0{,}50$, giữ tối đa 2.000 hộp trước NMS và 1.000 hộp sau NMS) kèm lọc hộp cắt ngang biên lát cắt ($\mathrm{IOS} \ge 0{,}85$).
 2. Suy luận toàn khung một lượt (Full-Frame 1280×1280): Đưa ảnh qua phép *letterbox* về $1280 \times 1280$ và suy luận một lượt qua mô hình đã hợp nhất không dùng NMS (tối đa 200 dự đoán/ảnh).
 
-Bên cạnh hai giao thức trên, đồ án thực hiện thêm hai kiểm định hậu nghiệm trực tiếp trên tập dự đoán đã lưu: (a) áp dụng Gaussian Soft-NMS [31] ($\sigma = 0{,}5$) trực tiếp lên đầu ra toàn khung của Base làm mốc đối chứng hậu xử lý ngoài đồ thị; và (b) chạy 1.000 lần paired image-level bootstrap (seed = 42) trên 786 ảnh kiểm tra để ước lượng khoảng tin cậy 95% (95% CI) cho sai biệt $\Delta AP_{50}^{all}$ và $\Delta AP_{75}^{all}$.
+Bên cạnh hai giao thức trên, đồ án thực hiện thêm hai kiểm định hậu nghiệm trực tiếp trên tập dự đoán đã lưu: (a) áp dụng Gaussian Soft-NMS [31] ($\sigma = 0{,}5$) trực tiếp lên đầu ra toàn khung của Base làm mốc đối chứng hậu xử lý ngoài đồ thị; và (b) chạy 1.000 lần paired image-level bootstrap (seed = 42) trên 786 ảnh kiểm tra để ước lượng khoảng tin cậy 95% (95% CI) cho sai biệt $\Delta AP_{50}^{all}$ và $\Delta AP_{75}^{all}$. Giá trị $P(\Delta > 0)$ được tính bằng tỷ lệ mẫu bootstrap có sai biệt dương, không phải p-value của một kiểm định giả thuyết.
 
 ### 3.2. Kết quả định lượng ở chế độ lát cắt độ phân giải gốc ($640 \times 512$)
 
