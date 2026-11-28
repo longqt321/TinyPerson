@@ -41,7 +41,7 @@ Trong các chiến dịch tìm kiếm cứu nạn trên biển và giám sát b�
 
 ![](docs/report/figures/r_gt_distribution.png)
 
-**Hình 1.1: Phân bố kích thước *ground truth* theo cạnh trung bình hình học trong tập kiểm tra TinyPerson [1]**
+Hình 1.1: Phân bố kích thước *ground truth* theo cạnh trung bình hình học trong tập kiểm tra TinyPerson [1]
 
 Hình 1.1 thống kê phân bố cạnh trung bình hình học $s = \sqrt{w \cdot h}$ của 13.687 hộp Ground Truth người trên 786 khung hình kiểm tra của bộ dữ liệu TinyPerson [1]. Có tới 64,9% số đối tượng thật (8.878 cá thể) nhỏ hơn hoặc bằng 20 pixel (*tiny*), trong đó 17,0% (2.333 cá thể) thuộc nhóm cực nhỏ 2–8 pixel (*tiny1*) và 20,3% (2.778 cá thể) nằm trong dải 8–12 pixel (*tiny2*). Ngoài kích thước nhỏ, các cảnh ven bờ thường chứa từng nhóm người tập trung sát nhau với khoảng cách giữa hai tâm hộp gần nhất dưới 10 pixel (2.583 cá thể trong tập kiểm tra).
 
@@ -97,7 +97,7 @@ SAHI [38] và quy trình đánh giá gốc của TinyPerson [1] chia ảnh lớn
 
 Bảng 1.1 đối chiếu các nhóm giải pháp hiện có theo năm tiêu chí kỹ thuật cốt lõi của bài toán UAV hàng hải, và Bảng 1.2 tổng hợp các mốc kết quả công bố trước đây trên TinyPerson để đối sánh quy mô mô hình.
 
-**Bảng 1.1: Đối chiếu đặc trưng kỹ thuật giữa các hướng tiếp cận hiện có và giải pháp đề xuất**
+Bảng 1.1: Đối chiếu đặc trưng kỹ thuật giữa các hướng tiếp cận hiện có và giải pháp đề xuất
 
 | Hướng tiếp cận / Mô hình | Quy mô tham số | Suy luận không cần NMS | Đồng thuận hộp cục bộ trong Head | Gần bất biến theo tỉ lệ, không cần hằng số $C$ | Hiệu chuẩn mục tiêu mềm theo IoU thực |
 |---|---|---|---|---|---|
@@ -108,7 +108,7 @@ Bảng 1.1 đối chiếu các nhóm giải pháp hiện có theo năm tiêu ch�
 | YOLO26n-P2 ghép trực tiếp NWD [13, 14] | 2,40 M | Có | Không | Không (cố định $C$) | Không (khuếch đại mục tiêu mềm) |
 | YOLO26n-P2 + GauCon & DW-TAL (Đề xuất) | 2,40 M (+714) | Có | Có (Trọng tâm $W_2$ + FG-Gate) | Có (Chuẩn hóa theo phương sai cục bộ) | Có (Tách rời chọn mẫu & hiệu chuẩn mục tiêu mềm) |
 
-**Bảng 1.2: Tổng hợp kết quả tham khảo đã công bố trên tập kiểm tra TinyPerson chia theo nhóm giao thức**
+Bảng 1.2: Tổng hợp kết quả tham khảo đã công bố trên tập kiểm tra TinyPerson chia theo nhóm giao thức
 
 | Mô hình | Khởi tạo trọng số | Tham số | Hậu xử lý NMS | $AP_{50}^{tiny}$ (%) | $AP_{50}^{tiny1}$ (%) |
 |---|---|---|---|---|---|
@@ -154,7 +154,7 @@ Chương 2 trình bày cơ sở lý thuyết 2-Wasserstein, kiến trúc tổng 
 
 Trong mô hình *anchor-free*, bản đồ đặc trưng mức $s$ có bước nhảy lưới (stride) $r_s \in \{4, 8, 16, 32\}$ chia ảnh đầu vào $H \times W$ thành lưới $(H/r_s) \times (W/r_s)$. Một người có cạnh trung bình $s_{\mathrm{in}}$ pixel tại đầu vào phủ trung bình $(s_{\mathrm{in}}/r_s) \times (s_{\mathrm{in}}/r_s)$ ô trên mức $s$. Bảng 2.1 thống kê độ phủ ô lưới trên từng tầng ở chế độ lát cắt 1:1 và khi co toàn khung hình về $1280 \times 1280$.
 
-**Bảng 2.1: Độ phủ ô lưới của đối tượng theo stride $r_s$ ở chế độ lát cắt gốc và chế độ thu nhỏ toàn khung $1280 \times 1280$**
+Bảng 2.1: Độ phủ ô lưới của đối tượng theo stride $r_s$ ở chế độ lát cắt gốc và chế độ thu nhỏ toàn khung $1280 \times 1280$
 
 | Tầng đặc trưng | Stride $r_s$ | Kích thước lưới (@1280) | Số kênh đầu vào Head | Số ô phủ bởi vật 8 px (Lát cắt 1:1) | Số ô phủ bởi vật 8 px gốc (Toàn khung co ~3×, còn ~2,7 px) | Vai trò trong kiến trúc đề xuất |
 |---|---|---|---|---|---|---|
@@ -187,7 +187,7 @@ Trong đó: $\boldsymbol{\mu}^\star$ và $\boldsymbol{\sigma}^\star$ là tâm v�
 
 ![](docs/report/figures/fig_gaucon_pipeline_vi.png)
 
-**Hình 2.1: Kiến trúc tổng thể mạng phát hiện YOLO26n-P2 tích hợp GauCon chọn lọc trên $P_2, P_3$ và các nhánh chỉ phục vụ huấn luyện**
+Hình 2.1: Kiến trúc tổng thể mạng phát hiện YOLO26n-P2 tích hợp GauCon chọn lọc trên $P_2, P_3$ và các nhánh chỉ phục vụ huấn luyện
 
 Hình 2.1 trình bày cấu trúc đầy đủ của hệ thống theo bốn khối nối tiếp từ trái sang phải: mạng Backbone CSPDarknet trích xuất đặc trưng đa tỉ lệ $C_2\text{–}C_5$, khối Neck FPN–PANet kết hợp đặc trưng hai chiều từ trên xuống (*Top-Down*) và từ dưới lên (*Bottom-Up*) để tạo bốn bản đồ đặc trưng $\{P_2, P_3, P_4, P_5\}$ với số kênh $\{32, 64, 128, 256\}$, đầu phát hiện suy luận không NMS $\mathcal{H}_{1:1}$, và các nhánh phụ chỉ dùng khi huấn luyện (khung nét đứt màu tím phía dưới).
 
@@ -199,7 +199,7 @@ Về khởi tạo trọng số (Base, + NWD, + GauCon cùng nạp từ trọng s
 
 ![](docs/report/figures/fig_gaucon_head_vi.png)
 
-**Hình 2.2: Vi cấu trúc xử lý bên trong đầu phát hiện GauCon tại một ô lưới hoạt động $u = (y, x)$**
+Hình 2.2: Vi cấu trúc xử lý bên trong đầu phát hiện GauCon tại một ô lưới hoạt động $u = (y, x)$
 
 Hình 2.2 minh họa các bước xử lý của GauCon tại mỗi tầng $s \in \{P_2, P_3\}$: quy đổi tọa độ các ô lân cận, tính khoảng cách chuẩn hóa theo phương sai cục bộ $D_k$, tinh chỉnh hộp bằng trọng tâm Wasserstein và hiệu chỉnh logit bằng cổng quan hệ FG-Gate.
 
@@ -222,7 +222,7 @@ Trong đó: $\boldsymbol{\Delta}_p(u) = \rho(u_p + 0{,}5) - (u + 0{,}5) \in \{-0
 
 ![](docs/report/figures/fig_gaucon_geometry.png)
 
-**Hình 2.3: Minh họa hình học cơ chế hoạt động của GauCon và DW-TAL: *(a)* Quy đổi tọa độ lân cận $3\times 3$ và ô cha $P_3$ trên lưới $P_2$ phân tách người đứng sát nhau ($D_k \gg 1 \implies w_k \approx 0$); *(b)* Trọng tâm Wasserstein giữ nguyên bề rộng hộp $\sigma^\star$ so với phép trộn mật độ gây giãn hộp; *(c)* Tác dụng giới hạn mục tiêu mềm của DW-TAL theo $\mathrm{IoU}$ thực tại ô lệch tâm trên vật 4 px ($\mathrm{IoU} \approx 0$)**
+Hình 2.3: Minh họa hình học cơ chế hoạt động của GauCon và DW-TAL: *(a)* Quy đổi tọa độ lân cận $3\times 3$ và ô cha $P_3$ trên lưới $P_2$ phân tách người đứng sát nhau ($D_k \gg 1 \implies w_k \approx 0$); *(b)* Trọng tâm Wasserstein giữ nguyên bề rộng hộp $\sigma^\star$ so với phép trộn mật độ gây giãn hộp; *(c)* Tác dụng giới hạn mục tiêu mềm của DW-TAL theo $\mathrm{IoU}$ thực tại ô lệch tâm trên vật 4 px ($\mathrm{IoU} \approx 0$)
 
 #### 2.3.2. Khoảng cách Wasserstein chuẩn hóa theo phương sai cục bộ
 
@@ -263,7 +263,7 @@ Trong đó: $\mathbf{s}_{\mathrm{ref}}(u) \in \mathbb{R}^C$ là logit sau điề
 
 ![](docs/report/figures/fig_dwtal_flow_vi.png)
 
-**Hình 2.5: Sơ đồ luồng hai nhánh tách rời của DW-TAL: nhánh trên chọn mẫu dương bằng kết hợp $\mathrm{CIoU}$–$S_W$ qua cổng kích thước logistic; nhánh dưới giới hạn ngưỡng trên mục tiêu mềm phân loại theo $\mathrm{IoU}$ thực tế để giảm báo nhầm nền**
+Hình 2.5: Sơ đồ luồng hai nhánh tách rời của DW-TAL: nhánh trên chọn mẫu dương bằng kết hợp $\mathrm{CIoU}$–$S_W$ qua cổng kích thước logistic; nhánh dưới giới hạn ngưỡng trên mục tiêu mềm phân loại theo $\mathrm{IoU}$ thực tế để giảm báo nhầm nền
 
 #### 2.4.1. Cổng điều biến kích thước logistic bảo vệ đối tượng vừa và lớn
 
@@ -310,7 +310,7 @@ Trong đó: $D_{\mathrm{dist}}^{(s)}(u) = D(\mathcal{G}_0^{(s)}(u), \mathcal{G}_
 
 Bảng 2.2 theo dõi kích thước các tensor trung gian qua GauCon ở độ phân giải đầu vào $1280 \times 1280$ ($C = 1$), và Bảng 2.3 thống kê chi tiết từng tham số học được tăng thêm so với YOLO26n-P2 nền.
 
-**Bảng 2.2: Luồng biến đổi tensor qua Head GauCon với đầu vào $1280 \times 1280$ ($C = 1$)**
+Bảng 2.2: Luồng biến đổi tensor qua Head GauCon với đầu vào $1280 \times 1280$ ($C = 1$)
 
 | Giai đoạn xử lý | Ký hiệu Tensor | Kích thước trên $P_2$ ($r_2 = 4$) | Kích thước trên $P_3$ ($r_3 = 8$) | Vai trò trong đồ thị |
 |---|---|---|---|---|
@@ -323,7 +323,7 @@ Bảng 2.2 theo dõi kích thước các tensor trung gian qua GauCon ở độ 
 | Tầng ẩn cổng phân loại | $\mathbf{h}_u$ | $B \times 16 \times 320 \times 320$ | $B \times 16 \times 160 \times 160$ | $\mathrm{SiLU}(\mathrm{PWConv}_{20\to 16}(\mathbf{r}_u))$ |
 | Đầu ra tinh chỉnh | $\mathbf{D}_{\mathrm{ref}}^{(s)},\, \mathbf{S}_{\mathrm{ref}}^{(s)}$ | $B \times 4 \times 320^2$, $B \times 1 \times 320^2$ | $B \times 4 \times 160^2$, $B \times 1 \times 160^2$ | Trọng tâm (2.12) & cổng tiền cảnh (2.16) |
 
-**Bảng 2.3: Thống kê tham số học được tăng thêm của GauCon trên $P_2$ và $P_3$ ($C = 1, d_{\mathrm{rel}} = 16$)**
+Bảng 2.3: Thống kê tham số học được tăng thêm của GauCon trên $P_2$ và $P_3$ ($C = 1, d_{\mathrm{rel}} = 16$)
 
 | Thành phần trong GauCon | Biểu thức tính số tham số | Số tham số trên 1 mức | Tổng trên $\{P_2, P_3\}$ |
 |---|---|---|---|
@@ -342,7 +342,7 @@ Con số 714 tham số đếm từ Bảng 2.3 khớp chính xác với hiệu s�
 
 Để tách ảnh hưởng của mô-đun và cơ chế gán nhãn khỏi các biến nhiễu khác (như kích thước batch, khởi tạo trọng số hay bộ tối ưu), tất cả mô hình trong thực nghiệm đối chứng chính chạy trên cùng hạ tầng PyTorch có tăng tốc CUDA (FP16) trên GPU NVIDIA L4 24 GB dưới cấu hình thống nhất tại Bảng 2.4.
 
-**Bảng 2.4: Cấu hình huấn luyện dùng chung cho các mô hình đối chứng (80 epoch, khởi tạo từ trọng số COCO)**
+Bảng 2.4: Cấu hình huấn luyện dùng chung cho các mô hình đối chứng (80 epoch, khởi tạo từ trọng số COCO)
 
 | Nhóm cấu hình | Giá trị thiết lập | Căn cứ kỹ thuật |
 |---|---|---|
@@ -363,7 +363,7 @@ Con số 714 tham số đếm từ Bảng 2.3 khớp chính xác với hiệu s�
 
 TinyPerson [1] gồm 1.610 khung hình trích cách mỗi 50 khung từ 31 video ven biển, chia sẵn thành 794 ảnh huấn luyện và 816 ảnh kiểm tra. Theo quy ước lọc ảnh quá dày đặc của tác giả [1] (bỏ khung hình trên 220 nhãn hoặc mang cờ đánh dấu ảnh mật độ cực dày đặc), dữ liệu thực nghiệm gồm 746 khung hình huấn luyện và 786 khung hình kiểm tra chính thức. Do các khung hình trong cùng một video có bối cảnh sóng và góc máy gần nhau, chia ngẫu nhiên theo ảnh sẽ gây rò rỉ cảnh quay sang tập kiểm định. Do đó, tập huấn luyện được tách theo tiền tố chuỗi video thành 662 ảnh huấn luyện (*train*) và 84 ảnh kiểm định (*val*).
 
-**Bảng 3.1: Phân bố số lượng hộp Ground Truth và phân tầng kích thước trên tập kiểm tra TinyPerson (786 ảnh)**
+Bảng 3.1: Phân bố số lượng hộp Ground Truth và phân tầng kích thước trên tập kiểm tra TinyPerson (786 ảnh)
 
 | Thang kích thước (*Scale Bin*) | Định nghĩa theo $s = \sqrt{w \cdot h}$ (pixel ảnh gốc) | Số hộp Ground Truth (GT) | Tỷ trọng trong tập kiểm tra (%) |
 |---|---|---|---|
@@ -387,7 +387,7 @@ Bên cạnh hai giao thức trên, đồ án thực hiện thêm hai kiểm đ�
 
 Bảng 3.2 và Hình 3.1(a) tổng hợp kết quả đo trên 786 ảnh kiểm tra theo giao thức lát cắt 1:1 cho YOLO26n-P2 Base, YOLO26n-P2 + NWD ($C = 12{,}8$ px) và YOLO26n-P2 + GauCon.
 
-**Bảng 3.2: Kết quả đối chứng trên tập kiểm tra TinyPerson ở chế độ lát cắt gốc $640 \times 512$ (80 epoch, pretrained COCO, batch 16, seed 42)**
+Bảng 3.2: Kết quả đối chứng trên tập kiểm tra TinyPerson ở chế độ lát cắt gốc $640 \times 512$ (80 epoch, pretrained COCO, batch 16, seed 42)
 
 | Thang đo / Chỉ số | Số GT | YOLO26n-P2 Base | YOLO26n-P2 + NWD | YOLO26n-P2 + GauCon | $\Delta$ (GauCon − Base) | $\Delta$ (GauCon − NWD) |
 |---|---|---|---|---|---|---|
@@ -407,7 +407,7 @@ Bảng 3.2 và Hình 3.1(a) tổng hợp kết quả đo trên 786 ảnh kiểm 
 
 ![](docs/report/figures/fig_gaucon_scales.png)
 
-**Hình 3.1: Độ chính xác $AP_{50}$ theo bảy thang kích thước trên tập kiểm tra TinyPerson: *(a)* Chế độ lát cắt độ phân giải gốc $640 \times 512$; *(b)* Chế độ suy luận toàn khung $1280 \times 1280$**
+Hình 3.1: Độ chính xác $AP_{50}$ theo bảy thang kích thước trên tập kiểm tra TinyPerson: *(a)* Chế độ lát cắt độ phân giải gốc $640 \times 512$; *(b)* Chế độ suy luận toàn khung $1280 \times 1280$
 
 Số liệu Bảng 3.2 cho thấy sự phân hóa rõ ràng giữa độ phủ ở nhóm siêu nhỏ và độ chính xác định vị chặt:
 1. So với YOLO26n-P2 Base: GauCon nâng $AP_{50}^{all}$ từ 45,58% lên 48,53% (+2,95 điểm phần trăm, 95% Bootstrap CI [+1,92; +4,02], $P(\Delta > 0) = 100\%$), hạ $MR_{50}^{all}$ đi 1,64 điểm và cải thiện ở các thang đo, ngoại trừ các trường hợp được nêu riêng (tuy nhiên mức tăng tập trung mạnh nhất ở *reasonable* +8,33 điểm, được phân rã tại Mục 3.4; còn *tiny1* chỉ tăng +0,43 điểm). Tại ngưỡng chặt $AP_{75}^{all}$, GauCon tăng từ 6,40% lên 7,37% (+0,97 điểm, 95% CI [+0,51; +1,62]), đưa COCO $AP_{50:95}$ từ 15,55% lên 16,96%.
@@ -417,7 +417,7 @@ Số liệu Bảng 3.2 cho thấy sự phân hóa rõ ràng giữa độ phủ �
 
 Khi đưa thẳng cả khung hình qua *letterbox* $1280 \times 1280$ và bỏ hoàn toàn lát cắt lẫn bước hậu xử lý NMS, Bảng 3.3 và Hình 3.1(b) phản ánh chất lượng thực chất của nhánh $\mathcal{H}_{1:1}$.
 
-**Bảng 3.3: Kết quả đối chứng trên tập kiểm tra TinyPerson ở chế độ suy luận toàn khung $1280 \times 1280$ không dùng NMS (%)**
+Bảng 3.3: Kết quả đối chứng trên tập kiểm tra TinyPerson ở chế độ suy luận toàn khung $1280 \times 1280$ không dùng NMS (%)
 
 | Thang đo / Chỉ số | YOLO26n-P2 Base | YOLO26n-P2 + NWD | YOLO26n-P2 + GauCon | $\Delta$ (GauCon − Base) | $\Delta$ (GauCon − NWD) |
 |---|---|---|---|---|---|
@@ -442,13 +442,13 @@ Tuy vậy, ở mục tiêu cốt lõi *tiny1* (2–8 px) chế độ toàn khung
 
 ![](docs/report/figures/fig_gaucon_pareto.png)
 
-**Hình 3.2: Biểu đồ tương quan tham số (thang log) và độ chính xác $AP_{50}$ tham chiếu từ tài liệu: đặt các cấu hình 80 epoch 1 lớp của đồ án cạnh các công bố cũ (2 lớp với hai giai đoạn [1, 26] và 300 epoch từ đầu với nano NMS [5]); do khác giao thức đánh giá, bộ lọc và khởi tạo, các mốc từ tài liệu chỉ mang tính tham chiếu quy mô kiến trúc**
+Hình 3.2: Biểu đồ tương quan tham số (thang log) và độ chính xác $AP_{50}$ tham chiếu từ tài liệu: đặt các cấu hình 80 epoch 1 lớp của đồ án cạnh các công bố cũ (2 lớp với hai giai đoạn [1, 26] và 300 epoch từ đầu với nano NMS [5]); do khác giao thức đánh giá, bộ lọc và khởi tạo, các mốc từ tài liệu chỉ mang tính tham chiếu quy mô kiến trúc
 
 ### 3.4. Phân tích lỗi TIDE, dải con *reasonable* và khoảng tin cậy Bootstrap
 
 Bảng 3.4 và Hình 3.3 phân rã số lượng từng loại lỗi TIDE [37] (lấy ngưỡng điểm $\ge 0{,}05$) và độ phủ theo khoảng cách tâm người gần nhất $d_{\mathrm{NN}}$ từ kết quả đánh giá định lượng.
 
-**Bảng 3.4: Phân rã lỗi TIDE (ngưỡng điểm $\ge 0{,}05$) và độ phủ Recall@0.50 theo mật độ đám đông trên tập kiểm tra TinyPerson**
+Bảng 3.4: Phân rã lỗi TIDE (ngưỡng điểm $\ge 0{,}05$) và độ phủ Recall@0.50 theo mật độ đám đông trên tập kiểm tra TinyPerson
 
 | Chế độ & Mô hình | Khớp đúng $\mathrm{TP} \uparrow$ | Lỗi định vị $E_{\mathrm{loc}} \downarrow$ | Hộp trùng $E_{\mathrm{dupe}} \downarrow$ | Báo nhầm nền $E_{\mathrm{bkg}} \downarrow$ | Bỏ sót $E_{\mathrm{miss}} \downarrow$ | Recall cụm dày đặc < 10 px $\uparrow$ | Recall cụm gần $10\text{–}20$ px $\uparrow$ | Recall tách rời $\ge 20$ px $\uparrow$ |
 |---|---|---|---|---|---|---|---|---|
@@ -461,7 +461,7 @@ Bảng 3.4 và Hình 3.3 phân rã số lượng từng loại lỗi TIDE [37] (
 
 ![](docs/report/figures/fig_gaucon_diagnostics.png)
 
-**Hình 3.3: Phân tích chẩn đoán lỗi chế độ toàn khung $1280 \times 1280$: *(a)* Số lượng từng loại lỗi theo phân rã TIDE; *(b)* Độ phủ Recall@0.50 phân tầng theo khoảng cách láng giềng gần nhất $d_{\mathrm{NN}}$**
+Hình 3.3: Phân tích chẩn đoán lỗi chế độ toàn khung $1280 \times 1280$: *(a)* Số lượng từng loại lỗi theo phân rã TIDE; *(b)* Độ phủ Recall@0.50 phân tầng theo khoảng cách láng giềng gần nhất $d_{\mathrm{NN}}$
 
 Bảng 3.4 và Hình 3.3 phản ánh đồng thời các mặt mạnh lẫn đánh đổi của phương pháp:
 1. Giảm lỗi định vị ($E_{\mathrm{loc}}$) và lỗi trùng lặp ($E_{\mathrm{dupe}}$): Ở chế độ toàn khung, GauCon và NWD khôi phục cùng số khớp đúng (8.003 so với 8.004 TP, +132 so với Base), nhưng NWD giữ nguyên lỗi lệch biên (9.137 ở Full; tăng lên 10.444 ở Tiled so với 9.656 của Base), còn GauCon hạ $E_{\mathrm{loc}}$ xuống 8.408 (−731 hộp ở Full) và 9.188 (−1.256 hộp so với NWD ở Tiled). GauCon cũng đạt số hộp trùng $E_{\mathrm{dupe}}$ thấp nhất ở cả hai chế độ (799 hộp ở Full, giảm 22,2% từ 1.027 của Base). Tuy nhiên, do chưa có thí nghiệm tách bỏ từng thành phần (*ablation*), mức cải thiện này là hiệu ứng tổng hợp của toàn hệ thống chứ chưa tách riêng đóng góp của trọng tâm Wasserstein hay FG-Gate.
@@ -470,23 +470,23 @@ Bảng 3.4 và Hình 3.3 phản ánh đồng thời các mặt mạnh lẫn đá
 
 ![](docs/report/figures/fig_gaucon_diagnostics_ext.png)
 
-**Hình 3.4: Chẩn đoán bổ sung trên tập dự đoán kiểm tra (không huấn luyện thêm): *(a)* Phân rã *reasonable* (>32 px) thành 3 dải con (32–48, 48–64, >64 px) ở Tiled và đối chứng Base + Soft-NMS ($\sigma = 0{,}5$) ở Full-1280; *(b)* Khoảng tin cậy 95% Paired Image-level Bootstrap ($N = 1.000$) kèm xác suất $P(\Delta > 0)$ trên 786 ảnh**
+Hình 3.4: Chẩn đoán bổ sung trên tập dự đoán kiểm tra (không huấn luyện thêm): *(a)* Phân rã *reasonable* (>32 px) thành 3 dải con (32–48, 48–64, >64 px) ở Tiled và đối chứng Base + Soft-NMS ($\sigma = 0{,}5$) ở Full-1280; *(b)* Khoảng tin cậy 95% Paired Image-level Bootstrap ($N = 1.000$) kèm xác suất $P(\Delta > 0)$ trên 786 ảnh
 
 ### 3.5. Động học hội tụ, đường cong ngưỡng IoU và quỹ đạo tham số nội tại
 
 ![](docs/report/figures/fig_gaucon_convergence.png)
 
-**Hình 3.5: Quỹ đạo độ chính xác $mAP_{50}$ trên tập kiểm định xuyên suốt 80 epoch huấn luyện của ba mô hình đối chứng**
+Hình 3.5: Quỹ đạo độ chính xác $mAP_{50}$ trên tập kiểm định xuyên suốt 80 epoch huấn luyện của ba mô hình đối chứng
 
 ![](docs/report/figures/fig_gaucon_iou_curve.png)
 
-**Hình 3.6: Đường cong độ chính xác AP trên tập kiểm định theo ngưỡng đánh giá $\mathrm{IoU}$ từ $0{,}50$ đến $0{,}85$ tại mô hình tốt nhất**
+Hình 3.6: Đường cong độ chính xác AP trên tập kiểm định theo ngưỡng đánh giá $\mathrm{IoU}$ từ $0{,}50$ đến $0{,}85$ tại mô hình tốt nhất
 
 Hình 3.5 và Hình 3.6 cho thấy GauCon tách khỏi đường cơ sở Base và NWD từ khoảng epoch 50 trở đi, đạt đỉnh 42,24% tại epoch 70 và duy trì vị trí dẫn đầu đều từ $\mathrm{IoU} = 0{,}50$ tới $0{,}75$ trên tập kiểm định (*val*), trong khi đường của NWD nằm dưới Base bắt đầu từ ngưỡng $\mathrm{IoU} \ge 0{,}55$.
 
 ![](docs/report/figures/fig_gaucon_param_dynamics.png)
 
-**Hình 3.7: Quỹ đạo thực tế các tham số học được trong đầu phát hiện GauCon qua 80 epoch: *(a)* Bước trọng tâm $\beta_{\mathrm{box}}$ trên $P_2, P_3$ và hàm mất mát chưng cất $\mathcal{L}_{\mathrm{distill}}$; *(b)* Nhiệt độ phân bố $\tau_{\mathrm{box}}$ và $\tau_{\mathrm{cls}}$**
+Hình 3.7: Quỹ đạo thực tế các tham số học được trong đầu phát hiện GauCon qua 80 epoch: *(a)* Bước trọng tâm $\beta_{\mathrm{box}}$ trên $P_2, P_3$ và hàm mất mát chưng cất $\mathcal{L}_{\mathrm{distill}}$; *(b)* Nhiệt độ phân bố $\tau_{\mathrm{box}}$ và $\tau_{\mathrm{cls}}$
 
 Hình 3.7 ghi nhận động học thực tế của các tham số khả học nội tại trong suốt 80 epoch huấn luyện:
 - Tham số bước nội suy $\beta_{\mathrm{box}}$ hội tụ giảm từ khởi tạo 0,060 về $\beta_{\mathrm{box}}^{(P_2)} = 0{,}0405$ và $\beta_{\mathrm{box}}^{(P_3)} = 0{,}0456$, nghĩa là thành phần hộp chỉ dịch chuyển khoảng 4% về phía trọng tâm lân cận. Mức bước nhỏ này cho thấy mô hình giữ hiệu chỉnh biên rất bảo thủ; khi chưa có thí nghiệm tắt riêng $\beta_{\mathrm{box}} = 0$, không thể quy toàn bộ mức giảm $E_{\mathrm{loc}}$ hay cải thiện $AP_{75}$ riêng cho phép dịch tâm mà phải đánh giá trong tổng thể cùng DW-TAL và chưng cất $\mathcal{H}_{1:M}$.
@@ -496,7 +496,7 @@ Hình 3.7 ghi nhận động học thực tế của các tham số khả học 
 
 ![](docs/report/figures/fig_gaucon_qualitative_gallery.png)
 
-**Hình 3.8: Minh họa đối chiếu định tính trên ba bối cảnh tập kiểm tra TinyPerson (ngưỡng độ tin cậy cố định $\mathrm{conf} \ge 0{,}25$ cho mọi mô hình): *Hàng 1*: cụm 5 người ven bờ ánh chiều (lát cắt $640 \times 512$); *Hàng 2*: bãi biển đông người có đá nền phức tạp (lát cắt $640 \times 512$); *Hàng 3*: toàn khung $1280 \times 1280$ nhiều mục tiêu phân tán trên sóng biển**
+Hình 3.8: Minh họa đối chiếu định tính trên ba bối cảnh tập kiểm tra TinyPerson (ngưỡng độ tin cậy cố định $\mathrm{conf} \ge 0{,}25$ cho mọi mô hình): *Hàng 1*: cụm 5 người ven bờ ánh chiều (lát cắt $640 \times 512$); *Hàng 2*: bãi biển đông người có đá nền phức tạp (lát cắt $640 \times 512$); *Hàng 3*: toàn khung $1280 \times 1280$ nhiều mục tiêu phân tán trên sóng biển
 
 Hình 3.8 kết xuất trực tiếp kết quả dự đoán trên tập kiểm tra của ba mô hình tại cùng ngưỡng độ tin cậy $0{,}25$:
 - Hàng 1 (Cảnh ven sóng tương phản thấp, lát cắt): Trong khung cảnh ánh sáng yếu ven mép sóng với 5 hộp GT, Base chỉ bắt được 2/5 người (điểm 0,52 và 0,29), NWD không có hộp nào vượt ngưỡng 0,25 (0/5), còn GauCon phát hiện đủ cả 5/5 người với độ tin cậy $0{,}30\text{–}0{,}55$ và không tạo hộp trùng.
@@ -507,7 +507,7 @@ Hình 3.8 kết xuất trực tiếp kết quả dự đoán trên tập kiểm 
 
 Bảng 3.5 ghi nhận phép đo suy luận mô hình trên GPU NVIDIA L4 24 GB ở FP16, batch size 1, sau 15 lượt làm nóng và lấy trung bình 100 lượt chạy đồng bộ CUDA. Đây là phép đo trong một phiên, chưa phải kết quả profiling đa phiên.
 
-**Bảng 3.5: Độ phức tạp tính toán, bộ nhớ GPU và tốc độ suy luận một phiên trên NVIDIA L4 (FP16, batch size 1)**
+Bảng 3.5: Độ phức tạp tính toán, bộ nhớ GPU và tốc độ suy luận một phiên trên NVIDIA L4 (FP16, batch size 1)
 
 | Mô hình | Tham số trước hợp nhất | Tham số sau hợp nhất | GFLOPs trước / sau hợp nhất (@1280) | VRAM đỉnh (MB) | Độ trễ @1280 (ms) | Tốc độ (FPS) | Full $AP_{50}$ (%) | Tiled $AP_{50}$ (%) |
 |---|---|---|---|---|---|---|---|---|
@@ -523,7 +523,7 @@ Kết quả Bảng 3.5 mô tả chi phí tính toán và phép đo suy luận tr
 
 Bảng 3.6 tổng hợp các giới hạn của thực nghiệm và hướng kiểm chứng tiếp theo.
 
-**Bảng 3.6: Tổng hợp các hạn chế thực nghiệm và hướng khắc phục trong nghiên cứu tiếp theo**
+Bảng 3.6: Tổng hợp các hạn chế thực nghiệm và hướng khắc phục trong nghiên cứu tiếp theo
 
 | Hạng mục hạn chế | Tác động đến việc diễn giải kết quả | Hướng khắc phục cụ thể |
 |---|---|---|
@@ -633,7 +633,7 @@ Hướng phát triển tiếp theo tập trung vào ba trọng tâm khắc phụ
 
 Bảng 3.7 tóm tắt đặc tả từng tầng trong mô hình bốn mức $P_2\text{–}P_5$ ở kích thước đầu vào $1280 \times 1280$ (hệ số mở rộng độ sâu $0{,}50$ và độ rộng $0{,}25$), bao gồm cấu trúc nhánh suy luận $\mathcal{H}_{1:1}$ tích hợp GauCon chọn lọc và nhánh phụ trợ $\mathcal{H}_{1:M}$ chỉ dùng khi huấn luyện.
 
-**Bảng 3.7: Đặc tả các tầng kiến trúc mạng YOLO26n-P2 tích hợp GauCon ở độ phân giải đầu vào $1280 \times 1280$**
+Bảng 3.7: Đặc tả các tầng kiến trúc mạng YOLO26n-P2 tích hợp GauCon ở độ phân giải đầu vào $1280 \times 1280$
 
 | Khối chức năng | Tầng | Phép toán chính | Kích thước bản đồ đặc trưng | Bước lưới | Vai trò trong kiến trúc |
 |---|---|---|---|---|---|
@@ -651,7 +651,7 @@ Bảng 3.7 tóm tắt đặc tả từng tầng trong mô hình bốn mức $P_2
 
 ### Phụ lục B. Bảng đối chiếu đầy đủ ba ngưỡng IoU ($AP_{25}, AP_{50}, AP_{75}$) trên tập kiểm tra
 
-**Bảng 3.8: Chi tiết $AP_{25}, AP_{50}, AP_{75}$ theo từng thang đo ở chế độ lát cắt $640 \times 512$ (%)**
+Bảng 3.8: Chi tiết $AP_{25}, AP_{50}, AP_{75}$ theo từng thang đo ở chế độ lát cắt $640 \times 512$ (%)
 
 | Thang đo | Base $AP_{25}$ | NWD $AP_{25}$ | GauCon $AP_{25}$ | Base $AP_{50}$ | NWD $AP_{50}$ | GauCon $AP_{50}$ | Base $AP_{75}$ | NWD $AP_{75}$ | GauCon $AP_{75}$ |
 |---|---|---|---|---|---|---|---|---|---|
@@ -663,7 +663,7 @@ Bảng 3.7 tóm tắt đặc tả từng tầng trong mô hình bốn mức $P_2
 | *small* | 78,95 | 80,61 | 79,98 | 54,55 | 56,83 | 56,07 | 9,87 | 10,53 | 11,79 |
 | *reasonable* | 77,26 | 80,12 | 81,80 | 49,78 | 53,51 | 58,11 | 10,51 | 11,02 | 13,55 |
 
-**Bảng 3.9: Chi tiết $AP_{25}, AP_{50}, AP_{75}$ theo từng thang đo ở chế độ suy luận toàn khung $1280 \times 1280$ (%)**
+Bảng 3.9: Chi tiết $AP_{25}, AP_{50}, AP_{75}$ theo từng thang đo ở chế độ suy luận toàn khung $1280 \times 1280$ (%)
 
 | Thang đo | Base $AP_{25}$ | NWD $AP_{25}$ | GauCon $AP_{25}$ | Base $AP_{50}$ | NWD $AP_{50}$ | GauCon $AP_{50}$ | Base $AP_{75}$ | NWD $AP_{75}$ | GauCon $AP_{75}$ |
 |---|---|---|---|---|---|---|---|---|---|
