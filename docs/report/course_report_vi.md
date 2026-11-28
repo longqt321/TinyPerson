@@ -511,10 +511,10 @@ Bảng 3.5: Độ phức tạp tính toán, bộ nhớ GPU và tốc độ suy l
 |---|---|---|---|---|---|---|---|---|
 | YOLO26n-P2 Base | 2.515.976 | 2.401.660 | 31,948 / 27,683 | 166,75 | 14,39 | 69,51 | 43,08 | 45,58 |
 | YOLO26n-P2 + NWD | 2.515.976 | 2.401.660 | 31,948 / 27,683 | 166,75 | 13,45 | 74,36 | 43,24 | 48,45 |
-| YOLO26n-P2 + GauCon | 2.516.690 | 2.402.374 | 32,034 / 27,683 | 186,23 | 13,52 | 73,95 | 44,13 | 48,53 |
+| YOLO26n-P2 + GauCon | 2.516.690 | 2.402.374 | 32,034 / 27,769* | 186,23 | 13,52 | 73,95 | 44,13 | 48,53 |
 
 Kết quả Bảng 3.5 mô tả chi phí tính toán và phép đo suy luận trong một phiên:
-- Trước hợp nhất, bộ đo ghi nhận 32,034 GFLOPs cho GauCon và 31,948 GFLOPs cho Base. Sau hợp nhất, bộ đo báo 27,683 GFLOPs cho cả hai; công cụ hiện dùng không tính phần chi phí của MLP $1\times1$ tùy biến trong đầu GauCon. Ước lượng riêng từ số phép nhân-cộng của MLP cho thấy phần này cần khoảng 43 triệu MAC, tương đương 0,086 GFLOPs ở đầu vào $1280\times1280$ và 0,022 GFLOPs ở $640\times640$. Phần MLP vẫn nằm trong đường suy luận.
+- Trước hợp nhất, bộ đo ghi nhận 32,034 GFLOPs cho GauCon và 31,948 GFLOPs cho Base. Sau hợp nhất, bộ đo báo 27,683 GFLOPs cho cả ba mô hình nhưng không tính phần MLP $1\times1$ tùy biến của GauCon. Ước lượng từ số phép nhân-cộng cho thấy MLP này cần khoảng 43 triệu MAC, tương đương 0,086 GFLOPs ở đầu vào $1280\times1280$ và 0,022 GFLOPs ở $640\times640$. Vì MLP vẫn hoạt động khi suy luận, chi phí sau hợp nhất của GauCon được hiệu chỉnh thành khoảng 27,769 GFLOPs; dấu * trong Bảng 3.5 biểu thị giá trị đã cộng phần chi phí này.
 - Về tốc độ một phiên trên L4, GauCon đạt 73,95 FPS (13,52 ms/khung hình) và tiêu tốn thêm +19,48 MB VRAM cho bộ đệm trung gian 20 kênh tại $P_2$. Việc Base đo được 14,39 ms (69,51 FPS) chậm hơn GauCon 0,86 ms dù ít tầng hơn cho thấy phép đo 1 phiên (100 lượt) chịu nhiễu biến động xung nhịp/trạng thái GPU; kết luận tốc độ cần được kiểm định lại bằng nhiều phiên đo độc lập kèm độ lệch chuẩn (*mean ± std*).
 
 ### 3.8. Hạn chế và các yếu tố ảnh hưởng đến độ tin cậy của kết quả
@@ -525,7 +525,7 @@ Bảng 3.6: Tổng hợp các hạn chế thực nghiệm và hướng khắc ph
 
 | Hạng mục hạn chế | Tác động đến việc diễn giải kết quả | Hướng khắc phục cụ thể |
 |---|---|---|
-| Chưa có thí nghiệm tách bỏ từng cơ chế (*ablation*) | Chưa tách được đóng góp riêng của trọng tâm $W_2$ ($\beta_{\mathrm{box}} \approx 0{,}04$), FG-Gate, DW-TAL và chưng cất; cũng chưa cô lập nguồn gốc mức tăng +8,33 điểm ở nhóm *reasonable* (>48 px) | Chạy tối thiểu 3 cấu hình đối chứng tắt từng thành phần ($\beta_{\mathrm{box}} = 0$, tắt DW-TAL, tắt FG-Gate) dưới cùng điều kiện 80 epoch COCO |
+| Chưa có thí nghiệm tách bỏ từng cơ chế (*ablation*) | Chưa tách được đóng góp riêng của trọng tâm $W_2$ ($\beta_{\mathrm{box}} \approx 0{,}04$), FG-Gate, DW-TAL và chưng cất; cũng chưa cô lập nguồn gốc mức tăng +8,33 điểm ở nhóm *reasonable* (>32 px) | Chạy tối thiểu 3 cấu hình đối chứng tắt từng thành phần ($\beta_{\mathrm{box}} = 0$, tắt DW-TAL, tắt FG-Gate) dưới cùng điều kiện 80 epoch COCO |
 | Mỗi cấu hình chỉ có một lần huấn luyện (seed = 42) | Bootstrap theo ảnh ước lượng độ bất định trên tập kiểm tra, không phản ánh biến thiên giữa các lần huấn luyện. Việc lấy mẫu từng ảnh cũng chưa mô hình hóa tương quan giữa các khung hình thuộc cùng video. Chênh lệch Full $AP_{50}$ so với NWD (+0,89 điểm, 95% CI [−0,12; +1,90]) chứa 0. | Lặp lại huấn luyện với nhiều seed; nếu có mã chuỗi video, bổ sung bootstrap phân cụm theo video. |
 | Đánh đổi tại *tiny1*, cụm sát < 10 px và $E_{\mathrm{bkg}}$ Tiled | GauCon thua NWD ở *tiny1* (25,53% vs 27,91% Tiled; 18,34% vs 18,46% Full) lẫn Recall cụm < 10 px (38,06% vs 38,71% Full), đồng thời $E_{\mathrm{bkg}}$ Tiled tăng +28,7% so với Base | Điều chỉnh tham số $\eta, \tau_{\mathrm{px}}$ trên tập kiểm định và kết hợp theo dõi chuỗi thời gian cho ảnh *tiny1* |
 | Thiếu đối chứng RFLA/BPD-YOLO cùng giao thức & nhiễu đo FPS | Chưa tái huấn luyện RFLA [16], BPD-YOLO [5] hay YOLOv8n-P2 ở cùng chế độ 80 epoch COCO; phép đo L4 1 phiên còn nhiễu làm Base chậm hơn GauCon | Bổ sung đối chứng cùng giao thức và đo lại độ trễ đa phiên (*mean ± std*) trên L4 lẫn Jetson Orin Nano |
