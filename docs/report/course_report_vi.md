@@ -78,7 +78,7 @@ $$\mathrm{NWD}(\mathcal{G}_1, \mathcal{G}_2) = \exp\!\left(-\frac{\sqrt{W_2^2(\m
 Trong đó: $\boldsymbol{\mu} = (c_x, c_y)^\top$ là tọa độ tâm hộp (tính theo pixel), $\boldsymbol{\Sigma} = \mathrm{diag}(w^2/4,\, h^2/4)$ là ma trận hiệp phương sai đường chéo, và $C > 0$ là hằng số quy mô cố định tính bằng pixel (giá trị thường chọn $C = 12{,}8$ theo kích thước trung bình bộ dữ liệu [13]).
 
 Đưa trực tiếp phương trình (1.1) vào một bộ phát hiện đa tỉ lệ không dùng NMS gây ra hai bất cập:
-- Không gần bất biến theo tỉ lệ vì hằng số $C$ cố định: Xét hai cặp hộp có cùng sai lệch tâm bằng 25% chiều rộng hộp ($\Delta c_x = \Delta c_y = 0{,}20 s$ với $w = h = s$), khoảng cách gốc là $\sqrt{W_2^2} = s\sqrt{0{,}125}$. Ở vật 4 pixel, $\mathrm{NWD} = 0{,}895$; nhưng ở người lớn 64 pixel gần camera, cùng mức lệch tương đối 25% cho $\mathrm{NWD} = 0{,}171$. Sự trôi tỉ lệ này làm lệch trọng số ghép cặp giữa các tầng $P_2\text{–}P_5$.
+- Không gần bất biến theo tỉ lệ vì hằng số $C$ cố định: Xét hai cặp hộp có cùng sai lệch tâm 25% chiều rộng theo mỗi trục ($\Delta c_x = \Delta c_y = 0{,}25 s$ với $w = h = s$), khoảng cách gốc là $\sqrt{W_2^2} = s\sqrt{0{,}125}$. Ở vật 4 pixel, $\mathrm{NWD} = 0{,}895$; nhưng ở người lớn 64 pixel gần camera, cùng mức lệch tương đối 25% cho $\mathrm{NWD} = 0{,}171$. Sự trôi tỉ lệ này làm lệch trọng số ghép cặp giữa các tầng $P_2\text{–}P_5$.
 - Chỉ tác động lên hàm mất mát khi huấn luyện: GWD [15] và NWD [13, 14] chỉ dùng khoảng cách Wasserstein cho từng cặp dự đoán–GT lúc huấn luyện, không áp dụng định lý trọng tâm Wasserstein (*Wasserstein barycenter*) [18] để hợp nhất phân phối lân cận trong quá trình suy luận.
 
 #### 1.2.5. Gán nhãn căn chỉnh tác vụ và xung đột hiệu chuẩn mục tiêu mềm
@@ -104,25 +104,25 @@ Bảng 1.1 đối chiếu các nhóm giải pháp hiện có theo năm tiêu ch�
 | Hai giai đoạn + Scale Match / SSPNet [1, 4] | 32–60+ M | Không | Không (RoI 2 tầng) | Không | Không |
 | YOLO cỡ nano có $P_2$ + NMS (BPD-YOLO [5]) | 1,5–2,9 M | Không | Không (NMS ngoài) | Không | Có (TAL gốc) |
 | Hậu xử lý gộp hộp (Soft-NMS [31], WBF [34]) | +0 | Không (chạy sau mạng) | Có (ngoài đồ thị) | Không | Không can thiệp |
-| Bộ phát hiện đầu-cuối YOLO26n-P2 gốc [9] | 2,40 M | **Có** | Không (đơn ô cô lập) | Không | Có (thiếu mẫu dương <6 px) |
-| YOLO26n-P2 ghép trực tiếp NWD [13, 14] | 2,40 M | **Có** | Không | Không (cố định $C$) | Không (khuếch đại mục tiêu mềm) |
-| **YOLO26n-P2 + GauCon & DW-TAL (Đề xuất)** | **2,40 M (+714)** | **Có** | **Có (Trọng tâm $W_2$ + FG-Gate)** | **Có (Chuẩn hóa theo phương sai cục bộ)** | **Có (Tách rời chọn mẫu & hiệu chuẩn mục tiêu mềm)** |
+| Bộ phát hiện đầu-cuối YOLO26n-P2 gốc [9] | 2,40 M | Có | Không (đơn ô cô lập) | Không | Có (thiếu mẫu dương <6 px) |
+| YOLO26n-P2 ghép trực tiếp NWD [13, 14] | 2,40 M | Có | Không | Không (cố định $C$) | Không (khuếch đại mục tiêu mềm) |
+| YOLO26n-P2 + GauCon & DW-TAL (Đề xuất) | 2,40 M (+714) | Có | Có (Trọng tâm $W_2$ + FG-Gate) | Có (Chuẩn hóa theo phương sai cục bộ) | Có (Tách rời chọn mẫu & hiệu chuẩn mục tiêu mềm) |
 
 **Bảng 1.2: Tổng hợp kết quả tham khảo đã công bố trên tập kiểm tra TinyPerson chia theo nhóm giao thức**
 
 | Mô hình | Khởi tạo trọng số | Tham số | Hậu xử lý NMS | $AP_{50}^{tiny}$ (%) | $AP_{50}^{tiny1}$ (%) |
 |---|---|---|---|---|---|
-| **(a) Chuẩn gốc WACV 2020 [1] (2 lớp, Tiled Slicing)** | | | | | |
+| (a) Chuẩn gốc WACV 2020 [1] (2 lớp, Tiled Slicing) | | | | | |
 | FCOS [25] | ImageNet | ~32,0 M | Có | 16,90 | 3,39 |
 | RetinaNet [23] | ImageNet | ~34,0 M | Có | 30,82 | 11,47 |
 | Faster R-CNN [21] | ImageNet | ~41,0 M | Có | 43,55 | 29,21 |
-| **(b) Họ hai giai đoạn cải tiến [1, 2, 4] (2 lớp, Tiled Slicing)** | | | | | |
+| (b) Họ hai giai đoạn cải tiến [1, 2, 4] (2 lớp, Tiled Slicing) | | | | | |
 | Faster R-CNN-FPN [21, 22] | ImageNet | ~41,0 M | Có | 47,35 | 30,25 |
 | Faster R-CNN-FPN + MSM [1] | ImageNet | ~41,0 M | Có | 50,89 | 33,79 |
 | Faster R-CNN-FPN + SM+ [2] | ImageNet | ~41,0 M | Có | 52,61 | 34,20 |
 | Cascade R-CNN [26] | ImageNet | >60,0 M | Có | 57,19 | 45,21 |
 | Faster R-CNN + SSPNet [4] | ImageNet | >41,0 M | Có | 59,13 | 47,56 |
-| **(c) Nhóm một giai đoạn cỡ nano [5] (1 lớp *person*, 1024 px, 300 epoch)** | | | | | |
+| (c) Nhóm một giai đoạn cỡ nano [5] (1 lớp *person*, 1024 px, 300 epoch) | | | | | |
 | YOLOv8n+P2 [5] | Từ đầu (*Scratch*) | 2,93 M | Có | 38,00* | – |
 | BPD-YOLO [5] | Từ đầu (*Scratch*) | 1,50 M | Có | 39,10* | – |
 
@@ -136,9 +136,9 @@ Từ các công trình được khảo sát, đồ án tập trung đánh giá h
 1. Thiết lập mô hình cơ sở (*baseline*) và quy trình đánh giá: Tách 746 ảnh huấn luyện theo tiền tố chuỗi video thành 662 ảnh *train* và 84 ảnh *val*; sử dụng tập kiểm tra chính thức gồm 786 ảnh để đánh giá cuối cùng. Hai giao thức đánh giá gồm lát cắt $640 \times 512$ và toàn khung $1280 \times 1280$.
 2. Thiết kế đầu phát hiện GauCon chi phí cực thấp: Bổ sung cơ chế đồng thuận hộp trọng tâm Wasserstein và cổng điều biến FG-Gate không dùng chuẩn hóa theo batch chọn lọc trên $P_2, P_3$, giới hạn mức tăng tham số dưới 0,05% (< 1.000 tham số) và giữ chi phí tham số và tính toán bổ sung ở mức thấp.
 3. Thiết kế cơ chế gán nhãn tách rời DW-TAL và chưng cất phân phối hộp: Kết hợp cổng kích thước logistic ($\tau_{\mathrm{px}} = 20$ px) vào khâu chọn mẫu dương, tái hiệu chuẩn mục tiêu mềm phân loại theo $\mathrm{IoU}$ thực để hạn chế báo nhầm nền, và chưng cất phân phối Gauss từ nhánh $\mathcal{H}_{1:M}$ không tốn chi phí khi suy luận.
-4. Kiểm định thực nghiệm đa chiều: So sánh trực tiếp YOLO26n-P2 Base, biến thể ghép NWD [13, 14], hậu xử lý đối chứng Base + Soft-NMS và mô hình đề xuất dưới cùng điều kiện huấn luyện (80 epoch pretrained COCO, batch size 16, random seed 42 trên GPU NVIDIA L4), phân rã chi tiết qua TIDE [37], $d_{\mathrm{NN}}$, các dải con *reasonable*, 1.000 lần Paired Image Bootstrap, đường cong IoU và chi phí phần cứng.
+4. Kiểm định thực nghiệm đa chiều: So sánh trực tiếp YOLO26n-P2 Base, biến thể ghép NWD [13, 14], hậu xử lý đối chứng Base + Soft-NMS và mô hình đề xuất dưới cùng điều kiện huấn luyện (80 epoch, khởi tạo từ trọng số COCO, batch size 16, seed 42 trên GPU NVIDIA L4), phân rã chi tiết qua TIDE [37], $d_{\mathrm{NN}}$, các dải con *reasonable*, 1.000 lần Paired Image Bootstrap, đường cong IoU và chi phí phần cứng.
 
-Phạm vi nghiên cứu tập trung vào bài toán phát hiện người trên ảnh hàng hải theo thiết lập một lớp *person* trên TinyPerson với một lần huấn luyện với seed = 42; các hạn chế về đơn seed và kiểm chứng đa lớp được phân tích tại Mục 3.8.
+Phạm vi nghiên cứu tập trung vào bài toán phát hiện người trên ảnh hàng hải theo thiết lập một lớp *person* trên TinyPerson với một lần huấn luyện (seed = 42); các hạn chế về đơn seed và kiểm chứng đa lớp được phân tích tại Mục 3.8.
 
 ### 1.5. Bố cục báo cáo
 
@@ -158,10 +158,10 @@ Trong mô hình *anchor-free*, bản đồ đặc trưng mức $s$ có bước n
 
 | Tầng đặc trưng | Stride $r_s$ | Kích thước lưới (@1280) | Số kênh đầu vào Head | Số ô phủ bởi vật 8 px (Lát cắt 1:1) | Số ô phủ bởi vật 8 px gốc (Toàn khung co ~3×, còn ~2,7 px) | Vai trò trong kiến trúc đề xuất |
 |---|---|---|---|---|---|---|
-| $P_2$ | 4 | $320 \times 320$ | 32 | $2{,}00$ ô | $0{,}67$ ô | Tầng chủ lực cho *tiny1*–*tiny2*; **kích hoạt GauCon** |
-| $P_3$ | 8 | $160 \times 160$ | 64 | $1{,}00$ ô | $0{,}33$ ô | Tầng chủ lực cho *tiny2*–*small*; **kích hoạt GauCon** |
-| $P_4$ | 16 | $80 \times 80$ | 128 | $0{,}50$ ô | $0{,}17$ ô | Phục vụ vật >28 px + làm ô cha cho $P_3$; **giữ nguyên $\mathcal{H}_{1:1}$ gốc** |
-| $P_5$ | 32 | $40 \times 40$ | 256 | $0{,}25$ ô | $0{,}08$ ô | Phục vụ vật lớn và ngữ cảnh rộng; **giữ nguyên $\mathcal{H}_{1:1}$ gốc** |
+| $P_2$ | 4 | $320 \times 320$ | 32 | $2{,}00$ ô | $0{,}67$ ô | Tầng chủ lực cho *tiny1*–*tiny2*; kích hoạt GauCon |
+| $P_3$ | 8 | $160 \times 160$ | 64 | $1{,}00$ ô | $0{,}33$ ô | Tầng chủ lực cho *tiny2*–*small*; kích hoạt GauCon |
+| $P_4$ | 16 | $80 \times 80$ | 128 | $0{,}50$ ô | $0{,}17$ ô | Phục vụ vật >28 px + làm ô cha cho $P_3$; giữ nguyên $\mathcal{H}_{1:1}$ gốc |
+| $P_5$ | 32 | $40 \times 40$ | 256 | $0{,}25$ ô | $0{,}08$ ô | Phục vụ vật lớn và ngữ cảnh rộng; giữ nguyên $\mathcal{H}_{1:1}$ gốc |
 
 Bảng 2.1 giải thích hai quyết định thiết kế nền tảng:
 1. Ở chế độ lát cắt 1:1, một người rộng 6–16 pixel phủ 1,5–4 ô trên lưới $P_2$ và 1–2 ô trên lưới $P_3$. Các ô trong cửa sổ $3 \times 3$ quanh tâm vật cùng tiếp nhận phần thân đối tượng và đưa ra các hộp dự đoán độc lập có sai số biên ngẫu nhiên. Hợp nhất có trọng số các ước lượng lân cận này ngay trong đầu mạng giúp giảm phương sai biên hộp so với hồi quy đơn ô cô lập.
@@ -201,11 +201,11 @@ Về khởi tạo trọng số (Base, + NWD, + GauCon cùng nạp từ trọng s
 
 **Hình 2.2: Vi cấu trúc xử lý bên trong đầu phát hiện GauCon tại một ô lưới hoạt động $u = (y, x)$**
 
-Hình 2.2 phóng lớn luồng tính toán nội bộ của GauCon ở mỗi tầng hoạt động $s \in \{P_2, P_3\}$, gồm khối quy đổi hệ tọa độ lân cận phép lấy mẫu theo chỉ số, phép đo khoảng cách chuẩn hóa theo phương sai cục bộ $D_k$, nhánh tinh chỉnh hộp bằng trọng tâm Wasserstein cục bộ và nhánh hiệu chỉnh logit qua cổng tiền cảnh FG-Gate không dùng chuẩn hóa theo batch.
+Hình 2.2 minh họa các bước xử lý của GauCon tại mỗi tầng $s \in \{P_2, P_3\}$: quy đổi tọa độ các ô lân cận, tính khoảng cách chuẩn hóa theo phương sai cục bộ $D_k$, tinh chỉnh hộp bằng trọng tâm Wasserstein và hiệu chỉnh logit bằng cổng quan hệ FG-Gate.
 
 ### 2.3. Chi tiết toán học các thành phần của đầu phát hiện GauCon
 
-#### 2.3.1. Ánh xạ Gauss 2D và quy đổi hệ tọa độ lân cận (không cần thêm phép tích chập)
+#### 2.3.1. Biểu diễn hộp bằng phân phối Gauss và quy đổi hệ tọa độ lân cận
 
 Xét ô lưới $u = (y, x)$ ở mức đặc trưng $s \in \{P_2, P_3\}$ có tâm neo tại $(x + 0{,}5,\, y + 0{,}5)$ trong hệ đơn vị bước lưới $r_s$. Gọi $\mathbf{d}_0(u) = (l, t, r, b) \in \mathbb{R}_{\ge 0}^4$ là bốn khoảng cách tới biên do toán tử $\Phi_{\mathrm{box}}^{(s)}$ dự đoán trực tiếp mỗi cạnh (nếu áp dụng lên kiến trúc có biểu diễn phân phối rời rạc DFL trên $R > 1$ khoảng chia cạnh, $\mathbf{d}_0$ được lấy ngay sau phép chiếu kỳ vọng softmax). Hộp dự đoán tại ô $u$ được ánh xạ thành phân phối Gauss 2D có hiệp phương sai đường chéo $\mathcal{G}_0(u) = \mathcal{N}(\boldsymbol{\mu}_0(u), \mathrm{diag}(\boldsymbol{\sigma}_0(u)^2))$ lấy tâm ô $u$ làm gốc:
 $$\boldsymbol{\mu}_0(u) = \frac{1}{2}\begin{bmatrix} r - l \\ b - t \end{bmatrix}, \qquad \boldsymbol{\sigma}_0(u) = \max\!\left(\frac{1}{2}\begin{bmatrix} l + r \\ t + b \end{bmatrix},\, \epsilon_\sigma\right)$$ (2.5)
@@ -213,7 +213,7 @@ Trong đó: $\boldsymbol{\mu}_0(u) = (\mu_{0x}, \mu_{0y})^\top$ là độ lệch
 $$\mathbf{d}_{\mathrm{ref}} = \big(\sigma_{\mathrm{ref},x} - \mu_{\mathrm{ref},x},\; \sigma_{\mathrm{ref},y} - \mu_{\mathrm{ref},y},\; \sigma_{\mathrm{ref},x} + \mu_{\mathrm{ref},x},\; \sigma_{\mathrm{ref},y} + \mu_{\mathrm{ref},y}\big)$$ (2.6)
 Trong đó: $\mathbf{d}_{\mathrm{ref}}$ là bộ khoảng cách biên tại ô $u$ sau khi cập nhật bởi trọng tâm Wasserstein.
 
-Quanh ô $u$, GauCon thu thập 9 ứng viên lân cận: 8 ô xung quanh trong cửa sổ $3 \times 3$ tương ứng với $\delta_k = (\Delta x_k, \Delta y_k) \in \{-1, 0, +1\}^2,\; \delta_k \neq (0, 0)$ ($k = 1, \dots, 8$) và 1 ô cha đồng vị trí $u_p = (\lfloor y/2 \rfloor, \lfloor x/2 \rfloor)$ nội suy láng giềng gần nhất từ mức $s + 1$ ($k = 9$, tỉ số bước lưới $\rho = r_{s+1}/r_s = 2$: $P_2$ lấy cha từ $P_3$, $P_3$ lấy cha từ $P_4$). Thay vì dùng tích chập tách chiều sâu $\mathrm{DWConv}_{3\times 3}$ với hạt nhân cố định toàn số 0 (tốn phép nhân-cộng dư thừa trên lưới $320 \times 320$), mô hình trượt trực tiếp cửa sổ chỉ số lân cận $3 \times 3$ sau khi đệm biên 1 ô bằng phép lấy mẫu theo chỉ số.
+Quanh ô $u$, GauCon thu thập 9 ứng viên lân cận: 8 ô xung quanh trong cửa sổ $3 \times 3$ tương ứng với $\delta_k = (\Delta x_k, \Delta y_k) \in \{-1, 0, +1\}^2,\; \delta_k \neq (0, 0)$ ($k = 1, \dots, 8$) và 1 ô cha đồng vị trí $u_p = (\lfloor y/2 \rfloor, \lfloor x/2 \rfloor)$ nội suy láng giềng gần nhất từ mức $s + 1$ ($k = 9$, tỉ số bước lưới $\rho = r_{s+1}/r_s = 2$: $P_2$ lấy cha từ $P_3$, $P_3$ lấy cha từ $P_4$). GauCon trích xuất tám dự đoán tại các ô lân cận trong cửa sổ $3 \times 3$ và loại các vị trí nằm ngoài biên bản đồ đặc trưng. Cơ chế này bổ sung thông tin hình học lân cận mà không thêm một lớp tích chập học được.
 
 Vì tâm hộp $\boldsymbol{\mu}_0(u + \delta_k)$ của hàng xóm ban đầu quy chiếu về tâm ô $u + \delta_k$, ta phải cộng bù độ dời tâm ô để đưa toàn bộ 9 ứng viên về chung hệ tọa độ cục bộ của ô $u$:
 $$\tilde{\boldsymbol{\mu}}_k(u) = \boldsymbol{\mu}_0(u + \delta_k) + \delta_k, \qquad \tilde{\boldsymbol{\sigma}}_k(u) = \boldsymbol{\sigma}_0(u + \delta_k), \qquad k \in \{1, \dots, 8\}$$ (2.7)
@@ -232,9 +232,9 @@ Trong đó: $D_k(u) \ge 0$ là khoảng cách Wasserstein chuẩn hóa không đ
 
 ![](docs/report/figures/fig_gaucon_theory_curves.png)
 
-**Hình 2.4: Đặc tính của cổng kích thước logistic và phép đo chuẩn hóa theo phương sai: *(a)* Cổng logistic $g(s_{\mathrm{gt}})$ ($\tau_{\mathrm{px}} = 20$ px) so với hàm suy giảm đuôi nặng Cauchy; *(b)* Độ tương đồng $S_W = (1 + D)^{-1}$ gần như giữ nguyên giá trị $0{,}80$ qua các tỉ lệ hộp $s$ khi độ lệch tâm bằng 25% chiều rộng, trong khi NWD ($C = 12{,}8$ px) suy giảm từ 0,895 xuống 0,171**
+Hình 2.4: Đặc tính của cổng kích thước logistic và phép đo chuẩn hóa theo phương sai: *(a)* Cổng logistic $g(s_{\mathrm{gt}})$ ($\tau_{\mathrm{px}} = 20$ px) so với hàm suy giảm đuôi nặng Cauchy; *(b)* Độ tương đồng $S_W = (1 + D)^{-1}$ gần như giữ nguyên giá trị $0{,}80$ qua các tỉ lệ hộp $s$ khi độ lệch tâm bằng 25% chiều rộng theo mỗi trục, trong khi NWD ($C = 12{,}8$ px) suy giảm từ 0,895 xuống 0,171
 
-Hình 2.4(b) minh họa tính ổn định theo tỉ lệ của khoảng cách (2.9). Khi $\epsilon$ đủ nhỏ so với các thành phần phương sai, việc co giãn đồng thời hai hộp làm tử số và phần phương sai ở mẫu số thay đổi theo cùng bình phương hệ số co giãn. Vì vậy, $D_k$ gần như giữ nguyên trong miền kích thước được khảo sát. Ở các thang cực nhỏ, hằng số $\epsilon$ có thể tạo sai khác.
+Hình 2.4(b) minh họa tính ổn định theo tỉ lệ của khoảng cách (2.9). Khi $\epsilon$ nhỏ so với các thành phần phương sai, việc co giãn đồng thời hai hộp làm tử số và mẫu số thay đổi gần như cùng tỷ lệ. Do đó, $D_k$ gần như không đổi trong miền kích thước được khảo sát. Ở các thang cực nhỏ, hằng số $\epsilon$ có thể làm sai khác tính chất này.
 
 #### 2.3.3. Tinh chỉnh hộp bằng Trọng tâm Wasserstein cục bộ
 
@@ -332,9 +332,9 @@ Bảng 2.2 theo dõi kích thước các tensor trung gian qua GauCon ở độ 
 | Tham số nhiệt độ gắn kết phân loại $\hat{\tau}_{\mathrm{cls}}$ | $1 \times 1$ tham số vô hướng | 1 | 2 |
 | Tầng chiếu ẩn $\mathcal{M}_s^{(1)}$ ($\mathrm{PWConv}_{20 \to 16}$, có bias, không BN) | $20 \times 16 + 16$ | 336 | 672 |
 | Tầng chiếu ra $\mathcal{M}_s^{(2)}$ ($\mathrm{PWConv}_{16 \to 1}$, có bias, khởi tạo 0) | $16 \times 1 + 1$ | 17 | 34 |
-| **Tổng tham số tăng thêm của mô-đun GauCon** | $2 \times (3 + 1 + 336 + 17)$ | **357** | **714** |
-| Tổng tham số mạng **trước khi hợp nhất** | Nền: $2.515.976 \to$ GauCon: $2.516.690$ | – | **+714 (+0,028%)** |
-| Tổng tham số suy luận **sau khi hợp nhất** | Nền: $2.401.660 \to$ GauCon: $2.402.374$ | – | **+714 (+0,030%)** |
+| Tổng tham số tăng thêm của mô-đun GauCon | $2 \times (3 + 1 + 336 + 17)$ | 357 | 714 |
+| Tổng tham số mạng trước khi hợp nhất | Nền: $2.515.976 \to$ GauCon: $2.516.690$ | – | +714 (+0,028%) |
+| Tổng tham số suy luận sau khi hợp nhất | Nền: $2.401.660 \to$ GauCon: $2.402.374$ | – | +714 (+0,030%) |
 
 Con số 714 tham số đếm từ Bảng 2.3 khớp chính xác với hiệu số tham số đo được từ mô hình thực tế trước và sau hợp nhất ($2.516.690 - 2.515.976 = 714$ và $2.402.374 - 2.401.660 = 714$). Thay vì gắn thêm các khối tích chập đa nhánh trong Neck (thường tốn hàng chục nghìn tham số trên bản đồ đặc trưng $320 \times 320$), xử lý trực tiếp trên 5 kênh hình học đã giải mã $(\mu_x, \mu_y, \sigma_x, \sigma_y, s_0)$ giữ mức tăng thêm dưới 0,03% tổng số tham số.
 
@@ -350,8 +350,8 @@ Con số 714 tham số đếm từ Bảng 2.3 khớp chính xác với hiệu s�
 | Độ phân giải đầu vào | $1280 \times 1280$ (*letterbox* giữ tỉ lệ) | Bội số 32; đảm bảo lưới $P_2$ đạt $320 \times 320$ |
 | Thời lượng & Batch size | 80 epoch, batch size 16, FP16 AMP | Thống nhất batch size 16 trên GPU NVIDIA L4 24 GB |
 | Bộ tối ưu & Lịch học | AdamW [29], $\text{lr}_0 = 0{,}0015$, $\text{lrf} = 0{,}05$ (cosine), *warmup* 3 epoch | Tinh chỉnh trọng số tiền huấn luyện ổn định mà không phá vỡ các tầng Backbone đầu |
-| Tăng cường dữ liệu | Lật ngang $0{,}5$, dịch $0{,}05$, tỉ lệ $0{,}15$, HSV $(0{,}005; 0{,}10; 0{,}15)$; **tắt Mosaic & MixUp** | Ghép Mosaic thu nhỏ vật thêm 2–4 lần khiến người 2–6 px rơi xuống dưới 1 px |
-| Tham số GauCon & DW-TAL | Kích hoạt $P_2, P_3$, bật FG-Gate; $\tau_{\mathrm{px}} = 20{,}0$, $\beta_{\mathrm{px}} = 3{,}5$, $\beta_{\mathrm{box}}$ khởi tạo 0,06, $\lambda_{\mathrm{tal}} = 0{,}45$, $\lambda_{\mathrm{reg}} = 0{,}20$, $\lambda_{\mathrm{dist}} = 0{,}25$ | Khoanh vùng tác động vào dải $\le 20$ px trên $P_2, P_3$ |
+| Tăng cường dữ liệu | Lật ngang $0{,}5$, dịch $0{,}05$, tỉ lệ $0{,}15$, HSV $(0{,}005; 0{,}10; 0{,}15)$; tắt Mosaic & MixUp | Ghép Mosaic thu nhỏ vật thêm 2–4 lần khiến người 2–6 px rơi xuống dưới 1 px |
+| Tham số GauCon & DW-TAL | Kích hoạt $P_2, P_3$, bật FG-Gate; TAL có $\beta = 4{,}0$; $\tau_{\mathrm{px}} = 20{,}0$, $\beta_{\mathrm{px}} = 3{,}5$, $\beta_{\mathrm{box}}$ khởi tạo 0,06, $\lambda_{\mathrm{tal}} = 0{,}45$, $\lambda_{\mathrm{reg}} = 0{,}20$, $\lambda_{\mathrm{dist}} = 0{,}25$ | Khoanh vùng tác động vào dải $\le 20$ px trên $P_2, P_3$ |
 | Đối chứng NWD chuẩn | Trọng số gán nhãn $\alpha_{\mathrm{NWD}} = 0{,}50$, mất mát $\lambda_{\mathrm{NWD}} = 0{,}50$, $C = 12{,}8$ px | Cấu hình gốc của bài báo NWD [13, 14] |
 | Chọn mô hình đánh giá | Chọn mô hình tốt nhất theo $mAP_{50}$ trên 84 ảnh kiểm định (*val*), seed = 42 | Tập kiểm tra (*test*) 786 ảnh chỉ chạy đánh giá một lần sau khi kết thúc huấn luyện |
 
@@ -373,7 +373,7 @@ TinyPerson [1] gồm 1.610 khung hình trích cách mỗi 50 khung từ 31 video
 | *tiny* *(gộp 3 dải nhỏ)* | $[2,\, 20]$ | 8.878 | 64,86 |
 | *small* | $(20,\, 32]$ | 2.485 | 18,16 |
 | *reasonable* | $(32,\, \infty)$ | 2.324 | 16,98 |
-| ***all* *(toàn bộ đối tượng)*** | **$[2,\, \infty)$** | **13.687** | **100,00** |
+| *all* *(toàn bộ đối tượng)* | $[2,\, \infty)$ | 13.687 | 100,00 |
 
 Ngoài 13.687 hộp nhãn thật GT (Bảng 3.1), tập kiểm tra còn chứa 1.989 vùng bỏ qua (*ignore*) và 2.832 vùng không chắc chắn (*uncertain*). Bộ chấm điểm tuân theo quy chuẩn WACV 2020 [1]: hộp GT khớp theo $\mathrm{IoU}$, vùng *ignore*/*uncertain* khớp theo chỉ số giao trên diện tích dự đoán $\mathrm{IoD} = \mathrm{Area}(B_{\mathrm{det}} \cap B_{\mathrm{ign}}) / \mathrm{Area}(B_{\mathrm{det}}) > 0{,}50$ để không phạt các hộp rơi vào đám đông chưa gắn nhãn chi tiết. Bên cạnh $AP_{25}, AP_{50}, AP_{75}$ và $MR_{50}$ (trung bình log tỷ lệ bỏ sót tại 9 mốc FPPI trong $[10^{-2}, 10^0]$; $MR_{50}$ càng thấp càng tốt), mọi cấu hình được chấm thêm chỉ số COCO $AP_{50:95}$ (giới hạn tối đa 500 dự đoán mỗi ảnh), phân rã TIDE [37] tại ngưỡng điểm $0{,}05$ và độ phủ theo khoảng cách láng giềng gần nhất $d_{\mathrm{NN}}$.
 
@@ -381,7 +381,7 @@ Mỗi mô hình tốt nhất trên tập kiểm định được đánh giá ở
 1. Suy luận theo lát cắt độ phân giải gốc (Tiled 640×512): Chia ảnh gốc thành các lát cắt $640 \times 512$ chồng lấn $100 \times 100$ pixel, suy luận FP16 theo batch trên GPU rồi hợp nhất bằng NMS theo lớp ($\mathrm{IoU} = 0{,}50$, giữ tối đa 2.000 hộp trước NMS và 1.000 hộp sau NMS) kèm lọc hộp cắt ngang biên lát cắt ($\mathrm{IOS} \ge 0{,}85$).
 2. Suy luận toàn khung một lượt (Full-Frame 1280×1280): Đưa ảnh qua phép *letterbox* về $1280 \times 1280$ và suy luận một lượt qua mô hình đã hợp nhất không dùng NMS (tối đa 200 dự đoán/ảnh).
 
-Bên cạnh hai giao thức trên, đồ án thực hiện thêm hai kiểm định hậu nghiệm trực tiếp trên tập dự đoán đã lưu: (a) áp dụng Gaussian Soft-NMS [31] ($\sigma = 0{,}5$) trực tiếp lên đầu ra toàn khung của Base làm mốc đối chứng hậu xử lý ngoài đồ thị; và (b) chạy 1.000 lần Paired Image-level Bootstrap (random seed = 42) trên 786 ảnh kiểm tra để ước lượng khoảng tin cậy 95% (95% CI) cho sai biệt $\Delta AP_{50}^{all}$ và $\Delta AP_{75}^{all}$.
+Bên cạnh hai giao thức trên, đồ án thực hiện thêm hai kiểm định hậu nghiệm trực tiếp trên tập dự đoán đã lưu: (a) áp dụng Gaussian Soft-NMS [31] ($\sigma = 0{,}5$) trực tiếp lên đầu ra toàn khung của Base làm mốc đối chứng hậu xử lý ngoài đồ thị; và (b) chạy 1.000 lần paired image-level bootstrap (seed = 42) trên 786 ảnh kiểm tra để ước lượng khoảng tin cậy 95% (95% CI) cho sai biệt $\Delta AP_{50}^{all}$ và $\Delta AP_{75}^{all}$.
 
 ### 3.2. Kết quả định lượng ở chế độ lát cắt độ phân giải gốc ($640 \times 512$)
 
@@ -391,17 +391,17 @@ Bảng 3.2 và Hình 3.1(a) tổng hợp kết quả đo trên 786 ảnh kiểm 
 
 | Thang đo / Chỉ số | Số GT | YOLO26n-P2 Base | YOLO26n-P2 + NWD | YOLO26n-P2 + GauCon | $\Delta$ (GauCon − Base) | $\Delta$ (GauCon − NWD) |
 |---|---|---|---|---|---|---|
-| ***all* $AP_{50}$ (%) $\uparrow$** | 13.687 | 45,58 | 48,45 | **48,53** | **+2,95** | **+0,08** |
-| *tiny* $AP_{50}$ (%) $\uparrow$ | 8.878 | 42,59 | **45,31** | 43,99 | +1,40 | −1,32 |
-| *tiny1* (2–8 px) $AP_{50}$ (%) $\uparrow$ | 2.333 | 25,10 | **27,91** | 25,53 | +0,43 | −2,38 |
-| *tiny2* (8–12 px) $AP_{50}$ (%) $\uparrow$ | 2.778 | 45,14 | 46,73 | **46,97** | **+1,83** | **+0,24** |
-| *tiny3* (12–20 px) $AP_{50}$ (%) $\uparrow$ | 3.767 | 50,94 | **54,82** | 52,95 | +2,01 | −1,87 |
-| *small* (20–32 px) $AP_{50}$ (%) $\uparrow$ | 2.485 | 54,55 | **56,83** | 56,07 | +1,52 | −0,76 |
-| *reasonable* (>32 px) $AP_{50}$ (%) $\uparrow$ | 2.324 | 49,78 | 53,51 | **58,11** | **+8,33** | **+4,60** |
-| ***all* $AP_{75}$ (%) $\uparrow$** | 13.687 | 6,40 | 6,09 | **7,37** | **+0,97** | **+1,28** |
-| *all* $AP_{25}$ (%) $\uparrow$ | 13.687 | 70,02 | **71,93** | 71,56 | +1,54 | −0,37 |
-| ***all* $MR_{50}$ (%) $\downarrow$** | 13.687 | 91,95 | 90,74 | **90,31** | **−1,64** | **−0,43** |
-| **COCO $AP_{50:95}$ (@500) (%) $\uparrow$** | 13.687 | 15,55 | 16,51 | **16,96** | **+1,41** | **+0,45** |
+| *all* $AP_{50}$ (%) $\uparrow$ | 13.687 | 45,58 | 48,45 | 48,53 | +2,95 | +0,08 |
+| *tiny* $AP_{50}$ (%) $\uparrow$ | 8.878 | 42,59 | 45,31 | 43,99 | +1,40 | −1,32 |
+| *tiny1* (2–8 px) $AP_{50}$ (%) $\uparrow$ | 2.333 | 25,10 | 27,91 | 25,53 | +0,43 | −2,38 |
+| *tiny2* (8–12 px) $AP_{50}$ (%) $\uparrow$ | 2.778 | 45,14 | 46,73 | 46,97 | +1,83 | +0,24 |
+| *tiny3* (12–20 px) $AP_{50}$ (%) $\uparrow$ | 3.767 | 50,94 | 54,82 | 52,95 | +2,01 | −1,87 |
+| *small* (20–32 px) $AP_{50}$ (%) $\uparrow$ | 2.485 | 54,55 | 56,83 | 56,07 | +1,52 | −0,76 |
+| *reasonable* (>32 px) $AP_{50}$ (%) $\uparrow$ | 2.324 | 49,78 | 53,51 | 58,11 | +8,33 | +4,60 |
+| *all* $AP_{75}$ (%) $\uparrow$ | 13.687 | 6,40 | 6,09 | 7,37 | +0,97 | +1,28 |
+| *all* $AP_{25}$ (%) $\uparrow$ | 13.687 | 70,02 | 71,93 | 71,56 | +1,54 | −0,37 |
+| *all* $MR_{50}$ (%) $\downarrow$ | 13.687 | 91,95 | 90,74 | 90,31 | −1,64 | −0,43 |
+| COCO $AP_{50:95}$ (@500) (%) $\uparrow$ | 13.687 | 15,55 | 16,51 | 16,96 | +1,41 | +0,45 |
 
 *Ghi chú: Giá trị tốt nhất trên từng dòng được in đậm; $\Delta$ tính bằng điểm phần trăm.*
 
@@ -421,18 +421,18 @@ Khi đưa thẳng cả khung hình qua *letterbox* $1280 \times 1280$ và bỏ h
 
 | Thang đo / Chỉ số | YOLO26n-P2 Base | YOLO26n-P2 + NWD | YOLO26n-P2 + GauCon | $\Delta$ (GauCon − Base) | $\Delta$ (GauCon − NWD) |
 |---|---|---|---|---|---|
-| ***all* $AP_{50}$ (%) $\uparrow$** | 43,08 | 43,24 | **44,13** | **+1,05** | **+0,89** |
-| *tiny* $AP_{50}$ (%) $\uparrow$ | **36,28** | 35,74 | 36,06 | −0,22 | +0,32 |
-| *tiny1* (2–8 px) $AP_{50}$ (%) $\uparrow$ | **18,71** | 18,46 | 18,34 | −0,37 | −0,12 |
-| *tiny2* (8–12 px) $AP_{50}$ (%) $\uparrow$ | 37,48 | 36,53 | **37,90** | **+0,42** | **+1,37** |
-| *tiny3* (12–20 px) $AP_{50}$ (%) $\uparrow$ | **46,23** | 45,94 | 45,79 | −0,44 | −0,06 |
-| *small* (20–32 px) $AP_{50}$ (%) $\uparrow$ | 53,07 | 52,90 | **54,32** | **+1,25** | **+1,42** |
-| *reasonable* (>32 px) $AP_{50}$ (%) $\uparrow$ | 58,77 | 62,48 | **63,09** | **+4,32** | **+0,61** |
-| ***all* $AP_{75}$ (%) $\uparrow$** | 4,44 | 4,13 | **4,78** | **+0,34** | **+0,65** |
-| *all* $AP_{25}$ (%) $\uparrow$ | 69,29 | **71,44** | 71,19 | +1,90 | −0,25 |
-| ***all* $MR_{50}$ (%) $\downarrow$** | 91,97 | 92,42 | **91,32** | **−0,65** | **−1,10** |
-| **COCO $AP_{50:95}$ (@500) (%) $\uparrow$** | 13,51 | 13,35 | **14,00** | **+0,49** | **+0,65** |
-| **Validation $mAP_{50}$ đỉnh (%) $\uparrow$** | 39,96 | 39,67 | **42,24** | **+2,28** | **+2,57** |
+| *all* $AP_{50}$ (%) $\uparrow$ | 43,08 | 43,24 | 44,13 | +1,05 | +0,89 |
+| *tiny* $AP_{50}$ (%) $\uparrow$ | 36,28 | 35,74 | 36,06 | −0,22 | +0,32 |
+| *tiny1* (2–8 px) $AP_{50}$ (%) $\uparrow$ | 18,71 | 18,46 | 18,34 | −0,37 | −0,12 |
+| *tiny2* (8–12 px) $AP_{50}$ (%) $\uparrow$ | 37,48 | 36,53 | 37,90 | +0,42 | +1,37 |
+| *tiny3* (12–20 px) $AP_{50}$ (%) $\uparrow$ | 46,23 | 45,94 | 45,79 | −0,44 | −0,06 |
+| *small* (20–32 px) $AP_{50}$ (%) $\uparrow$ | 53,07 | 52,90 | 54,32 | +1,25 | +1,42 |
+| *reasonable* (>32 px) $AP_{50}$ (%) $\uparrow$ | 58,77 | 62,48 | 63,09 | +4,32 | +0,61 |
+| *all* $AP_{75}$ (%) $\uparrow$ | 4,44 | 4,13 | 4,78 | +0,34 | +0,65 |
+| *all* $AP_{25}$ (%) $\uparrow$ | 69,29 | 71,44 | 71,19 | +1,90 | −0,25 |
+| *all* $MR_{50}$ (%) $\downarrow$ | 91,97 | 92,42 | 91,32 | −0,65 | −1,10 |
+| COCO $AP_{50:95}$ (@500) (%) $\uparrow$ | 13,51 | 13,35 | 14,00 | +0,49 | +0,65 |
+| Validation $mAP_{50}$ đỉnh (%) $\uparrow$ | 39,96 | 39,67 | 42,24 | +2,28 | +2,57 |
 
 Khi không còn bước NMS gộp lát cắt che bớt nhiễu nền, sự khác biệt giữa hiệu chuẩn tách rời DW-TAL và ghép cứng NWD thể hiện rõ trên Bảng 3.3:
 - Ở cấu hình NWD, chỉ số $mAP_{50}$ đỉnh trên tập kiểm định giảm từ 39,96% xuống 39,67%, còn trên tập kiểm tra toàn khung làm COCO $AP_{50:95}$ hạ từ 13,51% xuống 13,35%, $AP_{75}^{all}$ rớt xuống 4,13% và tỷ lệ bỏ sót $MR_{50}$ tăng lên 92,42%.
@@ -452,12 +452,12 @@ Bảng 3.4 và Hình 3.3 phân rã số lượng từng loại lỗi TIDE [37] (
 
 | Chế độ & Mô hình | Khớp đúng $\mathrm{TP} \uparrow$ | Lỗi định vị $E_{\mathrm{loc}} \downarrow$ | Hộp trùng $E_{\mathrm{dupe}} \downarrow$ | Báo nhầm nền $E_{\mathrm{bkg}} \downarrow$ | Bỏ sót $E_{\mathrm{miss}} \downarrow$ | Recall cụm dày đặc < 10 px $\uparrow$ | Recall cụm gần $10\text{–}20$ px $\uparrow$ | Recall tách rời $\ge 20$ px $\uparrow$ |
 |---|---|---|---|---|---|---|---|---|
-| **Full-1280:** Base | 7.871 | 9.139 | 1.027 | **7.341** | 5.816 | 35,19% | 54,16% | 66,06% |
-| **Full-1280:** + NWD | **8.004** | 9.137 | 858 | 9.021 | **5.683** | **38,71%** | **55,02%** | 66,24% |
-| **Full-1280:** **+ GauCon** | 8.003 | **8.408** | **799** | 8.683 | 5.684 | 38,06% | 54,80% | **66,53%** |
-| **Tiled 640×512:** Base | 8.702 | 9.656 | 937 | **16.422** | 4.985 | 53,12% | 64,37% | 66,66% |
-| **Tiled 640×512:** + NWD | **9.149** | 10.444 | 922 | 22.658 | **4.538** | **57,92%** | **66,06%** | **70,05%** |
-| **Tiled 640×512:** **+ GauCon** | 8.963 | **9.188** | **895** | 21.130 | 4.724 | 55,13% | 65,04% | 69,02% |
+| Full-1280: Base | 7.871 | 9.139 | 1.027 | 7.341 | 5.816 | 35,19% | 54,16% | 66,06% |
+| Full-1280: + NWD | 8.004 | 9.137 | 858 | 9.021 | 5.683 | 38,71% | 55,02% | 66,24% |
+| Full-1280: + GauCon | 8.003 | 8.408 | 799 | 8.683 | 5.684 | 38,06% | 54,80% | 66,53% |
+| Tiled 640×512: Base | 8.702 | 9.656 | 937 | 16.422 | 4.985 | 53,12% | 64,37% | 66,66% |
+| Tiled 640×512: + NWD | 9.149 | 10.444 | 922 | 22.658 | 4.538 | 57,92% | 66,06% | 70,05% |
+| Tiled 640×512: + GauCon | 8.963 | 9.188 | 895 | 21.130 | 4.724 | 55,13% | 65,04% | 69,02% |
 
 ![](docs/report/figures/fig_gaucon_diagnostics.png)
 
@@ -511,9 +511,9 @@ Bảng 3.5 ghi nhận phép đo suy luận mô hình trên GPU NVIDIA L4 24 GB �
 
 | Mô hình | Tham số trước hợp nhất | Tham số sau hợp nhất | GFLOPs trước / sau hợp nhất (@1280) | VRAM đỉnh (MB) | Độ trễ @1280 (ms) | Tốc độ (FPS) | Full $AP_{50}$ (%) | Tiled $AP_{50}$ (%) |
 |---|---|---|---|---|---|---|---|---|
-| YOLO26n-P2 Base | 2.515.976 | 2.401.660 | 31,948 / 27,683 | **166,75** | 14,39 | 69,51 | 43,08 | 45,58 |
-| YOLO26n-P2 + NWD | 2.515.976 | 2.401.660 | 31,948 / 27,683 | 166,75 | **13,45** | **74,36** | 43,24 | 48,45 |
-| **YOLO26n-P2 + GauCon** | **2.516.690** | **2.402.374** | 32,034 / 27,683 | 186,23 | 13,52 | 73,95 | **44,13** | **48,53** |
+| YOLO26n-P2 Base | 2.515.976 | 2.401.660 | 31,948 / 27,683 | 166,75 | 14,39 | 69,51 | 43,08 | 45,58 |
+| YOLO26n-P2 + NWD | 2.515.976 | 2.401.660 | 31,948 / 27,683 | 166,75 | 13,45 | 74,36 | 43,24 | 48,45 |
+| YOLO26n-P2 + GauCon | 2.516.690 | 2.402.374 | 32,034 / 27,683 | 186,23 | 13,52 | 73,95 | 44,13 | 48,53 |
 
 Kết quả Bảng 3.5 mô tả chi phí tính toán và phép đo suy luận trong một phiên:
 - Trước hợp nhất, bộ đo ghi nhận 32,034 GFLOPs cho GauCon và 31,948 GFLOPs cho Base. Sau hợp nhất, bộ đo báo 27,683 GFLOPs cho cả hai; công cụ hiện dùng không tính phần chi phí của MLP $1\times1$ tùy biến trong đầu GauCon. Ước lượng riêng từ số phép nhân-cộng của MLP cho thấy phần này cần khoảng 43 triệu MAC, tương đương 0,086 GFLOPs ở đầu vào $1280\times1280$ và 0,022 GFLOPs ở $640\times640$. Phần MLP vẫn nằm trong đường suy luận.
@@ -655,22 +655,22 @@ Bảng 3.7 tóm tắt đặc tả từng tầng trong mô hình bốn mức $P_2
 
 | Thang đo | Base $AP_{25}$ | NWD $AP_{25}$ | GauCon $AP_{25}$ | Base $AP_{50}$ | NWD $AP_{50}$ | GauCon $AP_{50}$ | Base $AP_{75}$ | NWD $AP_{75}$ | GauCon $AP_{75}$ |
 |---|---|---|---|---|---|---|---|---|---|
-| *all* | 70,02 | **71,93** | 71,56 | 45,58 | 48,45 | **48,53** | 6,40 | 6,09 | **7,37** |
-| *tiny* | 66,45 | **68,84** | 67,28 | 42,59 | **45,31** | 43,99 | 3,83 | 4,26 | **4,33** |
-| *tiny1* | 45,57 | **50,31** | 46,72 | 25,10 | **27,91** | 25,53 | 1,38 | **1,99** | 1,27 |
-| *tiny2* | 70,05 | **73,18** | 71,62 | 45,14 | 46,73 | **46,97** | 3,13 | 3,42 | **4,45** |
-| *tiny3* | 76,35 | **77,48** | 77,47 | 50,94 | **54,82** | 52,95 | 5,58 | **6,46** | 5,82 |
-| *small* | 78,95 | **80,61** | 79,98 | 54,55 | **56,83** | 56,07 | 9,87 | 10,53 | **11,79** |
-| *reasonable* | 77,26 | 80,12 | **81,80** | 49,78 | 53,51 | **58,11** | 10,51 | 11,02 | **13,55** |
+| *all* | 70,02 | 71,93 | 71,56 | 45,58 | 48,45 | 48,53 | 6,40 | 6,09 | 7,37 |
+| *tiny* | 66,45 | 68,84 | 67,28 | 42,59 | 45,31 | 43,99 | 3,83 | 4,26 | 4,33 |
+| *tiny1* | 45,57 | 50,31 | 46,72 | 25,10 | 27,91 | 25,53 | 1,38 | 1,99 | 1,27 |
+| *tiny2* | 70,05 | 73,18 | 71,62 | 45,14 | 46,73 | 46,97 | 3,13 | 3,42 | 4,45 |
+| *tiny3* | 76,35 | 77,48 | 77,47 | 50,94 | 54,82 | 52,95 | 5,58 | 6,46 | 5,82 |
+| *small* | 78,95 | 80,61 | 79,98 | 54,55 | 56,83 | 56,07 | 9,87 | 10,53 | 11,79 |
+| *reasonable* | 77,26 | 80,12 | 81,80 | 49,78 | 53,51 | 58,11 | 10,51 | 11,02 | 13,55 |
 
 **Bảng 3.9: Chi tiết $AP_{25}, AP_{50}, AP_{75}$ theo từng thang đo ở chế độ suy luận toàn khung $1280 \times 1280$ (%)**
 
 | Thang đo | Base $AP_{25}$ | NWD $AP_{25}$ | GauCon $AP_{25}$ | Base $AP_{50}$ | NWD $AP_{50}$ | GauCon $AP_{50}$ | Base $AP_{75}$ | NWD $AP_{75}$ | GauCon $AP_{75}$ |
 |---|---|---|---|---|---|---|---|---|---|
-| *all* | 69,29 | **71,44** | 71,19 | 43,08 | 43,24 | **44,13** | 4,44 | 4,13 | **4,78** |
-| *tiny* | 63,68 | **65,63** | 65,45 | **36,28** | 35,74 | 36,06 | 2,32 | 2,26 | **2,86** |
-| *tiny1* | 45,19 | **46,79** | 46,41 | **18,71** | 18,46 | 18,34 | **0,53** | 0,48 | 0,45 |
-| *tiny2* | 68,18 | 69,82 | **70,36** | 37,48 | 36,53 | **37,90** | **2,74** | 1,81 | 2,41 |
-| *tiny3* | 73,29 | **75,03** | 74,60 | **46,23** | 45,94 | 45,79 | 3,46 | 3,75 | **4,17** |
-| *small* | 77,69 | **79,98** | 79,68 | 53,07 | 52,90 | **54,32** | **6,56** | 6,36 | 6,29 |
-| *reasonable* | 83,42 | **85,76** | 85,27 | 58,77 | 62,48 | **63,09** | 9,29 | 10,51 | **11,28** |
+| *all* | 69,29 | 71,44 | 71,19 | 43,08 | 43,24 | 44,13 | 4,44 | 4,13 | 4,78 |
+| *tiny* | 63,68 | 65,63 | 65,45 | 36,28 | 35,74 | 36,06 | 2,32 | 2,26 | 2,86 |
+| *tiny1* | 45,19 | 46,79 | 46,41 | 18,71 | 18,46 | 18,34 | 0,53 | 0,48 | 0,45 |
+| *tiny2* | 68,18 | 69,82 | 70,36 | 37,48 | 36,53 | 37,90 | 2,74 | 1,81 | 2,41 |
+| *tiny3* | 73,29 | 75,03 | 74,60 | 46,23 | 45,94 | 45,79 | 3,46 | 3,75 | 4,17 |
+| *small* | 77,69 | 79,98 | 79,68 | 53,07 | 52,90 | 54,32 | 6,56 | 6,36 | 6,29 |
+| *reasonable* | 83,42 | 85,76 | 85,27 | 58,77 | 62,48 | 63,09 | 9,29 | 10,51 | 11,28 |
