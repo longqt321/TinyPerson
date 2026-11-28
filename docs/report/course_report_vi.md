@@ -317,7 +317,7 @@ Bảng 2.2: Luồng biến đổi tensor qua Head GauCon với đầu vào $1280
 | Đầu vào từ Neck PANet | $\mathbf{X}_s$ | $B \times 32 \times 320 \times 320$ | $B \times 64 \times 160 \times 160$ | Bản đồ đặc trưng đầu vào của Head |
 | Dự đoán thô nhánh $\mathcal{H}_{1:1}$ | $\mathbf{D}_0^{(s)},\, \mathbf{S}_{\mathrm{raw}}^{(s)}$ | $B \times 4 \times 320^2$, $B \times 1 \times 320^2$ | $B \times 4 \times 160^2$, $B \times 1 \times 160^2$ | Khoảng cách $(l,t,r,b)$ và logit thô |
 | Tham số Gauss gốc | $\boldsymbol{\mu}_0^{(s)},\, \boldsymbol{\sigma}_0^{(s)}$ | $B \times 2 \times 320 \times 320$ | $B \times 2 \times 160 \times 160$ | Ánh xạ (2.5) ở độ chính xác FP32 |
-| Trượt $0$-FLOP + Ô cha | $\tilde{\boldsymbol{\mu}}_{1..9},\, \tilde{\boldsymbol{\sigma}}_{1..9}$ | $B \times 2 \times 9 \times 320 \times 320$ | $B \times 2 \times 9 \times 160 \times 160$ | 8 ô $3 \times 3$ + 1 ô cha mức $s + 1$ |
+| Trượt lấy mẫu theo chỉ số + Ô cha | $\tilde{\boldsymbol{\mu}}_{1..9},\, \tilde{\boldsymbol{\sigma}}_{1..9}$ | $B \times 2 \times 9 \times 320 \times 320$ | $B \times 2 \times 9 \times 160 \times 160$ | 8 ô $3 \times 3$ + 1 ô cha mức $s + 1$ |
 | Khoảng cách vận chuyển | $\mathbf{D}_{1..9}$ | $B \times 9 \times 320 \times 320$ | $B \times 9 \times 160 \times 160$ | Khoảng cách (2.9) bất biến tỉ lệ |
 | Đặc trưng quan hệ lân cận | $\mathbf{r}_u$ | $B \times 20 \times 320 \times 320$ | $B \times 20 \times 160 \times 160$ | Ghép $[F_k, M_k, M_{\mathrm{dom}}, M_{\mathrm{sup}}]$ |
 | Tầng ẩn cổng phân loại | $\mathbf{h}_u$ | $B \times 16 \times 320 \times 320$ | $B \times 16 \times 160 \times 160$ | $\mathrm{SiLU}(\mathrm{PWConv}_{20\to 16}(\mathbf{r}_u))$ |
@@ -351,7 +351,7 @@ Bảng 2.4: Cấu hình huấn luyện dùng chung cho các mô hình đối ch�
 | Thời lượng & Batch size | 80 epoch, batch size 16, FP16 AMP | Thống nhất batch size 16 trên GPU NVIDIA L4 24 GB |
 | Bộ tối ưu & Lịch học | AdamW [29], $\text{lr}_0 = 0{,}0015$, $\text{lrf} = 0{,}05$ (cosine), *warmup* 3 epoch | Tinh chỉnh trọng số tiền huấn luyện ổn định mà không phá vỡ các tầng Backbone đầu |
 | Tăng cường dữ liệu | Lật ngang $0{,}5$, dịch $0{,}05$, tỉ lệ $0{,}15$, HSV $(0{,}005; 0{,}10; 0{,}15)$; **tắt Mosaic & MixUp** | Ghép Mosaic thu nhỏ vật thêm 2–4 lần khiến người 2–6 px rơi xuống dưới 1 px |
-| Tham số GauCon & DW-TAL | Kích hoạt 2 mức $\{P_2, P_3\}$, bật FG-Gate, $\tau_{\mathrm{px}} = 20{,}0$, $\beta_{\mathrm{px}} = 3{,}5$, $\lambda_{\mathrm{tal}} = 0{,}45$, $\lambda_{\mathrm{reg}} = 0{,}20$, $\lambda_{\mathrm{dist}} = 0{,}25$ | Khoanh vùng tác động vào dải $\le 20$ px trên $P_2, P_3$ |
+| Tham số GauCon & DW-TAL | Kích hoạt $P_2, P_3$, bật FG-Gate; $\tau_{\mathrm{px}} = 20{,}0$, $\beta_{\mathrm{px}} = 3{,}5$, $\beta_{\mathrm{box}}$ khởi tạo 0,06, $\lambda_{\mathrm{tal}} = 0{,}45$, $\lambda_{\mathrm{reg}} = 0{,}20$, $\lambda_{\mathrm{dist}} = 0{,}25$ | Khoanh vùng tác động vào dải $\le 20$ px trên $P_2, P_3$ |
 | Đối chứng NWD chuẩn | Trọng số gán nhãn $\alpha_{\mathrm{NWD}} = 0{,}50$, mất mát $\lambda_{\mathrm{NWD}} = 0{,}50$, $C = 12{,}8$ px | Cấu hình gốc của bài báo NWD [13, 14] |
 | Chọn mô hình đánh giá | Chọn mô hình tốt nhất theo $mAP_{50}$ trên 84 ảnh kiểm định (*val*), seed = 42 | Tập kiểm tra (*test*) 786 ảnh chỉ chạy đánh giá một lần sau khi kết thúc huấn luyện |
 
@@ -444,7 +444,7 @@ Tuy vậy, ở mục tiêu cốt lõi *tiny1* (2–8 px) chế độ toàn khung
 
 Hình 3.2: Biểu đồ tương quan tham số (thang log) và độ chính xác $AP_{50}$ tham chiếu từ tài liệu: đặt các cấu hình 80 epoch 1 lớp của đồ án cạnh các công bố cũ (2 lớp với hai giai đoạn [1, 26] và 300 epoch từ đầu với nano NMS [5]); do khác giao thức đánh giá, bộ lọc và khởi tạo, các mốc từ tài liệu chỉ mang tính tham chiếu quy mô kiến trúc
 
-### 3.4. Chẩn đoán cơ chế qua phân rã lỗi TIDE, dải con *reasonable* và kiểm định Bootstrap
+### 3.4. Phân tích lỗi TIDE, dải con *reasonable* và khoảng tin cậy Bootstrap
 
 Bảng 3.4 và Hình 3.3 phân rã số lượng từng loại lỗi TIDE [37] (lấy ngưỡng điểm $\ge 0{,}05$) và độ phủ theo khoảng cách tâm người gần nhất $d_{\mathrm{NN}}$ từ kết quả đánh giá định lượng.
 
@@ -466,7 +466,7 @@ Hình 3.3: Phân tích chẩn đoán lỗi chế độ toàn khung $1280 \times 
 Bảng 3.4 và Hình 3.3 phản ánh đồng thời các mặt mạnh lẫn đánh đổi của phương pháp:
 1. Giảm lỗi định vị ($E_{\mathrm{loc}}$) và lỗi trùng lặp ($E_{\mathrm{dupe}}$): Ở chế độ toàn khung, GauCon và NWD khôi phục cùng số khớp đúng (8.003 so với 8.004 TP, +132 so với Base), nhưng NWD giữ nguyên lỗi lệch biên (9.137 ở Full; tăng lên 10.444 ở Tiled so với 9.656 của Base), còn GauCon hạ $E_{\mathrm{loc}}$ xuống 8.408 (−731 hộp ở Full) và 9.188 (−1.256 hộp so với NWD ở Tiled). GauCon cũng đạt số hộp trùng $E_{\mathrm{dupe}}$ thấp nhất ở cả hai chế độ (799 hộp ở Full, giảm 22,2% từ 1.027 của Base). Tuy nhiên, do chưa có thí nghiệm tách bỏ từng thành phần (*ablation*), mức cải thiện này là hiệu ứng tổng hợp của toàn hệ thống chứ chưa tách riêng đóng góp của trọng tâm Wasserstein hay FG-Gate.
 2. Báo nhầm nền ($E_{\mathrm{bkg}}$) và độ phủ cụm dày đặc (< 10 px): Cần ghi nhận thẳng thắn hai mặt hạn chế: (i) Báo nhầm nền ở chế độ lát cắt (Tiled) của GauCon tăng +28,7% so với Base (16.422 lên 21.130), chỉ thấp hơn mức tăng +38,0% của NWD (22.658); lợi thế giảm $E_{\mathrm{bkg}}$ so với NWD thể hiện rõ hơn ở Full-1280 (8.683 so với 9.021), nhưng vẫn cao hơn Base (7.341); (ii) Trên cụm người đứng sát < 10 px, độ phủ Recall@0.50 của GauCon tăng +2,87 điểm so với Base (35,19% lên 38,06% ở Full; 53,12% lên 55,13% ở Tiled) nhưng vẫn thấp hơn NWD ở cả hai chế độ (38,71% ở Full; 57,92% ở Tiled).
-3. Phân rã nguyên nhân tăng mạnh ở nhóm *reasonable* (>32 px) và kiểm định Bootstrap (Hình 3.4): GauCon không can thiệp vào $P_4, P_5$ lúc suy luận và cổng $g(s_{\mathrm{gt}})$ giảm mạnh ở các đối tượng lớn hơn 35 px. Vì vậy, mức tăng +8,33 điểm (Tiled) và +4,32 điểm (Full) trên *reasonable* cần được lý giải trực tiếp. Khi phân rã nhóm *reasonable* (2.324 GT) trên Hình 3.4(a), ở Tiled, dải 32–48 px (1.293 GT) tăng 55,05% lên 61,71% (+6,66), 48–64 px (557 GT) tăng 51,36% lên 61,20% (+9,84), còn >64 px (474 GT) tăng 34,30% lên 44,98% (+10,68); tương tự ở Full-1280, dải >64 px tăng 56,16% lên 63,63% (+7,47), trong khi NWD cũng tăng +6,00 điểm ở dải này (62,16%). Kết quả cho thấy mức tăng lớn nhất xuất hiện ở nhóm >48 px, dù GauCon chỉ hiệu chỉnh trực tiếp các đầu phát hiện tại $P_2$ và $P_3$. Một khả năng là thay đổi trong quá trình huấn luyện chung đã ảnh hưởng đến đặc trưng ở Backbone và Neck, cũng như điểm tin cậy của các tầng sâu. Đây mới là giả thuyết phù hợp với phân bố kết quả; chưa thể xác định cơ chế này nếu không có thí nghiệm tách riêng từng thành phần. Hình 3.4(b) báo cáo thêm khoảng tin cậy 95% Bootstrap cho từng cặp đối chứng.
+3. Phân tích mức tăng ở nhóm *reasonable* (>32 px) và kiểm định Bootstrap (Hình 3.4): GauCon không can thiệp vào $P_4, P_5$ lúc suy luận và cổng $g(s_{\mathrm{gt}})$ giảm mạnh ở các đối tượng lớn hơn 35 px. Vì vậy, mức tăng +8,33 điểm (Tiled) và +4,32 điểm (Full) trên *reasonable* cần được lý giải trực tiếp. Khi phân rã nhóm *reasonable* (2.324 GT) trên Hình 3.4(a), ở Tiled, dải 32–48 px (1.293 GT) tăng 55,05% lên 61,71% (+6,66), 48–64 px (557 GT) tăng 51,36% lên 61,20% (+9,84), còn >64 px (474 GT) tăng 34,30% lên 44,98% (+10,68); tương tự ở Full-1280, dải >64 px tăng 56,16% lên 63,63% (+7,47), trong khi NWD cũng tăng +6,00 điểm ở dải này (62,16%). Kết quả cho thấy mức tăng lớn nhất xuất hiện ở nhóm >48 px, dù GauCon chỉ hiệu chỉnh trực tiếp các đầu phát hiện tại $P_2$ và $P_3$. Một khả năng là thay đổi trong quá trình huấn luyện chung đã ảnh hưởng đến đặc trưng ở Backbone và Neck, cũng như điểm tin cậy của các tầng sâu. Đây mới là giả thuyết phù hợp với phân bố kết quả; chưa thể xác định cơ chế này nếu không có thí nghiệm tách riêng từng thành phần. Hình 3.4(b) báo cáo thêm khoảng tin cậy 95% Bootstrap cho từng cặp đối chứng.
 
 ![](docs/report/figures/fig_gaucon_diagnostics_ext.png)
 
@@ -521,14 +521,14 @@ Kết quả Bảng 3.5 mô tả chi phí tính toán và phép đo suy luận tr
 
 ### 3.8. Hạn chế và các yếu tố ảnh hưởng đến độ tin cậy của kết quả
 
-Bảng 3.6 tổng hợp bốn giới hạn hiện tại của thực nghiệm cùng hướng khắc phục tương ứng.
+Bảng 3.6 tổng hợp các giới hạn của thực nghiệm và hướng kiểm chứng tiếp theo.
 
 Bảng 3.6: Tổng hợp các hạn chế thực nghiệm và hướng khắc phục trong nghiên cứu tiếp theo
 
 | Hạng mục hạn chế | Tác động đến việc diễn giải kết quả | Hướng khắc phục cụ thể |
 |---|---|---|
 | Chưa có thí nghiệm tách bỏ từng cơ chế (*ablation*) | Chưa tách được đóng góp riêng của trọng tâm $W_2$ ($\beta_{\mathrm{box}} \approx 0{,}04$), FG-Gate, DW-TAL và chưng cất; cũng chưa cô lập nguồn gốc mức tăng +8,33 điểm ở nhóm *reasonable* (>48 px) | Chạy tối thiểu 3 cấu hình đối chứng tắt từng thành phần ($\beta_{\mathrm{box}} = 0$, tắt DW-TAL, tắt FG-Gate) dưới cùng điều kiện 80 epoch COCO |
-| Mỗi cấu hình huấn luyện với một random seed (seed = 42) | Dù bootstrap theo ảnh cho thấy một số chênh lệch có khoảng tin cậy không chứa 0, phép lấy mẫu này chưa tính đến tương quan giữa các khung hình cùng video, chênh lệch Full $AP_{50}$ so với NWD (+0,89, 95% CI [−0,12; +1,90]) vắt qua 0 và phương sai giữa các lần chạy ngẫu nhiên chưa được đo | Lặp lại tối thiểu 3–5 lần khởi tạo ngẫu nhiên (random seed) độc lập để tính giá trị trung bình và độ lệch chuẩn (*mean ± std*) |
+| Mỗi cấu hình chỉ có một lần huấn luyện (seed = 42) | Bootstrap theo ảnh ước lượng độ bất định trên tập kiểm tra, không phản ánh biến thiên giữa các lần huấn luyện. Việc lấy mẫu từng ảnh cũng chưa mô hình hóa tương quan giữa các khung hình thuộc cùng video. Chênh lệch Full $AP_{50}$ so với NWD (+0,89 điểm, 95% CI [−0,12; +1,90]) chứa 0. | Lặp lại huấn luyện với nhiều seed; nếu có mã chuỗi video, bổ sung bootstrap phân cụm theo video. |
 | Đánh đổi tại *tiny1*, cụm sát < 10 px và $E_{\mathrm{bkg}}$ Tiled | GauCon thua NWD ở *tiny1* (25,53% vs 27,91% Tiled; 18,34% vs 18,46% Full) lẫn Recall cụm < 10 px (38,06% vs 38,71% Full), đồng thời $E_{\mathrm{bkg}}$ Tiled tăng +28,7% so với Base | Điều chỉnh tham số $\eta, \tau_{\mathrm{px}}$ trên tập kiểm định và kết hợp theo dõi chuỗi thời gian cho ảnh *tiny1* |
 | Thiếu đối chứng RFLA/BPD-YOLO cùng giao thức & nhiễu đo FPS | Chưa tái huấn luyện RFLA [16], BPD-YOLO [5] hay YOLOv8n-P2 ở cùng chế độ 80 epoch COCO; phép đo L4 1 phiên còn nhiễu làm Base chậm hơn GauCon | Bổ sung đối chứng cùng giao thức và đo lại độ trễ đa phiên (*mean ± std*) trên L4 lẫn Jetson Orin Nano |
 
