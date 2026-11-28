@@ -1135,7 +1135,7 @@ def parse_md(md_text: str) -> list[tuple]:
             pending_table_caption = None
             continue
 
-        if stripped.startswith(("- ", "* ", "+ ")) or re.match(r"^\\d+\\.\\s", stripped):
+        if stripped.startswith(("- ", "* ", "+ ")) or re.match(r"^\d+\.\s", stripped):
             blocks.append(("item", tight_ranges(stripped)))
             index += 1
             continue
