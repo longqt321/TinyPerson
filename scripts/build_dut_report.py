@@ -5,8 +5,7 @@ Adapted directly from the project's canonical DUT builder (`build_report_docx.py
 1. Native Word OMML (`m:oMath`) equation rendering via Pandoc for both `$$...$$` display equations
    (3-column borderless table: 15%--70%--15% with right-aligned `(N.M)` numbering per DUT standard)
    and `$...$` inline math — ZERO screenshot/PNG equations (`![EQ]`) and ZERO raw LaTeX leaks.
-2. Exact DUT cover page (Times New Roman, Khoa CNTT logo, student IDs `102210034` & `102210045`,
-   class `21TCLC_DT2`, Học kỳ I 2026–2027, GVHD TS. Huỳnh Hữu Hùng).
+2. DUT cover page using only verified project metadata; unverified student IDs and class codes are not fabricated.
 3. Roman front matter (`i, ii, ...`: MỤC LỤC, DANH MỤC HÌNH VẼ, DANH MỤC BẢNG BIỂU,
    DANH MỤC KÝ HIỆU VÀ CHỮ VIẾT TẮT) and Arabic body (`1, 2, ...`: TÓM TẮT, Chương 1–3,
    KẾT LUẬN VÀ HƯỚNG PHÁT TRIỂN, TÀI LIỆU THAM KHẢO, PHỤ LỤC) with running header/footer.
@@ -52,7 +51,7 @@ TITLE_SHORT = (
 COVER_TITLE = (
     "GauCon: Đầu phát hiện đồng thuận Gauss cục bộ\n"
     "và gán nhãn Wasserstein tách rời cho phát hiện\n"
-    "người cực nhỏ không dùng NMS trên ảnh hàng hải"
+    "người cực nhỏ trên ảnh hàng hải"
 )
 
 CHAPTERS = {
@@ -68,41 +67,41 @@ UNNUMBERED_H1 = {
 }
 
 ABBREVIATIONS = [
-    ("AP", "Average Precision — độ chính xác trung bình tích phân dưới đường cong Precision–Recall"),
+    ("AP", "Average Precision: độ chính xác trung bình tích phân dưới đường cong Precision–Recall"),
     ("AP25 / AP50 / AP75", "Độ chính xác trung bình đánh giá tại ngưỡng IoU 0,25 / 0,50 / 0,75"),
     ("AR", "Average Recall — độ phủ trung bình trên tập ngưỡng IoU chuẩn COCO"),
-    ("BCE", "Binary Cross-Entropy — hàm mất mát entropy chéo nhị phân"),
-    ("BN", "Batch Normalization (BatchNorm) — chuẩn hóa đặc trưng theo batch"),
-    ("CIoU", "Complete Intersection over Union — hàm mất mát hồi quy hộp bao đầy đủ"),
+    ("BCE", "Binary Cross-Entropy: hàm mất mát entropy chéo nhị phân"),
+    ("BN", "Batch Normalization (BatchNorm): chuẩn hóa đặc trưng theo batch"),
+    ("CIoU", "Complete Intersection over Union: hàm mất mát hồi quy hộp bao đầy đủ"),
     ("COCO", "Microsoft Common Objects in Context — bộ dữ liệu phát hiện đối tượng chuẩn"),
-    ("DFL", "Distribution Focal Loss — hàm mất mát phân phối biên hộp"),
-    ("DW-TAL", "Decoupled Wasserstein Task-Aligned Learning — gán nhãn Wasserstein tách rời khâu hiệu chuẩn"),
+    ("DFL", "Distribution Focal Loss: hàm mất mát phân phối biên hộp"),
+    ("DW-TAL", "Decoupled Wasserstein Task-Aligned Learning: gán nhãn Wasserstein tách rời khâu hiệu chuẩn"),
     ("E_bkg / E_dupe / E_loc / E_miss", "Bốn thành phần lỗi TIDE: báo nhầm nền, hộp trùng lặp, lệch vị trí, bỏ sót đối tượng"),
     ("FG-Gate", "Foreground-Gated Relational MLP — cổng điều biến logit lân cận theo xác suất tiền cảnh"),
-    ("FP / FN / TP", "False Positive (báo nhầm) / False Negative (bỏ sót) / True Positive (khớp đúng)"),
-    ("FPN / PANet", "Feature Pyramid Network / Path Aggregation Network — khối Neck tháp đặc trưng đa tỉ lệ"),
-    ("FPPI", "False Positives Per Image — số dự đoán báo nhầm trung bình trên mỗi ảnh"),
-    ("FPS", "Frames Per Second — số khung hình suy luận được trong một giây"),
+    ("FP / FN / TP", "False Positive (báo nhầm), False Negative (bỏ sót), True Positive (khớp đúng)"),
+    ("FPN / PANet", "Feature Pyramid Network / Path Aggregation Network: khối Neck tháp đặc trưng đa tỉ lệ"),
+    ("FPPI", "False Positives Per Image: số dự đoán báo nhầm trung bình trên mỗi ảnh"),
+    ("FPS", "Frames Per Second: số khung hình suy luận được trong một giây"),
     ("GauCon", "Local Gaussian Consensus Head — mô-đun đồng thuận Gauss cục bộ (đề xuất)"),
     ("GFLOPs", "Giga Floating-Point Operations — số tỉ phép tính dấu chấm động cho một lượt suy luận"),
-    ("GT", "Ground Truth — hộp bao nhãn thật được chú thích thủ công trên ảnh gốc"),
+    ("GT", "Ground Truth: hộp bao nhãn thật được chú thích thủ công trên ảnh gốc"),
     ("GWD / NWD", "Gaussian Wasserstein Distance / Normalized Wasserstein Distance"),
     ("H_1:1 / H_1:M", "Nhánh suy luận gán nhãn đơn mục tiêu (one-to-one) và nhánh phụ đa mẫu (one-to-many)"),
     ("IoD / IOS", "Intersection over Detection / Intersection over Smaller-Area"),
-    ("IoU", "Intersection over Union — tỷ số diện tích phần giao trên phần hợp của hai hộp bao"),
-    ("MLP", "Multi-Layer Perceptron — mạng truyền thẳng đa tầng với phép chiếu 1×1"),
+    ("IoU", "Intersection over Union: tỷ số diện tích phần giao trên phần hợp của hai hộp bao"),
+    ("MLP", "Multi-Layer Perceptron: mạng truyền thẳng đa tầng với phép chiếu 1×1"),
     ("MR50", "Log-Average Miss Rate tại ngưỡng IoU 0,50 trên 9 mốc FPPI từ 10⁻² đến 10⁰"),
-    ("NMS", "Non-Maximum Suppression — thuật toán hậu xử lý loại bỏ khung bao trùng lặp"),
+    ("NMS", "Non-Maximum Suppression: thuật toán hậu xử lý loại bỏ khung bao trùng lặp"),
     ("P2, P3, P4, P5", "Bốn tầng bản đồ đặc trưng có bước lưới (stride) lần lượt bằng 4, 8, 16, 32"),
-    ("RFLA", "Receptive Field based Label Assignment — gán nhãn dựa trên trường tiếp nhận Gauss"),
-    ("SAHI", "Slicing Aided Hyper Inference — giao thức suy luận cắt ảnh thành các lát cắt chồng lấn"),
-    ("SAR", "Search and Rescue — nghiệp vụ tìm kiếm và cứu nạn trên biển"),
-    ("SiLU", "Sigmoid-Weighted Linear Unit — hàm kích hoạt phi tuyến x · σ(x)"),
+    ("RFLA", "Receptive Field based Label Assignment: gán nhãn dựa trên trường tiếp nhận Gauss"),
+    ("SAHI", "Slicing Aided Hyper Inference: giao thức suy luận cắt ảnh thành các lát cắt chồng lấn"),
+    ("SAR", "Search and Rescue: nghiệp vụ tìm kiếm và cứu nạn trên biển"),
+    ("SiLU", "Sigmoid-Weighted Linear Unit: hàm kích hoạt phi tuyến x · σ(x)"),
     ("TAL / TOOD", "Task-Aligned Learning / Task-Aligned One-Stage Object Detection"),
-    ("TIDE", "Toolbox for Identifying Object Detection Errors — khung phân rã thành phần lỗi phát hiện"),
-    ("UAV", "Unmanned Aerial Vehicle — thiết bị bay không người lái"),
-    ("VRAM", "Video Random-Access Memory — bộ nhớ truy cập ngẫu nhiên trên GPU"),
-    ("WBF", "Weighted Boxes Fusion — thuật toán hợp nhất hộp bao theo trọng số độ tin cậy"),
+    ("TIDE", "Toolbox for Identifying Object Detection Errors: khung phân rã thành phần lỗi phát hiện"),
+    ("UAV", "Unmanned Aerial Vehicle: thiết bị bay không người lái"),
+    ("VRAM", "Video Random-Access Memory: bộ nhớ truy cập ngẫu nhiên trên GPU"),
+    ("WBF", "Weighted Boxes Fusion: thuật toán hợp nhất hộp bao theo trọng số độ tin cậy"),
 ]
 
 
@@ -508,21 +507,17 @@ def build_cover(doc) -> None:
 
     para(doc, "BÁO CÁO ĐỒ ÁN MÔN HỌC", size=Pt(20), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, line=1.2, space_after=Pt(6))
     para(doc, "NGÀNH: CÔNG NGHỆ THÔNG TIN", size=Pt(13), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, line=1.2, space_after=Pt(2))
-    para(doc, "CHUYÊN NGÀNH: KHOA HỌC MÁY TÍNH", size=Pt(13), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, line=1.2, space_after=Pt(18))
+    para(doc, "", line=1.0, space_after=Pt(18))
 
     para(doc, "ĐỀ TÀI:", size=Pt(14), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, line=1.2, space_after=Pt(4))
     para(doc, COVER_TITLE, size=Pt(16.5), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, line=1.3, space_after=Pt(22))
 
     info = [
         ("Môn học:", "Thị giác máy tính"),
-        ("Học kỳ:", "Học kỳ I, 2026–2027"),
+        ("Năm học:", "2026–2027"),
         ("Người hướng dẫn:", "TS. Huỳnh Hữu Hùng"),
         ("Sinh viên thực hiện:", "Trần Đức Long"),
-        ("Số thẻ sinh viên:", "102210034"),
-        ("Lớp:", "21TCLC_DT2"),
         ("Sinh viên thực hiện:", "Phan Thị Thảo Tiên"),
-        ("Số thẻ sinh viên:", "102210045"),
-        ("Lớp:", "21TCLC_DT2"),
     ]
     for label, value in info:
         p = para(doc, "", align=WD_ALIGN_PARAGRAPH.LEFT, space_after=Pt(2), line=1.25)
