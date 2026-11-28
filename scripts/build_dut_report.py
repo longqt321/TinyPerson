@@ -4,7 +4,7 @@
 Adapted directly from the project's canonical DUT builder (`build_report_docx.py`), upgraded with:
 1. Native Word OMML (`m:oMath`) equation rendering via Pandoc for both `$$...$$` display equations
    (3-column borderless table: 15%--70%--15% with right-aligned `(N.M)` numbering per DUT standard)
-   and `$...$` inline math — ZERO screenshot/PNG equations (`![EQ]`) and ZERO raw LaTeX leaks.
+   and `$...$` inline math: ZERO screenshot/PNG equations (`![EQ]`) and ZERO raw LaTeX leaks.
 2. DUT cover page using only verified project metadata; unverified student IDs and class codes are not fabricated.
 3. Roman front matter (`i, ii, ...`: MỤC LỤC, DANH MỤC HÌNH VẼ, DANH MỤC BẢNG BIỂU,
    DANH MỤC KÝ HIỆU VÀ CHỮ VIẾT TẮT) and Arabic body (`1, 2, ...`: TÓM TẮT, Chương 1–3,
@@ -69,21 +69,21 @@ UNNUMBERED_H1 = {
 ABBREVIATIONS = [
     ("AP", "Average Precision: độ chính xác trung bình tích phân dưới đường cong Precision–Recall"),
     ("AP25 / AP50 / AP75", "Độ chính xác trung bình đánh giá tại ngưỡng IoU 0,25 / 0,50 / 0,75"),
-    ("AR", "Average Recall — độ phủ trung bình trên tập ngưỡng IoU chuẩn COCO"),
+    ("AR", "Average Recall: độ phủ trung bình trên tập ngưỡng IoU chuẩn COCO"),
     ("BCE", "Binary Cross-Entropy: hàm mất mát entropy chéo nhị phân"),
     ("BN", "Batch Normalization (BatchNorm): chuẩn hóa đặc trưng theo batch"),
     ("CIoU", "Complete Intersection over Union: hàm mất mát hồi quy hộp bao đầy đủ"),
-    ("COCO", "Microsoft Common Objects in Context — bộ dữ liệu phát hiện đối tượng chuẩn"),
+    ("COCO", "Microsoft Common Objects in Context: bộ dữ liệu phát hiện đối tượng chuẩn"),
     ("DFL", "Distribution Focal Loss: hàm mất mát phân phối biên hộp"),
     ("DW-TAL", "Decoupled Wasserstein Task-Aligned Learning: gán nhãn Wasserstein tách rời khâu hiệu chuẩn"),
     ("E_bkg / E_dupe / E_loc / E_miss", "Bốn thành phần lỗi TIDE: báo nhầm nền, hộp trùng lặp, lệch vị trí, bỏ sót đối tượng"),
-    ("FG-Gate", "Foreground-Gated Relational MLP — cổng điều biến logit lân cận theo xác suất tiền cảnh"),
+    ("FG-Gate", "Foreground-Gated Relational MLP: cổng điều biến logit lân cận theo xác suất tiền cảnh"),
     ("FP / FN / TP", "False Positive (báo nhầm), False Negative (bỏ sót), True Positive (khớp đúng)"),
     ("FPN / PANet", "Feature Pyramid Network / Path Aggregation Network: khối Neck tháp đặc trưng đa tỉ lệ"),
     ("FPPI", "False Positives Per Image: số dự đoán báo nhầm trung bình trên mỗi ảnh"),
     ("FPS", "Frames Per Second: số khung hình suy luận được trong một giây"),
-    ("GauCon", "Local Gaussian Consensus Head — mô-đun đồng thuận Gauss cục bộ (đề xuất)"),
-    ("GFLOPs", "Giga Floating-Point Operations — số tỉ phép tính dấu chấm động cho một lượt suy luận"),
+    ("GauCon", "Local Gaussian Consensus Head: mô-đun đồng thuận Gauss cục bộ (đề xuất)"),
+    ("GFLOPs", "Giga Floating-Point Operations: số tỉ phép tính dấu chấm động cho một lượt suy luận"),
     ("GT", "Ground Truth: hộp bao nhãn thật được chú thích thủ công trên ảnh gốc"),
     ("GWD / NWD", "Gaussian Wasserstein Distance / Normalized Wasserstein Distance"),
     ("H_1:1 / H_1:M", "Nhánh suy luận gán nhãn đơn mục tiêu (one-to-one) và nhánh phụ đa mẫu (one-to-many)"),
