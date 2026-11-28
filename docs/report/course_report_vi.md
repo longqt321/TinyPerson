@@ -63,7 +63,7 @@ Nhánh $P_2$ tăng đáng kể mật độ lấy mẫu không gian với lượn
 
 #### 1.2.3. Bộ phát hiện đầu-cuối không dùng NMS và bài toán đồng thuận hộp bao
 
-DETR [12] và bản tăng tốc thời gian thực RT-DETR [11] loại bỏ bước NMS bằng cơ chế tự chú ý toàn cục giữa các truy vấn vật thể, cho phép các truy vấn trao đổi thông tin vị trí và độ tin cậy để tránh dự đoán lặp. Tuy nhiên, chi phí tính toán bậc hai của phép tự chú ý trên lưới $P_2$ ($320 \times 320 = 102.400$ ô) vượt quá ngân sách phần cứng của mạng nano.
+DETR [12] và RT-DETR [11] loại bỏ bước NMS bằng cơ chế dự đoán tập hợp (*set prediction*) kết hợp với bộ giải mã dựa trên truy vấn. Các mô hình này sử dụng thành phần Transformer để trao đổi thông tin giữa các đặc trưng và truy vấn. Đồ án lựa chọn đầu phát hiện tích chập nhằm duy trì thiết kế gọn nhẹ của YOLO26n-P2.
 
 Ở hướng tích chập thuần túy, Sun và cộng sự (*What Makes for End-to-End Object Detection?* [10], đề xuất khuôn khổ OneNet) chứng minh rằng một bộ phát hiện gán nhãn đơn mục tiêu bắt buộc phải kết hợp cả điểm phân loại lẫn sai lệch hộp trong hàm chi phí ghép cặp để tạo khoảng cách điểm rõ ràng giữa ô được chọn và các ô xung quanh. Kế thừa nguyên lý đó, YOLOv10 [8] và YOLO26 [9] sử dụng cặp nhánh song song khi huấn luyện: nhánh giám sát đa mẫu phụ trợ $\mathcal{H}_{1:M}$ (*one-to-many*) cung cấp tín hiệu giám sát dày đặc nuôi Backbone và Neck, còn nhánh gán nhãn đơn mục tiêu $\mathcal{H}_{1:1}$ (*one-to-one*) xuất trực tiếp một dự đoán cho mỗi đối tượng. Khi hợp nhất mô hình để suy luận, nhánh phụ $\mathcal{H}_{1:M}$ bị tháo bỏ hoàn toàn, giúp thời gian xử lý ổn định và không phụ thuộc vào số lượng vật thể trong khung hình.
 
@@ -164,7 +164,7 @@ Bảng 2.1: Độ phủ ô lưới của đối tượng theo stride $r_s$ ở c
 | $P_5$ | 32 | $40 \times 40$ | 256 | $0{,}25$ ô | $0{,}08$ ô | Phục vụ vật lớn và ngữ cảnh rộng; giữ nguyên $\mathcal{H}_{1:1}$ gốc |
 
 Bảng 2.1 giải thích hai quyết định thiết kế nền tảng:
-1. Ở chế độ lát cắt 1:1, một người rộng 6–16 pixel phủ 1,5–4 ô trên lưới $P_2$ và 1–2 ô trên lưới $P_3$. Các ô trong cửa sổ $3 \times 3$ quanh tâm vật cùng tiếp nhận phần thân đối tượng và đưa ra các hộp dự đoán độc lập có sai số biên ngẫu nhiên. Hợp nhất có trọng số các ước lượng lân cận này ngay trong đầu mạng giúp giảm phương sai biên hộp so với hồi quy đơn ô cô lập.
+1. Ở chế độ lát cắt 1:1, một người rộng 6–16 pixel phủ 1,5–4 ô trên lưới $P_2$ và 1–2 ô trên lưới $P_3$. Các ô trong cửa sổ $3 \times 3$ quanh tâm vật cùng tiếp nhận phần thân đối tượng và đưa ra các hộp dự đoán độc lập có sai số biên ngẫu nhiên. Cơ chế hợp nhất có trọng số các ước lượng lân cận được thiết kế nhằm giảm phương sai biên hộp so với hồi quy đơn ô.
 2. Trái lại, trên hai tầng $P_4$ ($r_4 = 16$) và $P_5$ ($r_5 = 32$), khoảng cách hai tâm ô kế tiếp đạt 16–32 pixel đầu vào (tương ứng 48–96 pixel trên ảnh gốc 4K). Việc trộn hộp giữa các ô cách xa như vậy làm nhòe biên của các đối tượng lớn vốn đã được định vị chính xác. Vì thế, GauCon chỉ tác động trên hai mức $P_2$ và $P_3$.
 
 #### 2.1.2. Không gian metric 2-Wasserstein và định lý trọng tâm phân phối Gauss
@@ -317,7 +317,7 @@ Bảng 2.2: Luồng biến đổi tensor qua Head GauCon với đầu vào $1280
 | Đầu vào từ Neck PANet | $\mathbf{X}_s$ | $B \times 32 \times 320 \times 320$ | $B \times 64 \times 160 \times 160$ | Bản đồ đặc trưng đầu vào của Head |
 | Dự đoán thô nhánh $\mathcal{H}_{1:1}$ | $\mathbf{D}_0^{(s)},\, \mathbf{S}_{\mathrm{raw}}^{(s)}$ | $B \times 4 \times 320^2$, $B \times 1 \times 320^2$ | $B \times 4 \times 160^2$, $B \times 1 \times 160^2$ | Khoảng cách $(l,t,r,b)$ và logit thô |
 | Tham số Gauss gốc | $\boldsymbol{\mu}_0^{(s)},\, \boldsymbol{\sigma}_0^{(s)}$ | $B \times 2 \times 320 \times 320$ | $B \times 2 \times 160 \times 160$ | Ánh xạ (2.5) ở độ chính xác FP32 |
-| Trượt lấy mẫu theo chỉ số + Ô cha | $\tilde{\boldsymbol{\mu}}_{1..9},\, \tilde{\boldsymbol{\sigma}}_{1..9}$ | $B \times 2 \times 9 \times 320 \times 320$ | $B \times 2 \times 9 \times 160 \times 160$ | 8 ô $3 \times 3$ + 1 ô cha mức $s + 1$ |
+| Các ô lân cận và ô cha | $\tilde{\boldsymbol{\mu}}_{1..9},\, \tilde{\boldsymbol{\sigma}}_{1..9}$ | $B \times 2 \times 9 \times 320 \times 320$ | $B \times 2 \times 9 \times 160 \times 160$ | 8 ô $3 \times 3$ + 1 ô cha mức $s + 1$ |
 | Khoảng cách vận chuyển | $\mathbf{D}_{1..9}$ | $B \times 9 \times 320 \times 320$ | $B \times 9 \times 160 \times 160$ | Khoảng cách (2.9) gần bất biến theo tỉ lệ |
 | Đặc trưng quan hệ lân cận | $\mathbf{r}_u$ | $B \times 20 \times 320 \times 320$ | $B \times 20 \times 160 \times 160$ | Ghép $[F_k, M_k, M_{\mathrm{dom}}, M_{\mathrm{sup}}]$ |
 | Tầng ẩn cổng phân loại | $\mathbf{h}_u$ | $B \times 16 \times 320 \times 320$ | $B \times 16 \times 160 \times 160$ | $\mathrm{SiLU}(\mathrm{PWConv}_{20\to 16}(\mathbf{r}_u))$ |
@@ -350,7 +350,7 @@ Bảng 2.4: Cấu hình huấn luyện dùng chung cho các mô hình đối ch�
 | Độ phân giải đầu vào | $1280 \times 1280$ (*letterbox* giữ tỉ lệ) | Bội số 32; đảm bảo lưới $P_2$ đạt $320 \times 320$ |
 | Thời lượng & Batch size | 80 epoch, batch size 16, FP16 AMP | Thống nhất batch size 16 trên GPU NVIDIA L4 24 GB |
 | Bộ tối ưu & Lịch học | AdamW [29], $\text{lr}_0 = 0{,}0015$, $\text{lrf} = 0{,}05$ (cosine), *warmup* 3 epoch | Tinh chỉnh trọng số tiền huấn luyện ổn định mà không phá vỡ các tầng Backbone đầu |
-| Tăng cường dữ liệu | Lật ngang $0{,}5$, dịch $0{,}05$, tỉ lệ $0{,}15$, HSV $(0{,}005; 0{,}10; 0{,}15)$; tắt Mosaic & MixUp | Ghép Mosaic thu nhỏ vật thêm 2–4 lần khiến người 2–6 px rơi xuống dưới 1 px |
+| Tăng cường dữ liệu | Lật ngang $0{,}5$, dịch $0{,}05$, tỉ lệ $0{,}15$, HSV $(0{,}005; 0{,}10; 0{,}15)$; tắt Mosaic & MixUp | Tránh làm giảm thêm kích thước biểu kiến của các đối tượng cực nhỏ |
 | Tham số TAL dùng chung | $\alpha = 0{,}5$, $\beta = 4{,}0$ cho Base, NWD và GauCon | Giữ nguyên hệ số căn chỉnh giữa các cấu hình đối chứng |
 | Tham số GauCon & DW-TAL | Kích hoạt $P_2, P_3$, bật FG-Gate; $\tau_{\mathrm{px}} = 20{,}0$, $\beta_{\mathrm{px}} = 3{,}5$, $\beta_{\mathrm{box}}$ khởi tạo 0,06, $\lambda_{\mathrm{tal}} = 0{,}45$, $\lambda_{\mathrm{reg}} = 0{,}20$, $\lambda_{\mathrm{dist}} = 0{,}25$ | Khoanh vùng tác động vào dải $\le 20$ px trên $P_2, P_3$ |
 | Cấu hình đối chứng NWD | Trọng số gán nhãn $\alpha_{\mathrm{NWD}} = 0{,}50$, trọng số mất mát $\lambda_{\mathrm{NWD}} = 0{,}50$, $C = 12{,}8$ px | Các giá trị được cố định trong cấu hình thực nghiệm để so sánh với GauCon |
@@ -404,7 +404,7 @@ Bảng 3.2: Kết quả đối chứng trên tập kiểm tra TinyPerson ở ch�
 | *all* $MR_{50}$ (%) $\downarrow$ | 13.687 | 91,95 | 90,74 | 90,31 | −1,64 | −0,43 |
 | COCO $AP_{50:95}$ (@500) (%) $\uparrow$ | 13.687 | 15,55 | 16,51 | 16,96 | +1,41 | +0,45 |
 
-*Ghi chú: Giá trị tốt nhất trên từng dòng được in đậm; $\Delta$ tính bằng điểm phần trăm.*
+*Ghi chú: $\Delta$ tính bằng điểm phần trăm.
 
 ![](docs/report/figures/fig_gaucon_scales.png)
 
