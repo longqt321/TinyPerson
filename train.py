@@ -378,7 +378,6 @@ def run_post_training_evaluation(run: Path, dataset_yaml: Path, config: Experime
             )
 
             # Also score official TOV native-resolution Tiled Slicing (640x512, overlap=100)
-            from PIL import Image
             from ultralytics import YOLO
 
             from tinydet.evaluation.tiled_inference import (
@@ -394,16 +393,15 @@ def run_post_training_evaluation(run: Path, dataset_yaml: Path, config: Experime
             tiled_dev = "cuda:0" if __import__("torch").cuda.is_available() else "cpu"
             tiled_rows: list[dict[str, Any]] = []
             for img_p in test_imgs:
-                with Image.open(img_p) as pil_im:
-                    t_boxes, t_scores, t_clses = predict_tiled_image(
-                        tiled_model,
-                        pil_im,
-                        tile_w=TILE_W,
-                        tile_h=TILE_H,
-                        overlap=TILE_OVERLAP,
-                        conf=0.001,
-                        device=tiled_dev,
-                    )
+                t_boxes, t_scores, t_clses = predict_tiled_image(
+                    tiled_model,
+                    img_p,
+                    tile_w=TILE_W,
+                    tile_h=TILE_H,
+                    overlap=TILE_OVERLAP,
+                    conf=0.001,
+                    device=tiled_dev,
+                )
                 tiled_rows.append({
                     "path": str(img_p.resolve()),
                     "boxes": t_boxes,

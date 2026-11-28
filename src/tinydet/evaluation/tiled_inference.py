@@ -9,13 +9,15 @@ Tile parameters:
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
 from torchvision.ops import batched_nms as tv_batched_nms
-from torchvision.ops import box_area, nms
+from torchvision.ops import box_area, box_iou, nms
 from ultralytics import YOLO
 
 # Canonical tile grid shared by every tiled evaluation / training entry point
@@ -79,14 +81,19 @@ def suppress_border_truncated(
         return torch.arange(n, device=boxes.device, dtype=torch.long)
 
     areas = box_area(boxes).clamp(min=1e-6)
-    lt = torch.maximum(boxes[:, None, :2], boxes[None, :, :2])
-    rb = torch.minimum(boxes[:, None, 2:], boxes[None, :, 2:])
-    wh = (rb - lt).clamp(min=0.0)
-    inter = wh[..., 0] * wh[..., 1]
+    ious = box_iou(boxes, boxes)
+    union = areas[:, None] + areas[None, :]
+    # Exact intersection recovered from C++/CUDA torchvision.ops.box_iou: inter = iou * (a1 + a2) / (1 + iou)
+    inter = (ious * union) / (1.0 + ious)
     min_area = torch.minimum(areas[:, None], areas[None, :])
-    sup_mat = np.ascontiguousarray(
-        ((inter >= ios_thr * min_area) & (classes[:, None] == classes[None, :])).cpu().numpy()
-    )
+    upper_sup = ((inter >= ios_thr * min_area) & (classes[:, None] == classes[None, :])).triu(diagonal=1)
+    has_sup = upper_sup.any(dim=0)
+    if not bool(has_sup.any()):
+        return torch.arange(n, device=boxes.device, dtype=torch.long)
+    # Fast vectorized path when no suppressed box itself suppresses a lower-scoring box (99%+ of images)
+    if not bool((upper_sup & has_sup[:, None]).any()):
+        return (~has_sup).nonzero(as_tuple=False).squeeze(-1)
+    sup_mat = np.ascontiguousarray(upper_sup.cpu().numpy())
     keep_np = _greedy_suppress_mask(sup_mat)
     return torch.from_numpy(np.flatnonzero(keep_np)).to(device=boxes.device, dtype=torch.long)
 
@@ -113,7 +120,7 @@ def get_image_slices(img_w: int, img_h: int, tile_w: int = 640, tile_h: int = 51
 
 def predict_tiled_image(
     model: YOLO,
-    img: Image.Image,
+    img: Image.Image | np.ndarray | Path | str,
     tile_w: int = 640,
     tile_h: int = 512,
     overlap: int = 100,
@@ -124,16 +131,24 @@ def predict_tiled_image(
     max_per_img: int = 1000,
     device: str = "cuda:0",
 ) -> tuple[list[list[float]], list[float], list[int]]:
-    """Run tiled inference on a single PIL image and merge detections via class-aware NMS + IOS."""
-    img_w, img_h = img.size
+    """Run batched tiled inference on an image (path, BGR ndarray, or PIL) with single GPU->CPU sync."""
+    if isinstance(img, (str, Path)):
+        decoded = cv2.imread(str(img), cv2.IMREAD_COLOR)
+        if decoded is None:
+            with Image.open(img) as pil_im:
+                rgb = pil_im.convert("RGB") if pil_im.mode != "RGB" else pil_im
+                img_bgr = np.ascontiguousarray(np.asarray(rgb)[..., ::-1])
+        else:
+            img_bgr = decoded
+    elif isinstance(img, np.ndarray):
+        img_bgr = img
+    else:
+        rgb = img.convert("RGB") if img.mode != "RGB" else img
+        img_bgr = np.asarray(rgb)[..., ::-1]
+
+    img_h, img_w = int(img_bgr.shape[0]), int(img_bgr.shape[1])
     slices = get_image_slices(img_w, img_h, tile_w, tile_h, overlap)
 
-    all_boxes = []
-    all_scores = []
-    all_classes = []
-
-    rgb = img.convert("RGB") if img.mode != "RGB" else img
-    img_bgr = np.asarray(rgb)[..., ::-1]
     crops = []
     offsets = []
     for x1, y1, x2, y2 in slices:
@@ -142,41 +157,45 @@ def predict_tiled_image(
 
     use_half = torch.cuda.is_available() and not str(device).startswith("cpu")
     results: Any = model.predict(
-        crops, imgsz=(tile_h, tile_w), conf=conf, device=device, half=use_half, verbose=False
+        crops,
+        imgsz=(tile_h, tile_w),
+        batch=max(1, min(len(crops), 32)),
+        conf=conf,
+        device=device,
+        half=use_half,
+        verbose=False,
     )
 
+    gpu_boxes: list[torch.Tensor] = []
+    gpu_scores: list[torch.Tensor] = []
+    gpu_classes: list[torch.Tensor] = []
     for (ox, oy), res in zip(offsets, results):
         boxes = res.boxes
         if boxes is None or len(boxes) == 0:
             continue
-        xyxy = boxes.xyxy.cpu().numpy()
-        scores = boxes.conf.cpu().numpy()
-        clses = boxes.cls.cpu().numpy().astype(int)
+        xyxy_t = boxes.xyxy.float()
+        if ox != 0 or oy != 0:
+            shift = xyxy_t.new_tensor((float(ox), float(oy), float(ox), float(oy)))
+            xyxy_t = xyxy_t + shift
+        gpu_boxes.append(xyxy_t)
+        gpu_scores.append(boxes.conf.float())
+        gpu_classes.append(boxes.cls.long())
 
-        xyxy[:, 0] += ox
-        xyxy[:, 2] += ox
-        xyxy[:, 1] += oy
-        xyxy[:, 3] += oy
-
-        all_boxes.append(xyxy)
-        all_scores.append(scores)
-        all_classes.append(clses)
-
-    if not all_boxes:
+    if not gpu_boxes:
         return [], [], []
 
-    cat_boxes = np.concatenate(all_boxes, axis=0)
-    cat_scores = np.concatenate(all_scores, axis=0)
-    cat_classes = np.concatenate(all_classes, axis=0)
+    boxes_t = torch.cat(gpu_boxes, dim=0)
+    scores_t = torch.cat(gpu_scores, dim=0)
+    classes_t = torch.cat(gpu_classes, dim=0)
 
-    order = np.argsort(-cat_scores)[:nms_pre]
-    cat_boxes = cat_boxes[order]
-    cat_scores = cat_scores[order]
-    cat_classes = cat_classes[order]
+    if scores_t.numel() > nms_pre:
+        order = torch.argsort(scores_t, descending=True, stable=True)[:nms_pre]
+    else:
+        order = torch.argsort(scores_t, descending=True, stable=True)
+    boxes_t = boxes_t[order]
+    scores_t = scores_t[order]
+    classes_t = classes_t[order]
 
-    boxes_t = torch.from_numpy(cat_boxes).float()
-    scores_t = torch.from_numpy(cat_scores).float()
-    classes_t = torch.from_numpy(cat_classes).long()
     keep_t = tv_batched_nms(boxes_t, scores_t, classes_t, merge_iou)
     if keep_t.numel() > 1:
         keep_t = keep_t[torch.argsort(scores_t[keep_t], descending=True, stable=True)]
@@ -187,10 +206,9 @@ def predict_tiled_image(
         )
         keep_t = keep_t[sub_keep]
 
-    keep_indices = keep_t[:max_per_img].numpy()
-
-    final_boxes = cat_boxes[keep_indices].tolist()
-    final_scores = cat_scores[keep_indices].tolist()
-    final_classes = cat_classes[keep_indices].tolist()
-
-    return final_boxes, final_scores, final_classes
+    keep_t = keep_t[:max_per_img]
+    return (
+        boxes_t[keep_t].cpu().tolist(),
+        scores_t[keep_t].cpu().tolist(),
+        classes_t[keep_t].cpu().tolist(),
+    )

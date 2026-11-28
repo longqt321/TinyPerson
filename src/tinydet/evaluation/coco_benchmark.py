@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 import orjson
 from faster_coco_eval import COCO, COCOeval_faster
+from scipy.spatial import cKDTree
 
 from tinydet.utils.geometry import iod_matrix, iou_matrix, xywh_to_xyxy
 
@@ -267,14 +268,12 @@ def _compute_tide_and_crowded_diagnostics(
         gt_matched = np.zeros(n_gt, dtype=np.bool_)
         gt_dupes = np.zeros(n_gt, dtype=np.int64)
 
-        # Nearest-neighbor center distances among positive GTs
+        # Nearest-neighbor center distances among positive GTs via O(N log N) C cKDTree
         nn_dist = np.full(n_gt, np.inf, dtype=np.float64)
         if n_gt >= 2:
             centers = 0.5 * (gt_boxes[:, :2] + gt_boxes[:, 2:])
-            diff = centers[:, None, :] - centers[None, :, :]
-            dmat = np.hypot(diff[..., 0], diff[..., 1])
-            np.fill_diagonal(dmat, np.inf)
-            nn_dist = dmat.min(axis=1)
+            dists, _ = cKDTree(centers).query(centers, k=2)
+            nn_dist = np.asarray(dists[:, 1], dtype=np.float64)
 
         if n_det > 0:
             det_boxes = np.asarray([d[0] for d in dets], dtype=np.float64).reshape(-1, 4)

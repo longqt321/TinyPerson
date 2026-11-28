@@ -6,13 +6,18 @@ Never hardcodes metric values — reads strictly from ``outputs/<exp>/<run_id>/m
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import orjson
 import pandas as pd
+import polars as pl
 import seaborn as sns
+
+
+def _pl_to_pd(frame: pl.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame(frame.to_dict(as_series=False))
 
 # Okabe-Ito colorblind-safe publication palette
 PALETTE = {
@@ -72,7 +77,7 @@ def plot_scale_breakdown(
         f = run_dir / "metrics" / json_name
         if not f.is_file():
             continue
-        data = json.loads(f.read_text())
+        data = orjson.loads(f.read_bytes())
         for key, disp in buckets:
             if key in data:
                 rows.append({
@@ -82,7 +87,7 @@ def plot_scale_breakdown(
                 })
     if not rows:
         return
-    df = pd.DataFrame(rows)
+    df = _pl_to_pd(pl.DataFrame(rows))
     fig, ax = plt.subplots(figsize=(6.8, 2.7))
     ax.yaxis.grid(True)
     ax.set_axisbelow(True)
@@ -115,13 +120,22 @@ def plot_tide_and_crowded(
         f = run_dir / "metrics" / suite_name
         if not f.is_file():
             continue
-        tc = json.loads(f.read_text()).get("tide_and_crowded", {})
+        tc = orjson.loads(f.read_bytes()).get("tide_and_crowded", {})
         counts = tc.get("counts", {})
-        for k, disp in [("FP_Loc", "Loc FP"), ("FP_Dupe", "Duplicate FP"), ("FP_Bkg", "Background FP"), ("FN_Miss", "Missed GT")]:
+        for k, disp in [
+            ("FP_Loc", "Loc FP"),
+            ("FP_Dupe", "Duplicate FP"),
+            ("FP_Bkg", "Background FP"),
+            ("FN_Miss", "Missed GT"),
+        ]:
             if k in counts:
                 err_rows.append({"Model": label, "Category": disp, "Count": int(counts[k])})
         cp = tc.get("crowded_pairs", {})
-        for ck, cdisp in [("crowded_lt_10px", "<10 px\n(Crowded)"), ("close_10_20px", "10-20 px\n(Close)"), ("isolated_ge_20px", ">=20 px\n(Isolated)")]:
+        for ck, cdisp in [
+            ("crowded_lt_10px", "<10 px\n(Crowded)"),
+            ("close_10_20px", "10-20 px\n(Close)"),
+            ("isolated_ge_20px", ">=20 px\n(Isolated)"),
+        ]:
             if ck in cp:
                 crowd_rows.append({
                     "Model": label,
@@ -137,7 +151,7 @@ def plot_tide_and_crowded(
         ax.set_axisbelow(True)
 
     sns.barplot(
-        data=pd.DataFrame(err_rows),
+        data=_pl_to_pd(pl.DataFrame(err_rows)),
         x="Category",
         y="Count",
         hue="Model",
@@ -151,7 +165,7 @@ def plot_tide_and_crowded(
     ax1.legend(frameon=True, fontsize=6.8, loc="upper left")
 
     sns.barplot(
-        data=pd.DataFrame(crowd_rows),
+        data=_pl_to_pd(pl.DataFrame(crowd_rows)),
         x="Density",
         y="Recall@50 (%)",
         hue="Model",
@@ -175,25 +189,25 @@ def plot_convergence_curves(
     out_dirs: list[Path],
     stem: str,
 ) -> None:
-    frames = []
+    frames: list[pl.DataFrame] = []
     for label, run_dir in runs:
         csv_f = run_dir / "training" / "results.csv"
         if not csv_f.is_file():
             continue
-        df = pd.read_csv(csv_f)
-        df.columns = [c.strip() for c in df.columns]
-        if "metrics/mAP50(B)" not in df.columns:
+        raw = pl.read_csv(csv_f)
+        raw = raw.rename({c: c.strip() for c in raw.columns})
+        if "metrics/mAP50(B)" not in raw.columns:
             continue
-        sub = pd.DataFrame({
-            "Epoch": df["epoch"].astype(int),
-            "Val mAP@0.50 (%)": df["metrics/mAP50(B)"].astype(float) * 100.0,
-            "Val Precision (%)": df["metrics/precision(B)"].astype(float) * 100.0,
-            "Model": label,
-        })
+        sub = raw.select(
+            pl.col("epoch").cast(pl.Int64).alias("Epoch"),
+            (pl.col("metrics/mAP50(B)").cast(pl.Float64) * 100.0).alias("Val mAP@0.50 (%)"),
+            (pl.col("metrics/precision(B)").cast(pl.Float64) * 100.0).alias("Val Precision (%)"),
+            pl.lit(label).alias("Model"),
+        )
         frames.append(sub)
     if not frames:
         return
-    all_df = pd.concat(frames, ignore_index=True)
+    all_df = _pl_to_pd(pl.concat(frames))
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.5))
     for ax in (ax1, ax2):
@@ -201,12 +215,16 @@ def plot_convergence_curves(
         ax.xaxis.grid(True)
         ax.set_axisbelow(True)
 
-    sns.lineplot(data=all_df, x="Epoch", y="Val mAP@0.50 (%)", hue="Model", palette=PALETTE, linewidth=1.5, ax=ax1)
+    sns.lineplot(
+        data=all_df, x="Epoch", y="Val mAP@0.50 (%)", hue="Model", palette=PALETTE, linewidth=1.5, ax=ax1
+    )
     ax1.set_xlabel("Epoch")
     ax1.set_ylabel("Validation mAP@0.50 (%)")
     ax1.legend(frameon=True, fontsize=7.0, loc="lower right")
 
-    sns.lineplot(data=all_df, x="Epoch", y="Val Precision (%)", hue="Model", palette=PALETTE, linewidth=1.5, ax=ax2)
+    sns.lineplot(
+        data=all_df, x="Epoch", y="Val Precision (%)", hue="Model", palette=PALETTE, linewidth=1.5, ax=ax2
+    )
     ax2.set_xlabel("Epoch")
     ax2.set_ylabel("Validation Precision (%)")
     if ax2.get_legend() is not None:
@@ -228,13 +246,21 @@ def plot_ablation_ladder(
         f = run_dir / "metrics" / json_name
         if not f.is_file():
             continue
-        d = json.loads(f.read_text())
-        for key, metric_name in [("all", "AP50 (All)"), ("tiny1", "AP50 (Tiny1 2-8px)"), ("reasonable", "AP50 (Reas. >32px)")]:
+        d = orjson.loads(f.read_bytes())
+        for key, metric_name in [
+            ("all", "AP50 (All)"),
+            ("tiny1", "AP50 (Tiny1 2-8px)"),
+            ("reasonable", "AP50 (Reas. >32px)"),
+        ]:
             if key in d:
-                rows.append({"Variant": label, "Metric": metric_name, "Score (%)": float(d[key]["AP@0.50"]) * 100.0})
+                rows.append({
+                    "Variant": label,
+                    "Metric": metric_name,
+                    "Score (%)": float(d[key]["AP@0.50"]) * 100.0,
+                })
     if not rows:
         return
-    df = pd.DataFrame(rows)
+    df = _pl_to_pd(pl.DataFrame(rows))
     fig, ax = plt.subplots(figsize=(5.2, 2.5))
     ax.yaxis.grid(True)
     ax.set_axisbelow(True)

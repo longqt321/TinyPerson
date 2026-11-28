@@ -123,20 +123,17 @@ def gaussian_to_ltrb(mu: Tensor, sigma: Tensor) -> Tensor:
 
 
 class SpatialShiftStencil(nn.Module):
-    """Fixed depthwise ``3x3`` shift convolution extracting ``OFFSETS_3X3`` taps and valid masks."""
+    """Zero-FLOP ``3x3`` sliding-window ``unfold`` stencil extracting ``OFFSETS_3X3`` taps and valid masks."""
 
-    shift_weight: Tensor
+    tap_order: Tensor
     dx: Tensor
     dy: Tensor
 
     def __init__(self, channels: int = 5) -> None:
         super().__init__()
         self.channels = int(channels)
-        weight = torch.zeros((self.channels * NUM_SPATIAL, 1, 3, 3), dtype=torch.float32)
-        for c in range(self.channels):
-            for k, (dx, dy) in enumerate(OFFSETS_3X3):
-                weight[c * NUM_SPATIAL + k, 0, dy + 1, dx + 1] = 1.0
-        self.register_buffer("shift_weight", weight, persistent=False)
+        order = torch.tensor([(dy + 1) * 3 + (dx + 1) for dx, dy in OFFSETS_3X3], dtype=torch.long)
+        self.register_buffer("tap_order", order, persistent=False)
 
         dx_t = torch.tensor([dx for dx, _ in OFFSETS_3X3], dtype=torch.float32).view(1, NUM_SPATIAL, 1, 1)
         dy_t = torch.tensor([dy for _, dy in OFFSETS_3X3], dtype=torch.float32).view(1, NUM_SPATIAL, 1, 1)
@@ -170,12 +167,20 @@ class SpatialShiftStencil(nn.Module):
         return valid
 
     def forward(self, field: Tensor) -> tuple[Tensor, Tensor]:
-        """Return shifted ``(B, C, 9, H, W)`` field and ``(1, 9, H, W)`` in-bounds boolean mask."""
+        """Return shifted ``(B, C, 9, H, W)`` field via zero-FLOP ``F.pad + unfold`` and in-bounds mask."""
         bsz, channels, height, width = field.shape
-        weight = self.shift_weight.to(dtype=field.dtype)
-        shifted = F.conv2d(field, weight, padding=1, groups=self.channels).view(
-            bsz, channels, NUM_SPATIAL, height, width
-        )
+        # Legacy checkpoint fallback if older pickled instance lacks tap_order buffer
+        tap_order = getattr(self, "tap_order", None)
+        if tap_order is None or tap_order.device != field.device:
+            tap_order = torch.tensor(
+                [(dy + 1) * 3 + (dx + 1) for dx, dy in OFFSETS_3X3],
+                dtype=torch.long,
+                device=field.device,
+            )
+            self.register_buffer("tap_order", tap_order, persistent=False)
+        windows = F.pad(field, (1, 1, 1, 1)).unfold(2, 3, 1).unfold(3, 3, 1)
+        shifted = windows.reshape(bsz, channels, height, width, NUM_SPATIAL).index_select(-1, tap_order)
+        shifted = shifted.permute(0, 1, 4, 2, 3).contiguous()
         valid = self._get_valid_mask(height, width, field.device)
         return shifted, valid
 

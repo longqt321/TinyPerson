@@ -1,7 +1,9 @@
 """Explicit registration and hooks for custom TinyDet modules parsed from YAML."""
 
 import torch
-from ultralytics.utils.tal import dist2bbox
+import torch.nn.functional as F
+from ultralytics.utils.metrics import bbox_iou
+from ultralytics.utils.tal import bbox2dist, dist2bbox
 
 from tinydet.modules.lgt_detect import (
     LGTDetect,
@@ -122,17 +124,6 @@ def make_wasserstein_iou_calculation(
     return patched_iou_calculation
 
 
-def _pairwise_iou_aligned(box1: torch.Tensor, box2: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
-    """Elementwise IoU in ``[0, 1]`` for aligned ``(K, 4)`` pixel ``xyxy`` boxes."""
-    lt = torch.maximum(box1[:, :2], box2[:, :2])
-    rb = torch.minimum(box1[:, 2:], box2[:, 2:])
-    wh = (rb - lt).clamp(min=0.0)
-    inter = wh[:, 0] * wh[:, 1]
-    area1 = (box1[:, 2] - box1[:, 0]).clamp(min=0.0) * (box1[:, 3] - box1[:, 1]).clamp(min=0.0)
-    area2 = (box2[:, 2] - box2[:, 0]).clamp(min=0.0) * (box2[:, 3] - box2[:, 1]).clamp(min=0.0)
-    return inter / (area1 + area2 - inter + eps)
-
-
 def make_decoupled_tal_forward(
     orig_fn,
     weight: float,
@@ -145,28 +136,25 @@ def make_decoupled_tal_forward(
     ``assigner.iou_calculation`` uses hybrid Wasserstein similarity so sub-stride tiny GTs
     do not suffer positive-sample starvation when ``IoU == 0``. Immediately afterward,
     ``target_scores`` on selected positive anchors are recalibrated against true ``IoU``
-    (with a small ``tiny_calib_floor * r_gate`` floor only when ``IoU ~ 0``) so poorly
-    localized or near-background anchors never receive inflated classification targets.
+    (with a small ``tiny_calib_floor * r_gate`` floor only when ``IoU ~ 0``) on dense
+    ``(B, N, 4)`` tensors without ``.nonzero()`` GPU-CPU stream synchronization.
     """
 
     def decoupled_forward(pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs):
         target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx = orig_fn(
             pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs
         )
-        fg_idx = fg_mask.nonzero(as_tuple=True)
-        if fg_idx[0].numel() == 0:
-            return target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx
-
-        pd_fg = pd_bboxes[fg_idx].detach().float()
-        gt_fg = target_bboxes[fg_idx].detach().float()
-        true_iou = _pairwise_iou_aligned(pd_fg, gt_fg)
-        r_gate = _logistic_scale_gate(gt_fg, 1.0, tau_px=tau_px, beta_px=beta_px)
+        pd_det = pd_bboxes.detach().float()
+        gt_det = target_bboxes.detach().float()
+        true_iou = bbox_iou(pd_det, gt_det, xywh=False).squeeze(-1).clamp_(min=0.0)
+        r_gate = _logistic_scale_gate(gt_det, 1.0, tau_px=tau_px, beta_px=beta_px)
         calib_cap = torch.maximum(true_iou, float(tiny_calib_floor) * r_gate).unsqueeze(-1).to(target_scores.dtype)
-        w_sim = _wasserstein_sim_lowmem(gt_fg, pd_fg)
+        w_sim = _wasserstein_sim_lowmem(gt_det, pd_det)
         alpha = r_gate * float(weight)
-        blended = ((1.0 - alpha) * true_iou + alpha * w_sim).clamp(min=1e-4).unsqueeze(-1).to(target_scores.dtype)
-        ratio = (calib_cap / blended).clamp(max=1.15)
-        target_scores[fg_idx] = torch.minimum(target_scores[fg_idx] * ratio, calib_cap)
+        blended = ((1.0 - alpha) * true_iou + alpha * w_sim).clamp_(min=1e-4).unsqueeze(-1).to(target_scores.dtype)
+        ratio = (calib_cap / blended).clamp_(max=1.15)
+        recalibrated = torch.minimum(target_scores * ratio, calib_cap)
+        target_scores = torch.where(fg_mask.unsqueeze(-1), recalibrated, target_scores)
         return target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx
 
     return decoupled_forward
@@ -186,14 +174,41 @@ def make_nwd_iou_calculation(orig_iou_fn, weight: float = 0.50, constant_c: floa
     return patched_iou_calculation
 
 
+def _compute_dfl_or_l1(
+    bbox_loss_obj,
+    pred_dist: torch.Tensor,
+    anchor_points: torch.Tensor,
+    target_bboxes: torch.Tensor,
+    fg_idx: tuple[torch.Tensor, ...],
+    pos_weight: torch.Tensor,
+    target_scores_sum: torch.Tensor,
+    imgsz: torch.Tensor,
+    stride: torch.Tensor,
+) -> torch.Tensor:
+    """Compute Ultralytics DFL or stride-scaled L1 loss reusing pre-computed ``fg_idx`` once."""
+    dfl_fn = getattr(bbox_loss_obj, "dfl_loss", None)
+    if dfl_fn:
+        target_ltrb = bbox2dist(anchor_points, target_bboxes, dfl_fn.reg_max - 1)
+        loss_dfl = dfl_fn(pred_dist[fg_idx].view(-1, dfl_fn.reg_max), target_ltrb[fg_idx]) * pos_weight
+        return loss_dfl.sum() / target_scores_sum
+    target_ltrb = bbox2dist(anchor_points, target_bboxes) * stride
+    target_ltrb[..., 0::2] /= imgsz[1]
+    target_ltrb[..., 1::2] /= imgsz[0]
+    pred_scaled = pred_dist * stride
+    pred_scaled[..., 0::2] /= imgsz[1]
+    pred_scaled[..., 1::2] /= imgsz[0]
+    loss_dfl = F.l1_loss(pred_scaled[fg_idx], target_ltrb[fg_idx], reduction="none").mean(-1, keepdim=True) * pos_weight
+    return loss_dfl.sum() / target_scores_sum
+
+
 def make_wasserstein_bbox_forward(
-    orig_bbox_forward,
+    bbox_loss_obj,
     weight: float,
     ref_scale_px: float = 32.0,
     tau_px: float | None = None,
     beta_px: float = 3.5,
 ):
-    """Augment ``BboxLoss.forward`` with bounded scale-invariant Wasserstein regression loss."""
+    """Unified CIoU + bounded scale-invariant Wasserstein ``BboxLoss.forward`` (single ``nonzero``)."""
     ref_area = max(ref_scale_px * ref_scale_px, 1.0)
 
     def patched_bbox_forward(
@@ -207,22 +222,16 @@ def make_wasserstein_bbox_forward(
         imgsz,
         stride,
     ):
-        loss_iou, loss_dfl = orig_bbox_forward(
-            pred_dist,
-            pred_bboxes,
-            anchor_points,
-            target_bboxes,
-            target_scores,
-            target_scores_sum,
-            fg_mask,
-            imgsz,
-            stride,
-        )
         fg_idx = fg_mask.nonzero(as_tuple=True)
-        if fg_idx[0].numel() == 0:
-            return loss_iou, loss_dfl
+        pos_weight = target_scores[fg_idx].sum(-1, keepdim=True)
         fg_pred = pred_bboxes[fg_idx]
         fg_target = target_bboxes[fg_idx]
+        iou = bbox_iou(fg_pred, fg_target, xywh=False, CIoU=True)
+        loss_iou = ((1.0 - iou) * pos_weight).sum() / target_scores_sum
+        loss_dfl = _compute_dfl_or_l1(
+            bbox_loss_obj, pred_dist, anchor_points, target_bboxes, fg_idx, pos_weight, target_scores_sum, imgsz, stride
+        )
+
         fg_stride = stride[fg_idx[1]]
         gt_area_px = (
             (fg_target[:, 2] - fg_target[:, 0]).clamp(min=0.0)
@@ -231,10 +240,11 @@ def make_wasserstein_bbox_forward(
         )
         if tau_px is not None:
             size_px = gt_area_px.sqrt()
-            scale_gate = (float(weight) * torch.sigmoid((float(tau_px) - size_px) / max(float(beta_px), 0.5))).unsqueeze(-1)
+            scale_gate = (
+                float(weight) * torch.sigmoid((float(tau_px) - size_px) / max(float(beta_px), 0.5))
+            ).unsqueeze(-1)
         else:
             scale_gate = (float(weight) / (1.0 + gt_area_px / ref_area)).unsqueeze(-1)
-        pos_weight = target_scores[fg_idx].sum(-1, keepdim=True)
         dist = scale_invariant_wasserstein_xyxy(fg_pred, fg_target).unsqueeze(-1)
         w_loss = ((dist / (1.0 + dist)) * scale_gate.to(dist.dtype) * pos_weight.to(dist.dtype)).sum()
         loss_iou = loss_iou + (w_loss / target_scores_sum.to(dist.dtype)).to(loss_iou.dtype)
@@ -243,8 +253,8 @@ def make_wasserstein_bbox_forward(
     return patched_bbox_forward
 
 
-def make_nwd_bbox_forward(orig_bbox_forward, weight: float = 0.50, constant_c: float = 12.8):
-    """Hybrid CIoU + NWD regression loss ``(1 - w) * L_CIoU + w * (1 - NWD)`` in pixel coordinates."""
+def make_nwd_bbox_forward(bbox_loss_obj, weight: float = 0.50, constant_c: float = 12.8):
+    """Unified CIoU + NWD ``BboxLoss.forward`` ``(1 - w) * L_CIoU + w * (1 - NWD)`` (single ``nonzero``)."""
     w = float(weight)
 
     def patched_bbox_forward(
@@ -258,24 +268,19 @@ def make_nwd_bbox_forward(orig_bbox_forward, weight: float = 0.50, constant_c: f
         imgsz,
         stride,
     ):
-        loss_iou, loss_dfl = orig_bbox_forward(
-            pred_dist,
-            pred_bboxes,
-            anchor_points,
-            target_bboxes,
-            target_scores,
-            target_scores_sum,
-            fg_mask,
-            imgsz,
-            stride,
-        )
         fg_idx = fg_mask.nonzero(as_tuple=True)
-        if fg_idx[0].numel() == 0:
-            return loss_iou, loss_dfl
-        fg_stride = stride[fg_idx[1]]
-        fg_pred_px = pred_bboxes[fg_idx] * fg_stride
-        fg_target_px = target_bboxes[fg_idx] * fg_stride
         pos_weight = target_scores[fg_idx].sum(-1, keepdim=True)
+        fg_pred = pred_bboxes[fg_idx]
+        fg_target = target_bboxes[fg_idx]
+        iou = bbox_iou(fg_pred, fg_target, xywh=False, CIoU=True)
+        loss_iou = ((1.0 - iou) * pos_weight).sum() / target_scores_sum
+        loss_dfl = _compute_dfl_or_l1(
+            bbox_loss_obj, pred_dist, anchor_points, target_bboxes, fg_idx, pos_weight, target_scores_sum, imgsz, stride
+        )
+
+        fg_stride = stride[fg_idx[1]]
+        fg_pred_px = fg_pred * fg_stride
+        fg_target_px = fg_target * fg_stride
         nwd_sim = nwd_similarity_xyxy(fg_pred_px, fg_target_px, constant_c=constant_c).unsqueeze(-1)
         nwd_loss = (((1.0 - nwd_sim) * pos_weight.to(nwd_sim.dtype)).sum() / target_scores_sum.to(nwd_sim.dtype)).to(
             loss_iou.dtype
@@ -368,7 +373,7 @@ def _install_hooks() -> None:
                 bbox_loss = loss.bbox_loss
                 if loss_wasserstein > 0.0 and not getattr(bbox_loss, "_wasserstein_patched", False):
                     bbox_loss.forward = make_wasserstein_bbox_forward(
-                        bbox_loss.forward,
+                        bbox_loss,
                         loss_wasserstein,
                         ref_scale_px=ref_scale_px,
                         tau_px=tau_px,
@@ -377,7 +382,7 @@ def _install_hooks() -> None:
                     bbox_loss._wasserstein_patched = True
                 elif loss_nwd > 0.0 and not getattr(bbox_loss, "_nwd_patched", False):
                     bbox_loss.forward = make_nwd_bbox_forward(
-                        bbox_loss.forward, loss_nwd, constant_c=nwd_constant
+                        bbox_loss, loss_nwd, constant_c=nwd_constant
                     )
                     bbox_loss._nwd_patched = True
 
