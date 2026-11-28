@@ -117,7 +117,7 @@ Bảng 1.2: Tổng hợp kết quả tham khảo đã công bố trên tập ki�
 | RetinaNet [23] | ImageNet | ~34,0 M | Có | 30,82 | 11,47 |
 | Faster R-CNN [21] | ImageNet | ~41,0 M | Có | 43,55 | 29,21 |
 | **(b) Họ hai giai đoạn cải tiến [1, 2, 4] (2 lớp, Tiled Slicing)** | | | | | |
-| Faster R-CNN-FPN [21, 22] | ImageNet | ~41,0 M | Có | 47,35 | 30,20 |
+| Faster R-CNN-FPN [21, 22] | ImageNet | ~41,0 M | Có | 47,35 | 30,25 |
 | Faster R-CNN-FPN + MSM [1] | ImageNet | ~41,0 M | Có | 50,89 | 33,79 |
 | Faster R-CNN-FPN + SM+ [2] | ImageNet | ~41,0 M | Có | 52,61 | 34,20 |
 | Cascade R-CNN [26] | ImageNet | >60,0 M | Có | 57,19 | 45,21 |
@@ -161,7 +161,7 @@ Bảng 2.1: Độ phủ ô lưới của đối tượng theo stride $r_s$ ở c
 | $P_2$ | 4 | $320 \times 320$ | 32 | $2{,}00$ ô | $0{,}67$ ô | Tầng chủ lực cho *tiny1*–*tiny2*; **kích hoạt GauCon** |
 | $P_3$ | 8 | $160 \times 160$ | 64 | $1{,}00$ ô | $0{,}33$ ô | Tầng chủ lực cho *tiny2*–*small*; **kích hoạt GauCon** |
 | $P_4$ | 16 | $80 \times 80$ | 128 | $0{,}50$ ô | $0{,}17$ ô | Phục vụ vật >28 px + làm ô cha cho $P_3$; **giữ nguyên $\mathcal{H}_{1:1}$ gốc** |
-| $P_5$ | 32 | $40 \times 40$ | 256 | $0{,}20$ ô | $0{,}08$ ô | Phục vụ vật lớn và ngữ cảnh rộng; **giữ nguyên $\mathcal{H}_{1:1}$ gốc** |
+| $P_5$ | 32 | $40 \times 40$ | 256 | $0{,}25$ ô | $0{,}08$ ô | Phục vụ vật lớn và ngữ cảnh rộng; **giữ nguyên $\mathcal{H}_{1:1}$ gốc** |
 
 Bảng 2.1 giải thích hai quyết định thiết kế nền tảng:
 1. Ở chế độ lát cắt 1:1, một người rộng 6–16 pixel phủ 1,5–4 ô trên lưới $P_2$ và 1–2 ô trên lưới $P_3$. Các ô trong cửa sổ $3 \times 3$ quanh tâm vật cùng tiếp nhận phần thân đối tượng và đưa ra các hộp dự đoán độc lập có sai số biên ngẫu nhiên. Hợp nhất có trọng số các ước lượng lân cận này ngay trong đầu mạng giúp giảm phương sai biên hộp so với hồi quy đơn ô cô lập.
@@ -234,7 +234,7 @@ Trong đó: $D_k(u) \ge 0$ là khoảng cách Wasserstein chuẩn hóa không đ
 
 Hình 2.4: Đặc tính giải tích của cổng kích thước logistic và phép đo bất biến tỉ lệ: *(a)* Cổng logistic $g(s_{\mathrm{gt}})$ ($\tau_{\mathrm{px}} = 20$ px) so với hàm suy giảm đuôi nặng Cauchy; *(b)* Độ tương đồng $S_W = (1 + D)^{-1}$ giữ giá trị hằng $0{,}80$ qua mọi tỉ lệ hộp $s$ khi độ lệch tâm bằng 25% chiều rộng, trong khi NWD ($C = 12{,}8$ px) suy giảm từ 0,895 xuống 0,171
 
-Hình 2.4(b) cho thấy khi phóng đại hay thu nhỏ cả hai hộp bởi bất kỳ hệ số $\lambda > 0$ nào, cả tử số lẫn mẫu số trong (2.9) đều nhân với $\lambda^2$ và giản ước, cho $D_k$ gần như không đổi khi cả hai hộp được co giãn cùng tỷ lệ. Do mẫu số có thêm hằng số ổn định số học $\epsilon$, tính bất biến không còn tuyệt đối ở các thang cực nhỏ; trong miền kích thước thực nghiệm, thành phần này được dùng để tránh chia cho 0.
+Hình 2.4(b) cho thấy khi phóng đại hay thu nhỏ cả hai hộp bởi bất kỳ hệ số $\lambda > 0$ nào, cả tử số lẫn mẫu số trong (2.9) đều nhân với $\lambda^2$ và giản ước, cho $D_k$ gần như không đổi khi cả hai hộp được co giãn cùng tỷ lệ. Hằng số ổn định số học $\epsilon$ khiến tính bất biến không tuyệt đối ở các thang cực nhỏ.
 
 #### 2.3.3. Tinh chỉnh hộp bằng Trọng tâm Wasserstein cục bộ
 
@@ -243,10 +243,10 @@ $$\ell_0 = \gamma_{\mathrm{box}}^{(s)}\log\sigma(s_0), \qquad \ell_k = \gamma_{\
 $$w_k(u) = \frac{\exp\big(\ell_k(u)\big)}{\sum_{j=0}^{9} \exp\big(\ell_j(u)\big)}, \qquad k \in \{0, \dots, 9\}$$ (2.11)
 Trong đó: $\sigma(\cdot)$ là hàm sigmoid, $s_k = s_k(u)$ và $D_k = D_k(u)$ viết gọn tại ô $u$, $\gamma_{\mathrm{box}}^{(s)} = \mathrm{softplus}(\hat{\gamma}_{\mathrm{box}}^{(s)})$ (khởi tạo 1,0) điều khiển độ nhạy theo độ tin cậy, và $\tau_{\mathrm{box}}^{(s)} = \mathrm{softplus}(\hat{\tau}_{\mathrm{box}}^{(s)}) + 0{,}1$ (khởi tạo 1,5) kiểm soát bán kính gom cụm trong không gian Wasserstein trên mức $s$. Các đại lượng từ các ô láng giềng $(\tilde{\boldsymbol{\mu}}_k, \tilde{\boldsymbol{\sigma}}_k, s_k)$ được ngắt lan truyền ngược gradient khi tính $w_k$, đồng thời phép tính hình học thực hiện ở độ chính xác đơn (FP32) nhằm bảo toàn ổn định số học khi huấn luyện hỗn hợp FP16.
 
-Thay vì gán trực tiếp bằng trọng tâm đầy đủ (2.4) vốn tương ứng $\beta_{\mathrm{box}}^{(s)} = 1$, mô hình thực hiện một bước nội suy với hệ số học được $\beta_{\mathrm{box}}^{(s)} = \sigma(\hat{\beta}_{\mathrm{box}}^{(s)}) \in (0, 1)$ (khởi tạo 0,06) hướng về trọng tâm Wasserstein (khi $\beta_{\mathrm{box}} \to 0$ sẽ giữ nguyên dự đoán thô gốc):
+Thay vì gán trực tiếp bằng trọng tâm đầy đủ (2.4) vốn tương ứng $\beta_{\mathrm{box}}^{(s)} = 1$, mô hình thực hiện một bước cập nhật nội suy có hệ số bước khả học $\beta_{\mathrm{box}}^{(s)} = \sigma(\hat{\beta}_{\mathrm{box}}^{(s)}) \in (0, 1)$ (khởi tạo 0,06) hướng về trọng tâm Wasserstein (khi $\beta_{\mathrm{box}} \to 0$ sẽ giữ nguyên dự đoán thô gốc):
 $$\boldsymbol{\mu}_{\mathrm{ref}}(u) = \boldsymbol{\mu}_0(u) + \beta_{\mathrm{box}}^{(s)} \sum_{k=1}^{9} w_k(u)\,\big(\tilde{\boldsymbol{\mu}}_k(u) - \boldsymbol{\mu}_0(u)\big)$$ (2.12)
 $$\boldsymbol{\sigma}_{\mathrm{ref}}(u) = \max\!\left(\boldsymbol{\sigma}_0(u) + \beta_{\mathrm{box}}^{(s)} \sum_{k=1}^{9} w_k(u)\,\big(\tilde{\boldsymbol{\sigma}}_k(u) - \boldsymbol{\sigma}_0(u)\big),\, \epsilon_\sigma\right)$$ (2.13)
-Trong đó: phần tổng có trọng số $\sum_{k=1}^{9} w_k(\tilde{\boldsymbol{\mu}}_k - \boldsymbol{\mu}_0) = \boldsymbol{\mu}^\star - \boldsymbol{\mu}_0$ chính là dịch chuyển hướng về trọng tâm Wasserstein ở (2.4). Khi hai người đứng sát nhau ở hai ô kề nhau (Hình 2.3a), hai hộp có $D_k(u)$ lớn kéo $w_k(u) \to 0$, tránh hiện tượng kéo chập hai hộp lại làm một; khi nhiều ô cùng nhìn một người ($D_k(u) \approx 0$), nội suy trọng tâm giúp giảm phương sai biên hộp.
+Trong đó: phần tổng có trọng số $\sum_{k=1}^{9} w_k(\tilde{\boldsymbol{\mu}}_k - \boldsymbol{\mu}_0) = \boldsymbol{\mu}^\star - \boldsymbol{\mu}_0$ chính là dịch chuyển hướng về trọng tâm Wasserstein ở (2.4). Khi hai người đứng sát nhau ở hai ô kề nhau (Hình 2.3a), khoảng cách hình học lớn làm giảm trọng số của các hộp không tương ứng, hạn chế việc hai hộp bị kéo về cùng một vị trí. Khi nhiều ô cùng dự đoán một người, nội suy trọng tâm có thể giảm biến thiên của biên hộp.
 
 #### 2.3.4. Cổng điều biến quan hệ lân cận không dùng BatchNorm (FG-Gate)
 
@@ -298,11 +298,11 @@ Trong đó: $D_{\mathrm{dist}}^{(s)}(u) = D(\mathcal{G}_0^{(s)}(u), \mathcal{G}_
 
 1. Tính khoảng cách biên thô $\mathbf{D}_0^{(s)}$ và logit phân loại thô $\mathbf{S}_{\mathrm{raw}}^{(s)}$ từ $\mathbf{X}_s$.
 2. Với mỗi ô $u=(y,x)$, chuyển khoảng cách biên thành tâm và độ lệch chuẩn Gauss theo (2.5). Tính điểm tiền cảnh $s_0(u)=\max_c \mathbf{s}_{\mathrm{raw}}^{(s)}(u,c)$.
-3. Lấy 8 ô lân cận trong cửa sổ $3\times3$. Đưa các tâm hộp về hệ tọa độ cục bộ của ô $u$ theo (2.7).
+3. Lấy 8 ô lân cận trong cửa sổ $3\times3$ và đưa tâm hộp về hệ tọa độ cục bộ của ô $u$ theo (2.7).
 4. Lấy ô cha $u_p=(\lfloor y/2\rfloor,\lfloor x/2\rfloor)$ từ mức $s+1$ và quy đổi tọa độ theo (2.8).
 5. Tính khoảng cách $D_k(u)$ cho 9 ứng viên theo (2.9). Loại các ứng viên vượt biên hoặc khác lớp bằng cách đặt khoảng cách lớn.
 6. Tính trọng số $w_k(u)$ bằng softmax của điểm tin cậy và khoảng cách hình học theo (2.10)–(2.11).
-7. Cập nhật tâm và độ lệch chuẩn bằng nội suy có hệ số $\beta_{\mathrm{box}}^{(s)}$ theo (2.12)–(2.13).
+7. Cập nhật tâm và độ lệch chuẩn bằng nội suy với hệ số $\beta_{\mathrm{box}}^{(s)}$ theo (2.12)–(2.13).
 8. Tính các đặc trưng quan hệ lân cận theo (2.14)–(2.15), sau đó điều chỉnh logit theo (2.16).
 9. Chuyển phân phối Gauss đã hiệu chỉnh về bốn khoảng cách biên theo (2.6) và trả về hai đầu ra.
 
@@ -327,7 +327,7 @@ Bảng 2.3: Thống kê tham số học được tăng thêm của GauCon trên 
 
 | Thành phần trong GauCon | Biểu thức tính số tham số | Số tham số trên 1 mức | Tổng trên $\{P_2, P_3\}$ |
 |---|---|---|---|
-| Bộ lấy mẫu theo chỉ số lân cận $3 \times 3$ | Chỉ số cố định, không có trọng số khả học | 0 | 0 |
+| Bộ dịch chỉ số lân cận $3 \times 3$ | Chỉ số cố định, không có trọng số khả học | 0 | 0 |
 | Tham số trọng tâm nhánh hộp $(\hat{\tau}_{\mathrm{box}}, \hat{\gamma}_{\mathrm{box}}, \hat{\beta}_{\mathrm{box}})$ | $3 \times 1$ tham số vô hướng | 3 | 6 |
 | Tham số nhiệt độ gắn kết phân loại $\hat{\tau}_{\mathrm{cls}}$ | $1 \times 1$ tham số vô hướng | 1 | 2 |
 | Tầng chiếu ẩn $\mathcal{M}_s^{(1)}$ ($\mathrm{PWConv}_{20 \to 16}$, có bias, không BN) | $20 \times 16 + 16$ | 336 | 672 |
@@ -353,7 +353,7 @@ Bảng 2.4: Cấu hình huấn luyện dùng chung cho các mô hình đối ch�
 | Tăng cường dữ liệu | Lật ngang $0{,}5$, dịch $0{,}05$, tỉ lệ $0{,}15$, HSV $(0{,}005; 0{,}10; 0{,}15)$; **tắt Mosaic & MixUp** | Ghép Mosaic thu nhỏ vật thêm 2–4 lần khiến người 2–6 px rơi xuống dưới 1 px |
 | Tham số GauCon & DW-TAL | Kích hoạt 2 mức $\{P_2, P_3\}$, bật FG-Gate, $\tau_{\mathrm{px}} = 20{,}0$, $\beta_{\mathrm{px}} = 3{,}5$, $\lambda_{\mathrm{tal}} = 0{,}45$, $\lambda_{\mathrm{reg}} = 0{,}20$, $\lambda_{\mathrm{dist}} = 0{,}25$ | Khoanh vùng tác động vào dải $\le 20$ px trên $P_2, P_3$ |
 | Đối chứng NWD chuẩn | Trọng số gán nhãn $\alpha_{\mathrm{NWD}} = 0{,}50$, mất mát $\lambda_{\mathrm{NWD}} = 0{,}50$, $C = 12{,}8$ px | Cấu hình gốc của bài báo NWD [13, 14] |
-| Chọn mô hình đánh giá | Chọn mô hình tốt nhất theo $mAP_{50}$ trên 84 ảnh kiểm định (*val*), random seed = 42 | Tập kiểm tra (*test*) 786 ảnh chỉ chạy đánh giá một lần sau khi kết thúc huấn luyện |
+| Chọn mô hình đánh giá | Chọn mô hình tốt nhất theo $mAP_{50}$ trên 84 ảnh kiểm định (*val*), seed = 42 | Tập kiểm tra (*test*) 786 ảnh chỉ chạy đánh giá một lần sau khi kết thúc huấn luyện |
 
 ---
 
@@ -425,11 +425,11 @@ Bảng 3.3: Kết quả đối chứng trên tập kiểm tra TinyPerson ở ch�
 | *tiny* $AP_{50}$ (%) $\uparrow$ | **36,28** | 35,74 | 36,06 | −0,22 | +0,32 |
 | *tiny1* (2–8 px) $AP_{50}$ (%) $\uparrow$ | **18,71** | 18,46 | 18,34 | −0,37 | −0,12 |
 | *tiny2* (8–12 px) $AP_{50}$ (%) $\uparrow$ | 37,48 | 36,53 | **37,90** | **+0,42** | **+1,37** |
-| *tiny3* (12–20 px) $AP_{50}$ (%) $\uparrow$ | **46,23** | 45,94 | 45,79 | −0,44 | −0,15 |
+| *tiny3* (12–20 px) $AP_{50}$ (%) $\uparrow$ | **46,23** | 45,94 | 45,79 | −0,44 | −0,06 |
 | *small* (20–32 px) $AP_{50}$ (%) $\uparrow$ | 53,07 | 52,90 | **54,32** | **+1,25** | **+1,42** |
 | *reasonable* (>32 px) $AP_{50}$ (%) $\uparrow$ | 58,77 | 62,48 | **63,09** | **+4,32** | **+0,61** |
 | ***all* $AP_{75}$ (%) $\uparrow$** | 4,44 | 4,13 | **4,78** | **+0,34** | **+0,65** |
-| *all* $AP_{25}$ (%) $\uparrow$ | 69,29 | **71,44** | 71,19 | +1,90 | −0,20 |
+| *all* $AP_{25}$ (%) $\uparrow$ | 69,29 | **71,44** | 71,19 | +1,90 | −0,25 |
 | ***all* $MR_{50}$ (%) $\downarrow$** | 91,97 | 92,42 | **91,32** | **−0,65** | **−1,10** |
 | **COCO $AP_{50:95}$ (@500) (%) $\uparrow$** | 13,51 | 13,35 | **14,00** | **+0,49** | **+0,65** |
 | **Validation $mAP_{50}$ đỉnh (%) $\uparrow$** | 39,96 | 39,67 | **42,24** | **+2,28** | **+2,57** |
@@ -489,7 +489,7 @@ Hình 3.5 và Hình 3.6 cho thấy GauCon tách khỏi đường cơ sở Base v
 Hình 3.7: Quỹ đạo thực tế các tham số học được trong đầu phát hiện GauCon qua 80 epoch: *(a)* Bước trọng tâm $\beta_{\mathrm{box}}$ trên $P_2, P_3$ và hàm mất mát chưng cất $\mathcal{L}_{\mathrm{distill}}$; *(b)* Nhiệt độ phân bố $\tau_{\mathrm{box}}$ và $\tau_{\mathrm{cls}}$
 
 Hình 3.7 ghi nhận động học thực tế của các tham số khả học nội tại trong suốt 80 epoch huấn luyện:
-- Tham số bước nội suy $\beta_{\mathrm{box}}$ hội tụ giảm từ khởi tạo 0,060 về $\beta_{\mathrm{box}}^{(P_2)} = 0{,}0405$ và $\beta_{\mathrm{box}}^{(P_3)} = 0{,}0456$, nghĩa là thành phần hộp chỉ dịch chuyển khoảng 4% về phía trọng tâm lân cận. Mức bước nhỏ này cho thấy mức hiệu chỉnh biên của mô hình tương đối nhỏ; khi chưa có thí nghiệm tắt riêng $\beta_{\mathrm{box}} = 0$, không thể quy toàn bộ mức giảm $E_{\mathrm{loc}}$ hay cải thiện $AP_{75}$ riêng cho phép dịch tâm mà phải đánh giá trong tổng thể cùng DW-TAL và chưng cất $\mathcal{H}_{1:M}$.
+- Tham số bước nội suy $\beta_{\mathrm{box}}$ hội tụ giảm từ khởi tạo 0,060 về $\beta_{\mathrm{box}}^{(P_2)} = 0{,}0405$ và $\beta_{\mathrm{box}}^{(P_3)} = 0{,}0456$, nghĩa là thành phần hộp chỉ dịch chuyển khoảng 4% về phía trọng tâm lân cận. Mức bước nhỏ này cho thấy mô hình giữ hiệu chỉnh biên rất bảo thủ; khi chưa có thí nghiệm tắt riêng $\beta_{\mathrm{box}} = 0$, không thể quy toàn bộ mức giảm $E_{\mathrm{loc}}$ hay cải thiện $AP_{75}$ riêng cho phép dịch tâm mà phải đánh giá trong tổng thể cùng DW-TAL và chưng cất $\mathcal{H}_{1:M}$.
 - Hệ số nhiệt độ nhánh hộp tăng lên $\tau_{\mathrm{box}}^{(P_2)} = 1{,}524$ và $\tau_{\mathrm{box}}^{(P_3)} = 1{,}598$, trong khi nhánh phân loại phân hóa thành $\tau_{\mathrm{cls}}^{(P_2)} = 1{,}492$ và $\tau_{\mathrm{cls}}^{(P_3)} = 1{,}366$. Song hành là mất mát chưng cất $\mathcal{L}_{\mathrm{distill}}$ giảm đều về mức 0,0248 ở epoch 80.
 
 ### 3.6. Phân tích định tính trên đa bối cảnh kiểm tra
@@ -521,14 +521,14 @@ Kết quả Bảng 3.5 mô tả chi phí tính toán và phép đo suy luận tr
 
 ### 3.8. Hạn chế và các yếu tố ảnh hưởng đến độ tin cậy của kết quả
 
-Bảng 3.6 tổng hợp các giới hạn của thực nghiệm và hướng kiểm chứng tiếp theo.
+Bảng 3.6 tổng hợp bốn giới hạn hiện tại của thực nghiệm cùng hướng khắc phục tương ứng.
 
 Bảng 3.6: Tổng hợp các hạn chế thực nghiệm và hướng khắc phục trong nghiên cứu tiếp theo
 
 | Hạng mục hạn chế | Tác động đến việc diễn giải kết quả | Hướng khắc phục cụ thể |
 |---|---|---|
 | Chưa có thí nghiệm tách bỏ từng cơ chế (*ablation*) | Chưa tách được đóng góp riêng của trọng tâm $W_2$ ($\beta_{\mathrm{box}} \approx 0{,}04$), FG-Gate, DW-TAL và chưng cất; cũng chưa cô lập nguồn gốc mức tăng +8,33 điểm ở nhóm *reasonable* (>48 px) | Chạy tối thiểu 3 cấu hình đối chứng tắt từng thành phần ($\beta_{\mathrm{box}} = 0$, tắt DW-TAL, tắt FG-Gate) dưới cùng điều kiện 80 epoch COCO |
-| Mỗi cấu hình huấn luyện với một random seed (seed = 42) | Dù Bootstrap theo ảnh cho thấy chênh lệch Tiled $AP_{50}$ giữa GauCon và NWD rất nhỏ (+0,08 điểm, khoảng tin cậy chứa 0), còn chênh lệch $AP_{75}$ là +1,28 điểm; phép lấy mẫu theo ảnh chưa mô hình hóa tương quan giữa các khung hình cùng video, chênh lệch Full $AP_{50}$ so với NWD (+0,89, 95% CI [−0,12; +1,90]) vắt qua 0 và phương sai giữa các lần chạy ngẫu nhiên chưa được đo | Lặp lại tối thiểu 3–5 lần khởi tạo ngẫu nhiên (random seed) độc lập để tính giá trị trung bình và độ lệch chuẩn (*mean ± std*) |
+| Mỗi cấu hình huấn luyện với một random seed (seed = 42) | Dù bootstrap theo ảnh cho thấy một số chênh lệch có khoảng tin cậy không chứa 0, phép lấy mẫu này chưa tính đến tương quan giữa các khung hình cùng video, chênh lệch Full $AP_{50}$ so với NWD (+0,89, 95% CI [−0,12; +1,90]) vắt qua 0 và phương sai giữa các lần chạy ngẫu nhiên chưa được đo | Lặp lại tối thiểu 3–5 lần khởi tạo ngẫu nhiên (random seed) độc lập để tính giá trị trung bình và độ lệch chuẩn (*mean ± std*) |
 | Đánh đổi tại *tiny1*, cụm sát < 10 px và $E_{\mathrm{bkg}}$ Tiled | GauCon thua NWD ở *tiny1* (25,53% vs 27,91% Tiled; 18,34% vs 18,46% Full) lẫn Recall cụm < 10 px (38,06% vs 38,71% Full), đồng thời $E_{\mathrm{bkg}}$ Tiled tăng +28,7% so với Base | Điều chỉnh tham số $\eta, \tau_{\mathrm{px}}$ trên tập kiểm định và kết hợp theo dõi chuỗi thời gian cho ảnh *tiny1* |
 | Thiếu đối chứng RFLA/BPD-YOLO cùng giao thức & nhiễu đo FPS | Chưa tái huấn luyện RFLA [16], BPD-YOLO [5] hay YOLOv8n-P2 ở cùng chế độ 80 epoch COCO; phép đo L4 1 phiên còn nhiễu làm Base chậm hơn GauCon | Bổ sung đối chứng cùng giao thức và đo lại độ trễ đa phiên (*mean ± std*) trên L4 lẫn Jetson Orin Nano |
 
@@ -539,7 +539,7 @@ Bảng 3.6: Tổng hợp các hạn chế thực nghiệm và hướng khắc ph
 Đồ án đã đề xuất và đánh giá GauCon cùng DW-TAL trên YOLO26n-P2 cho bài toán phát hiện người cực nhỏ trong bộ dữ liệu TinyPerson. Đối chiếu theo bốn mục tiêu đề ra ở Mục 1.4:
 
 1. Mục tiêu 1 (Đường cơ sở và quy trình đánh giá chống rò rỉ): Đã xây dựng quy trình huấn luyện và chấm điểm thống nhất trên tập TinyPerson tách biệt hoàn toàn theo tiền tố chuỗi video (662 ảnh *train*, 84 ảnh *val*, 786 ảnh *test* với 13.687 nhãn người GT), đo đồng bộ ở cả giao thức lát cắt $640 \times 512$, toàn khung $1280 \times 1280$, COCO $AP_{50:95}$ và phân rã TIDE.
-2. Mục tiêu 2 (Đầu phát hiện GauCon siêu nhẹ bảo toàn tốc độ suy luận): Chỉ áp dụng chọn lọc trên $P_2, P_3$ bằng phép lấy mẫu theo chỉ số lân cận $0$ FLOP, khoảng cách Wasserstein chuẩn hóa theo phương sai cục bộ (bất biến tỉ lệ), trọng tâm Wasserstein cục bộ và cổng FG-Gate không dùng chuẩn hóa theo batch, GauCon chỉ cộng thêm 714 tham số (+0,030% sau hợp nhất, tổng 2.402.374 tham số) và vận hành ở tốc độ 73,95 FPS (13,52 ms/khung hình) trên NVIDIA L4.
+2. Mục tiêu 2 (Đầu phát hiện GauCon siêu nhẹ bảo toàn tốc độ suy luận): Chỉ áp dụng chọn lọc trên $P_2, P_3$ bằng phép dịch chỉ số lân cận $0$ FLOP, khoảng cách Wasserstein chuẩn hóa theo phương sai cục bộ (bất biến tỉ lệ), trọng tâm Wasserstein cục bộ và cổng FG-Gate không dùng chuẩn hóa theo batch, GauCon chỉ cộng thêm 714 tham số (+0,030% sau hợp nhất, tổng 2.402.374 tham số) và vận hành ở tốc độ 73,95 FPS (13,52 ms/khung hình) trên NVIDIA L4.
 3. Mục tiêu 3 (Gán nhãn tách rời DW-TAL và chưng cất không phát sinh chi phí suy luận): Cổng điều biến kích thước logistic ($\tau_{\mathrm{px}} = 20$ px) kết hợp giới hạn mục tiêu mềm theo $\mathrm{IoU}$ thực được sử dụng trong cấu hình thực nghiệm; trên chế độ toàn khung, GauCon giữ $E_{\mathrm{bkg}} = 8.683$ thấp hơn NWD (9.021) dù vẫn cao hơn Base (7.341), và trong chế độ lát cắt $E_{\mathrm{bkg}}$ tăng +28,7% so với Base (16.422 lên 21.130).
 4. Mục tiêu 4 (Kết quả thực nghiệm đối chứng trong phạm vi đơn seed): Ở chế độ lát cắt $640 \times 512$, GauCon nâng $AP_{50}^{all}$ từ 45,58% lên 48,53% (+2,95 điểm, 95% CI [+1,92; +4,02]) và $AP_{75}^{all}$ lên 7,37% (vượt Base +0,97 điểm và NWD +1,28 điểm). Trên toàn khung $1280 \times 1280$, GauCon đạt 44,13% $AP_{50}^{all}$ (cao hơn cả Base 43,08%, Base + Soft-NMS 43,37% lẫn NWD 43,24%), giảm 22,2% hộp trùng (1.027 xuống 799), đồng thời ghi nhận rõ các hạn chế cần hoàn thiện về nhóm *tiny1* và hiện tượng tăng gián tiếp trên nhóm *reasonable*.
 
@@ -609,7 +609,7 @@ Hướng phát triển tiếp theo tập trung vào ba trọng tâm khắc phụ
 
 [30] A. Neubeck and L. Van Gool, "Efficient Non-Maximum Suppression," in *Proc. 18th Int. Conf. Pattern Recognition (ICPR)*, vol. 3, 2006, pp. 850–855.
 
-[31] N. Bodla, B. Singh, R. Chellappa, and L. S. Davis, "Soft-NMS , Improving Object Detection with One Line of Code," in *Proc. IEEE Int. Conf. Computer Vision (ICCV)*, 2017, pp. 5561–5569.
+[31] N. Bodla, B. Singh, R. Chellappa, and L. S. Davis, "Soft-NMS — Improving Object Detection with One Line of Code," in *Proc. IEEE Int. Conf. Computer Vision (ICCV)*, 2017, pp. 5561–5569.
 
 [32] S. Ioffe and C. Szegedy, "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift," in *Proc. 32nd Int. Conf. Machine Learning (ICML)*, 2015, pp. 448–456.
 
@@ -645,7 +645,7 @@ Bảng 3.7: Đặc tả các tầng kiến trúc mạng YOLO26n-P2 tích hợp G
 | Neck (Bottom-Up) | $P_2$ | $\mathrm{Upsample}_{2\times} + \mathrm{Concat}(C_2) + \mathrm{C3k2}$ | $320 \times 320 \times 32$ | 4 | Bản đồ đặc trưng đầu ra độ phân giải cao |
 | Neck (Bottom-Up) | $P_3$ | $\mathrm{Conv}_{3\times 3, s=2} + \mathrm{Concat}(N_3) + \mathrm{C3k2}$ | $160 \times 160 \times 64$ | 8 | Bản đồ đặc trưng đầu ra dải nhỏ–vừa |
 | Neck (Bottom-Up) | $P_4, P_5$ | $\mathrm{Conv}_{3\times 3, s=2} + \mathrm{Concat} + \mathrm{C3k2}$ | $80^2 \times 128$, $40^2 \times 256$ | 16, 32 | Bản đồ đầu ra vật >28 px và ô cha $P_3$ |
-| Head ($\mathcal{H}_{1:1}$) | $P_2, P_3$ | $\Phi_{\mathrm{box}}^{(s)}, \Phi_{\mathrm{cls}}^{(s)}$ + **GauCon** | $320^2, 160^2$ | 4, 8 | Trọng tâm $W_2$ + FG-Gate (+357 tham số/mức) |
+| Head ($\mathcal{H}_{1:1}$) | $P_2, P_3$ | $\Phi_{\mathrm{box}}^{(s)}, \Phi_{\mathrm{cls}}^{(s)}$ + GauCon | $320^2, 160^2$ | 4, 8 | Trọng tâm $W_2$ + FG-Gate (+357 tham số/mức) |
 | Head ($\mathcal{H}_{1:1}$) | $P_4, P_5$ | $\Phi_{\mathrm{box}}^{(s)}, \Phi_{\mathrm{cls}}^{(s)}$ + Đồng nhất | $80^2, 40^2$ | 16, 32 | Giữ nguyên dự đoán gốc, tổng 136.000 ô |
 | Huấn luyện ($\mathcal{H}_{1:M}$) | $P_2\text{–}P_5$ | Nhánh đa mẫu + DW-TAL + $\mathcal{L}_{\mathrm{distill}}$ | Cả 4 mức | 4–32 | Chưng cất xuống $P_2, P_3$; gỡ bỏ khi suy luận |
 
