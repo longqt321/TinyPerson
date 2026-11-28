@@ -8,11 +8,13 @@ math, and generates the table of contents and lists of figures and tables.
 from __future__ import annotations
 
 import copy
+import os
 import re
 import subprocess
 import sys
 import tempfile
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from docx import Document
@@ -24,9 +26,12 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 from lxml import etree
 
-MD_PATH = Path("docs/report/course_report_vi.md")
-OUT_DOCX = Path("docs/report/course_report_vi.docx")
-OUT_PDF = Path("docs/report/course_report_vi.pdf")
+ROOT_DIR = Path(__file__).resolve().parents[1]
+MD_PATH = ROOT_DIR / "docs/report/course_report_vi.md"
+OUT_DOCX = ROOT_DIR / "docs/report/course_report_vi.docx"
+OUT_PDF = ROOT_DIR / "docs/report/course_report_vi.pdf"
+BUILD_TIMESTAMP = datetime(2000, 1, 1, tzinfo=timezone.utc)
+SOURCE_DATE_EPOCH = "946684800"
 
 FONT = "Times New Roman"
 BODY = Pt(13)
@@ -103,8 +108,10 @@ ABBREVIATIONS = [
 
 def build_omml_cache(md_text: str) -> dict[str, etree._Element]:
     """Convert every unique inline `$...$` and display `$$...$$` formula in md_text into `m:oMath`."""
-    display_exprs = [m.group(1).strip() for m in re.finditer(r"^\$\$(.+?)\$\$(?:\s*\([\d.]+\))?\s*$", md_text, re.MULTILINE)]
-    cleaned = re.sub(r"^\$\$.+?\$\$(?:\s*\([\d.]+\))?\s*$", "", md_text, flags=re.MULTILINE)
+    display_pattern = r"^\$\$(.*?)\$\$(?:[ \t]*\([\d.]+\))?[ \t]*$"
+    display_flags = re.MULTILINE | re.DOTALL
+    display_exprs = [m.group(1).strip() for m in re.finditer(display_pattern, md_text, display_flags)]
+    cleaned = re.sub(display_pattern, "", md_text, flags=display_flags)
     inline_exprs = [m.group(1).strip() for m in re.finditer(r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)", cleaned)]
 
     unique: list[str] = []
@@ -223,8 +230,9 @@ def para(
     space_before=None,
     indent=None,
     line: float = LINE,
+    style_name: str | None = None,
 ):
-    p = doc.add_paragraph()
+    p = doc.add_paragraph(style=style_name) if style_name else doc.add_paragraph()
     p.alignment = align
     pf = p.paragraph_format
     pf.space_after = Pt(6) if space_after is None else space_after
@@ -235,6 +243,102 @@ def para(
     if text:
         add_rich_runs(p, text, omml_cache or {}, size=size, bold=bold, italic=italic)
     return p
+
+
+def heading_anchor(index: int) -> str:
+    return f"heading_{index:04d}"
+
+
+def caption_anchor(kind: str, number: str) -> str:
+    prefix = "figure" if kind == "Hình" else "table"
+    return f"{prefix}_{number.replace('.', '_')}"
+
+
+def caption_bookmark_id(kind: str, number: str) -> int:
+    major, minor = (int(part) for part in number.split(".", maxsplit=1))
+    return (100000 if kind == "Hình" else 200000) + major * 1000 + minor
+
+
+def add_bookmark(paragraph, name: str, bookmark_id: int) -> None:
+    start = OxmlElement("w:bookmarkStart")
+    start.set(qn("w:id"), str(bookmark_id))
+    start.set(qn("w:name"), name)
+    end = OxmlElement("w:bookmarkEnd")
+    end.set(qn("w:id"), str(bookmark_id))
+    p_pr = paragraph._p.pPr
+    paragraph._p.insert(1 if p_pr is not None else 0, start)
+    paragraph._p.append(end)
+
+
+def add_internal_hyperlink(
+    paragraph,
+    text: str,
+    anchor: str,
+    *,
+    size=Pt(12),
+    bold: bool = False,
+    italic: bool = False,
+) -> None:
+    run = paragraph.add_run(text)
+    set_font(run, size=size, bold=bold, italic=italic)
+    r_pr = run._r.get_or_add_rPr()
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "000000")
+    r_pr.append(color)
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "none")
+    r_pr.append(underline)
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("w:anchor"), anchor)
+    hyperlink.set(qn("w:history"), "1")
+    run._r.getparent().remove(run._r)
+    hyperlink.append(run._r)
+    paragraph._p.append(hyperlink)
+
+
+def configure_heading_styles(doc) -> None:
+    specifications = (
+        ("Heading 1", H1, True, False, WD_ALIGN_PARAGRAPH.CENTER, Pt(12), Pt(12), 1.2),
+        ("Heading 2", H2, True, False, WD_ALIGN_PARAGRAPH.LEFT, Pt(12), Pt(6), 1.2),
+        ("Heading 3", H3, True, True, WD_ALIGN_PARAGRAPH.LEFT, Pt(10), Pt(4), 1.2),
+    )
+    for name, size, bold, italic, alignment, before, after, line in specifications:
+        style = doc.styles[name]
+        style.font.name = FONT
+        style.font.size = size
+        style.font.bold = bold
+        style.font.italic = italic
+        style.element.rPr.rFonts.set(qn("w:eastAsia"), FONT)
+        paragraph_format = style.paragraph_format
+        paragraph_format.alignment = alignment
+        paragraph_format.space_before = before
+        paragraph_format.space_after = after
+        paragraph_format.line_spacing = line
+        paragraph_format.keep_with_next = True
+        paragraph_format.keep_together = True
+
+
+def normalize_docx_zip(path: Path) -> None:
+    normalized = path.with_suffix(path.suffix + ".normalized")
+    with zipfile.ZipFile(path, "r") as source_zip:
+        with zipfile.ZipFile(
+            normalized,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as target_zip:
+            for name in sorted(source_zip.namelist()):
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = 0o600 << 16
+                target_zip.writestr(
+                    info,
+                    source_zip.read(name),
+                    compress_type=zipfile.ZIP_DEFLATED,
+                    compresslevel=9,
+                )
+    normalized.replace(path)
 
 
 def add_display_equation(
@@ -355,8 +459,16 @@ def set_table_borders_dut(t) -> None:
     trPr.append(OxmlElement("w:tblHeader"))
 
 
-def add_caption(doc, caption: str, kind: str, omml_cache: dict[str, etree._Element]):
-    """DUT 13pt centered caption: '**Hình N.M.** Rest of caption'."""
+def add_caption(
+    doc,
+    caption: str,
+    kind: str,
+    omml_cache: dict[str, etree._Element],
+    *,
+    anchor: str | None = None,
+    bookmark_id: int | None = None,
+):
+    """DUT 13pt centered caption with an optional internal navigation target."""
     clean = caption.replace("**", "").strip()
     clean = re.sub(rf"^{kind}\s+(\d+\.\d+)\s*[:—–.-]\s*", rf"{kind} \1. ", clean)
     label, sep, rest = clean.partition(". ")
@@ -365,12 +477,24 @@ def add_caption(doc, caption: str, kind: str, omml_cache: dict[str, etree._Eleme
     set_font(r_lbl, size=CAPTION, bold=True)
     if rest:
         add_rich_runs(p, rest, omml_cache, size=CAPTION, bold=False, italic=False)
+    if anchor is not None and bookmark_id is not None:
+        add_bookmark(p, anchor, bookmark_id)
     return p
 
 
 def add_table(doc, header: list[str], rows: list[list[str]], caption: str | None, omml_cache: dict[str, etree._Element]):
     if caption:
-        p_cap = add_caption(doc, caption, "Bảng", omml_cache)
+        match = CAP_TAB_RE.match(caption.strip())
+        anchor = caption_anchor("Bảng", match.group(1)) if match else None
+        bookmark_id = caption_bookmark_id("Bảng", match.group(1)) if match else None
+        p_cap = add_caption(
+            doc,
+            caption,
+            "Bảng",
+            omml_cache,
+            anchor=anchor,
+            bookmark_id=bookmark_id,
+        )
         p_cap.paragraph_format.space_before = Pt(10)
         p_cap.paragraph_format.space_after = Pt(4)
         p_cap.paragraph_format.keep_with_next = True
@@ -476,7 +600,17 @@ def add_figure(doc, path: str, caption: str, omml_cache: dict[str, etree._Elemen
     p.paragraph_format.space_after = Pt(4)
     p.paragraph_format.keep_with_next = True
     p.add_run().add_picture(str(img_path), width=Cm(width_cm))
-    add_caption(doc, caption, "Hình", omml_cache)
+    match = CAP_FIG_RE.match(caption.strip())
+    anchor = caption_anchor("Hình", match.group(1)) if match else None
+    bookmark_id = caption_bookmark_id("Hình", match.group(1)) if match else None
+    add_caption(
+        doc,
+        caption,
+        "Hình",
+        omml_cache,
+        anchor=anchor,
+        bookmark_id=bookmark_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -535,23 +669,112 @@ def _plain_toc_text(text: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def toc_entry_for_heading(level: int, text: str) -> tuple[int, str] | None:
+    if level == 2:
+        match = re.match(r"^(\d+)\.\s+(.*)$", text)
+        if match and match.group(1) in CHAPTERS:
+            return 2, f"Chương {match.group(1)}: {match.group(2).strip()}"
+        if text in UNNUMBERED_H1:
+            return 2, text
+    elif level == 3:
+        if re.match(r"^\d+\.\d+\.\s+", text) or re.match(r"^Phụ lục [A-Z]", text):
+            return 3, text
+    elif level == 4:
+        if re.match(r"^\d+\.\d+\.\d+\.\s+", text):
+            return 4, text
+    return None
+
+
+def validate_heading_numbering(md_text: str) -> None:
+    chapters: list[int] = []
+    current_chapter: int | None = None
+    current_section: tuple[int, int] | None = None
+    section_counts: dict[int, int] = {}
+    subsection_counts: dict[tuple[int, int], int] = {}
+
+    for line_number, line in enumerate(md_text.splitlines(), start=1):
+        match = re.match(r"^(#{2,4})\s+(.*)$", line.strip())
+        if not match:
+            continue
+        level = len(match.group(1))
+        title = match.group(2).strip()
+        if level == 2:
+            chapter_match = re.match(r"^(\d+)\.\s+", title)
+            if not chapter_match:
+                current_chapter = None
+                current_section = None
+                continue
+            chapter = int(chapter_match.group(1))
+            expected = len(chapters) + 1
+            if chapter != expected:
+                raise ValueError(
+                    f"Chapter numbering at line {line_number}: expected {expected}, found {chapter}"
+                )
+            chapters.append(chapter)
+            current_chapter = chapter
+            current_section = None
+            section_counts[chapter] = 0
+            continue
+
+        numeric_match = re.match(r"^(\d+(?:\.\d+)+)\.\s+", title)
+        if not numeric_match:
+            continue
+        parts = tuple(int(part) for part in numeric_match.group(1).split("."))
+        expected_depth = level - 1
+        if len(parts) != expected_depth:
+            raise ValueError(
+                f"Heading numbering depth at line {line_number}: "
+                f"level {level} requires {expected_depth} components, found {len(parts)}"
+            )
+        chapter = parts[0]
+        if current_chapter != chapter:
+            raise ValueError(
+                f"Heading at line {line_number} belongs to chapter {chapter}, "
+                f"but current chapter is {current_chapter}"
+            )
+        if level == 3:
+            section = parts[1]
+            expected = section_counts[chapter] + 1
+            if section != expected:
+                raise ValueError(
+                    f"Section numbering at line {line_number}: expected "
+                    f"{chapter}.{expected}, found {chapter}.{section}"
+                )
+            section_counts[chapter] = section
+            current_section = (chapter, section)
+            subsection_counts[current_section] = 0
+        else:
+            section, subsection = parts[1], parts[2]
+            if current_section != (chapter, section):
+                raise ValueError(
+                    f"Subsection at line {line_number} does not belong to current section "
+                    f"{current_section}"
+                )
+            expected = subsection_counts[current_section] + 1
+            if subsection != expected:
+                raise ValueError(
+                    f"Subsection numbering at line {line_number}: expected "
+                    f"{chapter}.{section}.{expected}, found {chapter}.{section}.{subsection}"
+                )
+            subsection_counts[current_section] = subsection
+
+    if not chapters:
+        raise ValueError("No numbered chapter headings found")
+
+
 def toc_entries_from_md(md_text: str) -> list[tuple[int, str]]:
     entries: list[tuple[int, str]] = []
     for line in md_text.splitlines():
-        m = re.match(r"^(#{2,4})\s+(.*)$", line.strip())
-        if not m:
+        match = re.match(r"^(#{2,4})\s+(.*)$", line.strip())
+        if not match:
             continue
-        level, text = len(m.group(1)), m.group(2).strip()
+        level = len(match.group(1))
+        text = match.group(2).strip()
         if text in ("MỤC LỤC", "THỊ GIÁC MÁY TÍNH"):
             continue
-        if level == 2:
-            mm = re.match(r"^(\d)\.\s+(.*)$", text)
-            if mm and mm.group(1) in CHAPTERS:
-                entries.append((2, f"Chương {mm.group(1)}: {mm.group(2).strip()}"))
-            elif text in UNNUMBERED_H1:
-                entries.append((2, text))
-        elif level in (3, 4) and (re.match(r"^\d+\.\d+", text) or re.match(r"^Phụ lục [A-Z]", text)):
-            entries.append((level, text))
+        entry = toc_entry_for_heading(level, text)
+        if entry is not None:
+            entries.append(entry)
     return entries
 
 
@@ -562,25 +785,24 @@ def build_toc(
     front_map: dict[str, str] | None = None,
 ) -> None:
     para(doc, "MỤC LỤC", size=Pt(14), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(12), line=1.2)
-    front_items = [
+    front_items = (
         "DANH MỤC HÌNH VẼ",
         "DANH MỤC BẢNG BIỂU",
         "DANH MỤC KÝ HIỆU VÀ CHỮ VIẾT TẮT",
-    ]
-    for f_item in front_items:
+    )
+    for index, f_item in enumerate(front_items, start=1):
         p = doc.add_paragraph()
         pf = p.paragraph_format
         pf.line_spacing = LINE
         pf.space_after = Pt(2)
         pf.tab_stops.add_tab_stop(Cm(16.0), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
-        r = p.add_run(f_item)
-        set_font(r, bold=True)
+        add_internal_hyperlink(p, f_item, f"frontmatter_{index}", bold=True)
         pg = (front_map or {}).get(f_item)
         if pg:
             r2 = p.add_run("\t" + pg)
             set_font(r2, bold=True)
 
-    for level, entry in entries:
+    for index, (level, entry) in enumerate(entries, start=1):
         p = doc.add_paragraph()
         pf = p.paragraph_format
         pf.line_spacing = LINE
@@ -588,8 +810,7 @@ def build_toc(
         pf.left_indent = Cm(0.0 if level == 2 else (0.6 if level == 3 else 1.2))
         pf.tab_stops.add_tab_stop(Cm(16.0), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
         clean_entry = _plain_toc_text(entry)
-        r = p.add_run(clean_entry)
-        set_font(r, bold=(level == 2))
+        add_internal_hyperlink(p, clean_entry, heading_anchor(index), bold=(level == 2))
         pg = (page_map or {}).get(entry)
         if pg is not None:
             r2 = p.add_run("\t" + str(pg))
@@ -605,11 +826,21 @@ def build_lists(
     tab_map: dict[str, int] | None,
     omml_cache: dict[str, etree._Element],
 ) -> None:
-    for title, caps, pmap, prefix in (
+    for index, (title, caps, pmap, prefix) in enumerate((
         ("DANH MỤC HÌNH VẼ", fig_caps, fig_map, "Hình"),
         ("DANH MỤC BẢNG BIỂU", tab_caps, tab_map, "Bảng"),
-    ):
-        para(doc, title, size=Pt(14), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_before=Pt(0), space_after=Pt(2), line=1.05)
+    ), start=1):
+        p_title = para(
+            doc,
+            title,
+            size=Pt(14),
+            bold=True,
+            align=WD_ALIGN_PARAGRAPH.CENTER,
+            space_before=Pt(0),
+            space_after=Pt(2),
+            line=1.05,
+        )
+        add_bookmark(p_title, f"frontmatter_{index}", 4000 + index)
         for num, text in caps:
             clean_cap = text.replace("**", "").strip()
             p = doc.add_paragraph()
@@ -619,9 +850,9 @@ def build_lists(
             p.paragraph_format.left_indent = Cm(1.8)
             p.paragraph_format.first_line_indent = Cm(-1.8)
             label = f"{prefix} {num}. "
-            r = p.add_run(label)
-            set_font(r, size=Pt(12), bold=True)
-            add_rich_runs(p, clean_cap, omml_cache, size=Pt(12))
+            anchor = caption_anchor(prefix, num)
+            add_internal_hyperlink(p, label, anchor, size=Pt(12), bold=True)
+            add_internal_hyperlink(p, clean_cap, anchor, size=Pt(12))
             pg = (pmap or {}).get(f"{prefix} {num}.")
             if pg is not None:
                 r2 = p.add_run("\t" + str(pg))
@@ -717,7 +948,17 @@ def add_algorithm_box(doc, code_text: str, omml_cache: dict[str, etree._Element]
 
 
 def build_abbreviations(doc) -> None:
-    para(doc, "DANH MỤC KÝ HIỆU VÀ CHỮ VIẾT TẮT", size=Pt(14), bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_before=Pt(0), space_after=Pt(12), line=1.2)
+    p_title = para(
+        doc,
+        "DANH MỤC KÝ HIỆU VÀ CHỮ VIẾT TẮT",
+        size=Pt(14),
+        bold=True,
+        align=WD_ALIGN_PARAGRAPH.CENTER,
+        space_before=Pt(0),
+        space_after=Pt(12),
+        line=1.2,
+    )
+    add_bookmark(p_title, "frontmatter_3", 4003)
     t = doc.add_table(rows=1 + len(ABBREVIATIONS), cols=2)
     t.alignment = WD_TABLE_ALIGNMENT.CENTER
     t.autofit = False
@@ -768,81 +1009,147 @@ def tight_ranges(text: str) -> str:
     return re.sub(r"(?<=\d)\s*–\s*(?=[\d,])", "–", text)
 
 
+def split_md_table_row(line: str) -> list[str]:
+    value = line.strip()
+    if value.startswith("|"):
+        value = value[1:]
+    if value.endswith("|"):
+        value = value[:-1]
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    in_code = False
+    for char in value:
+        if escaped:
+            current.append(char if char == "|" else "\\" + char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "`":
+            in_code = not in_code
+            current.append(char)
+        elif char == "|" and not in_code:
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current).strip())
+    return cells
+
+
+def is_md_block_start(line: str) -> bool:
+    return (
+        line.startswith(("\\`\\`\\`", "$$", "|", "!["))
+        or line == "---"
+        or line.startswith(":::::")
+        or bool(re.match(r"^#{1,4}\\s+", line))
+        or line.startswith(("- ", "* ", "+ ", "**Bảng", "Bảng"))
+        or bool(re.match(r"^\\d+\\.\\s+", line))
+        or bool(CAP_FIG_RE.match(line))
+        or bool(CAP_TAB_RE.match(line))
+    )
+
+
 def parse_md(md_text: str) -> list[tuple]:
     raw_lines = md_text.splitlines()
     blocks: list[tuple] = []
-    i = 0
-    pending_tab_caption: str | None = None
+    index = 0
+    pending_table_caption: str | None = None
 
-    while i < len(raw_lines):
-        raw = raw_lines[i]
-        stripped = raw.strip()
+    while index < len(raw_lines):
+        stripped = raw_lines[index].strip()
         if not stripped or stripped == "---" or stripped.startswith(":::::"):
-            i += 1
-            continue
-        if stripped.startswith("```"):
-            lang = stripped[3:].strip().lower()
-            code = []
-            i += 1
-            while i < len(raw_lines) and not raw_lines[i].strip().startswith("```"):
-                code.append(raw_lines[i])
-                i += 1
-            i += 1
-            blocks.append(("algorithm" if lang == "algorithm" else "code", "\n".join(code)))
-            continue
-        # Multi-line or single-line $$ ... $$ display equation
-        if stripped.startswith("$$"):
-            if stripped.endswith("$$") and len(stripped) > 4 or DISP_EQ_RE.match(stripped):
-                m_eq = DISP_EQ_RE.match(stripped)
-                if m_eq:
-                    blocks.append(("eq", m_eq.group(1).strip(), m_eq.group(2) or ""))
-                    i += 1
-                    continue
-            eq_lines = [stripped[2:]]
-            i += 1
-            eq_num = ""
-            while i < len(raw_lines):
-                ln = raw_lines[i].strip()
-                m_end = re.match(r"^(.*)\$\$\s*(\([\d.]+\))?\s*$", ln)
-                if m_end:
-                    eq_lines.append(m_end.group(1))
-                    eq_num = m_end.group(2) or ""
-                    i += 1
-                    break
-                eq_lines.append(ln)
-                i += 1
-            expr_joined = " ".join(x for x in eq_lines if x).strip()
-            m_tag = re.search(r"\\tag\{([^}]*)\}", expr_joined)
-            if m_tag and not eq_num:
-                eq_num = f"({m_tag.group(1)})"
-                expr_joined = re.sub(r"\\tag\{[^}]*\}", "", expr_joined).strip()
-            blocks.append(("eq", expr_joined, eq_num))
+            index += 1
             continue
 
-        m_h = re.match(r"^(#{1,4})\s+(.*)$", stripped)
-        if m_h:
-            blocks.append(("h", len(m_h.group(1)), m_h.group(2).strip()))
-            i += 1
+        if stripped.startswith("```"):
+            language = stripped[3:].strip().lower()
+            code_lines = []
+            index += 1
+            while index < len(raw_lines) and not raw_lines[index].strip().startswith("```"):
+                code_lines.append(raw_lines[index])
+                index += 1
+            if index == len(raw_lines):
+                raise ValueError(f"Unclosed fenced code block at line {index + 1}")
+            index += 1
+            blocks.append(("algorithm" if language == "algorithm" else "code", "\\n".join(code_lines)))
             continue
+
+        if stripped.startswith("$$"):
+            inline_match = DISP_EQ_RE.match(stripped)
+            if inline_match:
+                blocks.append(("eq", inline_match.group(1).strip(), inline_match.group(2) or ""))
+                index += 1
+                continue
+            equation_lines = [stripped[2:]]
+            index += 1
+            equation_number = ""
+            while index < len(raw_lines):
+                line = raw_lines[index].strip()
+                end_match = re.match(r"^(.*)\\$\\$[ \\t]*(\\([\\d.]+\\))?[ \\t]*$", line)
+                if end_match:
+                    equation_lines.append(end_match.group(1))
+                    equation_number = end_match.group(2) or ""
+                    index += 1
+                    break
+                equation_lines.append(line)
+                index += 1
+            else:
+                raise ValueError("Unclosed display-math block")
+            expression = " ".join(part for part in equation_lines if part).strip()
+            tag_match = re.search(r"\\\\tag\\{([^}]*)\\}", expression)
+            if tag_match and not equation_number:
+                equation_number = f"({tag_match.group(1)})"
+                expression = re.sub(r"\\\\tag\\{[^}]*\\}", "", expression).strip()
+            blocks.append(("eq", expression, equation_number))
+            continue
+
+        heading_match = re.match(r"^(#{1,4})\\s+(.*)$", stripped)
+        if heading_match:
+            blocks.append(("h", len(heading_match.group(1)), heading_match.group(2).strip()))
+            index += 1
+            continue
+
         if stripped.startswith(("**Bảng", "Bảng")):
-            pending_tab_caption = stripped
-            i += 1
+            pending_table_caption = stripped
+            index += 1
             continue
+
         if stripped.startswith("|"):
-            tbl = []
-            while i < len(raw_lines) and raw_lines[i].strip().startswith("|"):
-                tbl.append([c.strip() for c in raw_lines[i].strip().strip("|").split("|")])
-                i += 1
-            if len(tbl) >= 2:
-                blocks.append(("table", pending_tab_caption, tbl[0], tbl[2:]))
-            pending_tab_caption = None
+            table_start = index + 1
+            table_rows = []
+            while index < len(raw_lines) and raw_lines[index].strip().startswith("|"):
+                table_rows.append(split_md_table_row(raw_lines[index]))
+                index += 1
+            if len(table_rows) < 2 or not all(
+                re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
+                for cell in table_rows[1]
+            ):
+                raise ValueError(f"Invalid Markdown table separator at line {table_start + 1}")
+            header = table_rows[0]
+            if not header or any(len(row) != len(header) for row in table_rows[2:]):
+                raise ValueError(f"Inconsistent Markdown table column count at line {table_start}")
+            blocks.append(("table", pending_table_caption, header, table_rows[2:]))
+            pending_table_caption = None
             continue
-        if stripped.startswith("- ") or re.match(r"^\d+\.\s", stripped):
+
+        if stripped.startswith(("- ", "* ", "+ ")) or re.match(r"^\\d+\\.\\s", stripped):
             blocks.append(("item", tight_ranges(stripped)))
-            i += 1
+            index += 1
             continue
-        blocks.append(("p", tight_ranges(stripped)))
-        i += 1
+
+        paragraph_lines = [stripped]
+        index += 1
+        while index < len(raw_lines):
+            candidate = raw_lines[index].strip()
+            if not candidate or is_md_block_start(candidate):
+                break
+            paragraph_lines.append(candidate)
+            index += 1
+        blocks.append(("p", tight_ranges(" ".join(paragraph_lines))))
+
     return blocks
 
 
@@ -903,11 +1210,11 @@ def find_heading_pages(
                 page_map[entry] = pg
         for num, _ in fig_caps:
             key = f"Hình {num}."
-            if key not in fig_map and key in norm_txt:
+            if key not in fig_map and re.search(rf"^\\s*{re.escape(key)}\\s+", txt, re.MULTILINE):
                 fig_map[key] = pg
         for num, _ in tab_caps:
             key = f"Bảng {num}."
-            if key not in tab_map and key in norm_txt:
+            if key not in tab_map and re.search(rf"^\\s*{re.escape(key)}\\s+", txt, re.MULTILINE):
                 tab_map[key] = pg
 
     offset = (body_start or 2) - 1
@@ -928,6 +1235,8 @@ def render_docx(
 ) -> None:
     doc = Document()
     properties = doc.core_properties
+    properties.created = BUILD_TIMESTAMP
+    properties.modified = BUILD_TIMESTAMP
     properties.title = "Báo cáo đồ án môn học: GauCon và DW-TAL cho phát hiện người cực nhỏ trên ảnh hàng hải"
     properties.subject = "Thị giác máy tính"
     properties.author = "Trần Đức Long; Phan Thị Thảo Tiên"
@@ -937,6 +1246,7 @@ def render_docx(
     style.font.name = FONT
     style.font.size = BODY
     style.element.rPr.rFonts.set(qn("w:eastAsia"), FONT)
+    configure_heading_styles(doc)
 
     # Section 0: Cover page (no header/footer, no page number)
     cover = doc.sections[0]
@@ -986,6 +1296,10 @@ def render_docx(
     add_page_number_field(bp, size=Pt(10))
 
     blocks = parse_md(md_text)
+    heading_indices: dict[tuple[int, str], list[int]] = {}
+    for index, entry in enumerate(entries, start=1):
+        heading_indices.setdefault(entry, []).append(index)
+    heading_occurrences: dict[tuple[int, str], int] = {}
     body_started = False
     pending_fig: str | None = None
     skip_meta_re = re.compile(r"^\*\*(Đề tài|Giảng viên|Nhóm sinh viên|Đơn vị|Năm học):")
@@ -996,20 +1310,25 @@ def render_docx(
             level, text = blk[1], blk[2]
             if text in ("BÁO CÁO ĐỒ ÁN MÔN HỌC", "THỊ GIÁC MÁY TÍNH", "MỤC LỤC"):
                 continue
-            m_ch = re.match(r"^(\d)\.\s+(.*)$", text)
-            if level == 2 and (m_ch or text in UNNUMBERED_H1):
+            toc_entry = toc_entry_for_heading(level, text)
+            anchor = None
+            bookmark_id = None
+            if toc_entry is not None:
+                occurrence = heading_occurrences.get(toc_entry, 0)
+                matching_indices = heading_indices.get(toc_entry, [])
+                if occurrence < len(matching_indices):
+                    index = matching_indices[occurrence]
+                    anchor = heading_anchor(index)
+                    bookmark_id = index
+                    heading_occurrences[toc_entry] = occurrence + 1
+
+            if level == 2 and toc_entry is not None:
                 if body_started:
                     doc.add_page_break()
                 body_started = True
-                if m_ch and m_ch.group(1) in CHAPTERS:
-                    title = f"Chương {m_ch.group(1)}: {m_ch.group(2).strip()}"
-                elif m_ch:
-                    title = m_ch.group(2).strip()
-                else:
-                    title = text
                 p_h1 = para(
                     doc,
-                    title,
+                    toc_entry[1],
                     omml_cache,
                     size=H1,
                     bold=True,
@@ -1017,13 +1336,16 @@ def render_docx(
                     space_before=Pt(12),
                     space_after=Pt(12),
                     line=1.2,
+                    style_name="Heading 1",
                 )
+                if anchor is not None and bookmark_id is not None:
+                    add_bookmark(p_h1, anchor, bookmark_id)
                 p_h1.paragraph_format.keep_with_next = True
                 continue
             if not body_started:
                 continue
             if level == 3:
-                p_h2 = para(
+                heading = para(
                     doc,
                     text,
                     omml_cache,
@@ -1033,10 +1355,10 @@ def render_docx(
                     space_before=Pt(12),
                     space_after=Pt(6),
                     line=1.2,
+                    style_name="Heading 2",
                 )
-                p_h2.paragraph_format.keep_with_next = True
             else:
-                p_h3 = para(
+                heading = para(
                     doc,
                     text,
                     omml_cache,
@@ -1047,8 +1369,11 @@ def render_docx(
                     space_before=Pt(10),
                     space_after=Pt(4),
                     line=1.2,
+                    style_name="Heading 3",
                 )
-                p_h3.paragraph_format.keep_with_next = True
+            if anchor is not None and bookmark_id is not None:
+                add_bookmark(heading, anchor, bookmark_id)
+            heading.paragraph_format.keep_with_next = True
 
         elif kind == "eq":
             if not body_started:
@@ -1106,16 +1431,19 @@ def render_docx(
 
     OUT_DOCX.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(OUT_DOCX))
+    normalize_docx_zip(OUT_DOCX)
 
 
 def convert_docx_to_pdf(docx_path: Path, pdf_out: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="dut-lo-") as tmp:
+        profile = (Path(tmp) / "lo-profile").as_uri()
         subprocess.run(
             [
                 "libreoffice",
                 "--headless",
+                f"-env:UserInstallation={profile}",
                 "--convert-to",
-                "pdf",
+                "pdf:writer_pdf_Export",
                 "--outdir",
                 tmp,
                 str(docx_path),
@@ -1123,6 +1451,7 @@ def convert_docx_to_pdf(docx_path: Path, pdf_out: Path) -> None:
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env={**os.environ, "SOURCE_DATE_EPOCH": SOURCE_DATE_EPOCH},
         )
         generated = Path(tmp) / (docx_path.stem + ".pdf")
         pdf_out.write_bytes(generated.read_bytes())
@@ -1130,6 +1459,8 @@ def convert_docx_to_pdf(docx_path: Path, pdf_out: Path) -> None:
 
 def main() -> int:
     md_text = MD_PATH.read_text(encoding="utf-8")
+    validate_heading_numbering(md_text)
+    print("[dut-build] Heading numbering validated.", flush=True)
     print("[dut-build] Converting LaTeX formulas to native Word OMML via Pandoc...", flush=True)
     omml_cache = build_omml_cache(md_text)
     print(f"[dut-build] Cached {len(omml_cache)} unique native OMML equations.", flush=True)
