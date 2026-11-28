@@ -1,0 +1,47 @@
+# Ablation 2: DW-TAL + P2/P3 Barycenter w/o FG Dominance Gate & Distillation (80e, Pretrained, batch=16)
+seed: 42
+data:
+  config: configs/data/tinyperson.yaml
+train:
+  epochs: 80
+  patience: 30
+  val: true
+  imgsz: 1280
+  batch: 16
+  workers: 8
+  optimizer: AdamW
+  lr0: 0.0015
+  lrf: 0.05
+  cos_lr: true
+  warmup_epochs: 3.0
+  amp: true
+  deterministic: false
+  degrees: 0.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  hsv_h: 0.005
+  hsv_s: 0.1
+  hsv_v: 0.15
+  bgr: 0.0
+  mosaic: 0.0
+  close_mosaic: 10
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip
+  augmentations_preset: tinyperson_safe
+  multi_scale: 0.0
+  compile: false
+hardware:
+  gpu: A100
+output:
+  root: runs
+  wandb_project: tiny-person-research
+name: tp80_abl_nogate
+model:
+  config: configs/model/yolo26n_p2_lgt_v2_nogate.yaml
+  pretrained: yolo26n.pt

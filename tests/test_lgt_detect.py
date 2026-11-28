@@ -474,3 +474,49 @@ def test_multiclass_same_cls_isolation_and_regmax16_yolov10_backward(tmp_path):
     assert suite["tide_and_crowded"]["crowded_pairs"]["crowded_lt_10px"]["ground_truths"] == 2
 
 
+def test_lgt_v2_p2p3_selective_fg_gate_and_decoupled_wtal():
+    """Verify LGT-Detect v2 active_nl=2 preserves P4/P5, suppresses background drift, and caps DW-TAL soft labels."""
+    lgt_v2 = build_model({"config": str(REPO_ROOT / "configs/model/yolo26n_p2_lgt_v2.yaml")})
+    abl_nodwtal = build_model({"config": str(REPO_ROOT / "configs/model/yolo26n_p2_lgt_v2_nodwtal.yaml")})
+    abl_nogate = build_model({"config": str(REPO_ROOT / "configs/model/yolo26n_p2_lgt_v2_nogate.yaml")})
+
+    head = find_lgt_head(lgt_v2.model)
+    assert head is not None and head.active_nl == 2 and head.fg_gate is True
+    assert find_lgt_head(abl_nogate.model).enable_cls_gate is False
+    assert find_lgt_head(abl_nodwtal.model).active_nl == 2
+
+    # Non-zero gate weights on deep background logits (-8.0) must produce near-zero logit drift thanks to fg_gate
+    for seq in head.lgt_cls_gate:
+        torch.nn.init.constant_(seq[-1].bias, 2.0)
+    feats = [
+        torch.zeros(1, 32, 16, 16),
+        torch.zeros(1, 64, 8, 8),
+        torch.zeros(1, 128, 4, 4),
+        torch.zeros(1, 256, 2, 2),
+    ]
+    for i in range(4):
+        torch.nn.init.constant_(head.one2one_cv3[i][-1].bias, -8.0)
+    raw_scores = torch.cat([head.one2one_cv3[i](feats[i]).view(1, 1, -1) for i in range(4)], dim=-1)
+    out = head.forward_lgt_one2one(feats)
+    # P4 & P5 (last 16 + 4 = 20 cells) must be bit-exact identity
+    assert torch.equal(out["scores"][..., -20:], raw_scores[..., -20:])
+    # P2 & P3 background cells have sigmoid(-8) ~ 3.3e-4 -> drift < 1e-3 despite +2.0 bias!
+    assert (out["scores"] - raw_scores).abs().max().item() < 1e-3
+
+    # Full E2ELoss + DW-TAL forward/backward check
+    lgt_v2.model.train()
+    crit = lgt_v2.model.init_criterion()
+    imgs = torch.randn(2, 3, 128, 128)
+    batch = {
+        "img": imgs,
+        "batch_idx": torch.tensor([0.0, 1.0]),
+        "cls": torch.tensor([[0.0], [0.0]]),
+        "bboxes": torch.tensor([[0.25, 0.25, 0.04, 0.05], [0.60, 0.60, 0.30, 0.35]]),
+    }
+    loss_val, items = crit(lgt_v2.model(imgs), batch)
+    loss_val.backward()
+    assert torch.isfinite(loss_val) and "lgt_loss" in items
+    assert head.lgt_logit_beta_box.grad is not None and head.lgt_logit_beta_box.shape == (2,)
+
+
+

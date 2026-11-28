@@ -194,6 +194,9 @@ class LGTDetect(Detect):
         init_beta_box: float = 0.15,
         distill_gain: float = 0.5,
         cross_scale: bool = True,
+        max_active_levels: int = 4,
+        fg_gate: bool = False,
+        enable_cls_gate: bool = True,
     ) -> None:
         super().__init__(nc=nc, reg_max=reg_max, end2end=end2end, ch=ch)
         if end2end:
@@ -206,6 +209,11 @@ class LGTDetect(Detect):
         self.rel_hidden = int(rel_hidden)
         self.distill_gain = float(distill_gain)
         self.cross_scale = bool(cross_scale)
+        self.max_active_levels = max(1, int(max_active_levels))
+        self.active_nl = min(self.nl, self.max_active_levels)
+        self.fg_gate = bool(fg_gate)
+        self.enable_cls_gate = bool(enable_cls_gate)
+        self._distill_decay: float = 1.0
 
         stencil_ch = 6 if self.nc > 1 else 5
         self.lgt_stencil = SpatialShiftStencil(channels=stencil_ch)
@@ -214,15 +222,19 @@ class LGTDetect(Detect):
         gamma_raw = math.log(math.expm1(1.0))
         beta_logit = math.log(init_beta_box / (1.0 - init_beta_box))
 
-        self.lgt_log_tau_box = nn.Parameter(torch.full((self.nl,), tau_raw, dtype=torch.float32))
-        self.lgt_log_gamma_box = nn.Parameter(torch.full((self.nl,), gamma_raw, dtype=torch.float32))
-        self.lgt_logit_beta_box = nn.Parameter(torch.full((self.nl,), beta_logit, dtype=torch.float32))
-        self.lgt_log_tau_cls = nn.Parameter(torch.full((self.nl,), tau_raw, dtype=torch.float32))
+        self.lgt_log_tau_box = nn.Parameter(torch.full((self.active_nl,), tau_raw, dtype=torch.float32))
+        self.lgt_log_gamma_box = nn.Parameter(torch.full((self.active_nl,), gamma_raw, dtype=torch.float32))
+        self.lgt_logit_beta_box = nn.Parameter(torch.full((self.active_nl,), beta_logit, dtype=torch.float32))
+        self.lgt_log_tau_cls = nn.Parameter(torch.full((self.active_nl,), tau_raw, dtype=torch.float32))
 
         rel_in_channels = NUM_NEIGHBORS * 2 + 2  # 20 relational channels
-        self.lgt_cls_gate = nn.ModuleList(
-            self._build_cls_gate(rel_in_channels, self.rel_hidden, self.nc) for _ in range(self.nl)
-        )
+        if self.enable_cls_gate:
+            gate_builder = self._build_cls_gate_nobn if self.fg_gate else self._build_cls_gate
+            self.lgt_cls_gate: nn.ModuleList | None = nn.ModuleList(
+                gate_builder(rel_in_channels, self.rel_hidden, self.nc) for _ in range(self.active_nl)
+            )
+        else:
+            self.lgt_cls_gate = None
 
         self._raw_o2o_gauss: list[tuple[Tensor, Tensor]] | None = None
         self._stride_ratios: list[float] | None = None
@@ -242,6 +254,19 @@ class LGTDetect(Detect):
         return nn.Sequential(
             nn.Conv2d(in_ch, hidden, kernel_size=1, bias=False),
             nn.BatchNorm2d(hidden),
+            nn.SiLU(inplace=True),
+            out_conv,
+        )
+
+    @staticmethod
+    def _build_cls_gate_nobn(in_ch: int, hidden: int, out_ch: int) -> nn.Sequential:
+        """Background-safe relational MLP without BatchNorm2d statistics drift across 98% background."""
+        out_conv = nn.Conv2d(hidden, out_ch, kernel_size=1, bias=True)
+        nn.init.zeros_(out_conv.weight)
+        if out_conv.bias is not None:
+            nn.init.zeros_(out_conv.bias)
+        return nn.Sequential(
+            nn.Conv2d(in_ch, hidden, kernel_size=1, bias=True),
             nn.SiLU(inplace=True),
             out_conv,
         )
@@ -485,10 +510,18 @@ class LGTDetect(Detect):
             m_dom = dom_pairs.amax(dim=1, keepdim=True)
             m_sup = (aff_nb * prob_nb).sum(dim=1, keepdim=True) / denom_nb
 
-            rel_feat = torch.cat((aff_nb, dom_pairs, m_dom, m_sup), dim=1).to(orig_dtype)
+            aff_feat = (aff_nb * prob_nb) if self.fg_gate else aff_nb
+            rel_feat = torch.cat((aff_feat, dom_pairs, m_dom, m_sup), dim=1).to(orig_dtype)
 
-        cls_delta = self.lgt_cls_gate[level_idx](rel_feat)
-        refined_cls = raw_cls + cls_delta
+        if not self.enable_cls_gate or self.lgt_cls_gate is None:
+            refined_cls = raw_cls
+        else:
+            cls_delta = self.lgt_cls_gate[level_idx](rel_feat)
+            if self.fg_gate:
+                fg_prob = torch.sigmoid(s_0.detach()).to(orig_dtype)
+                refined_cls = raw_cls + fg_prob * cls_delta
+            else:
+                refined_cls = raw_cls + cls_delta
 
         return refined_ltrb, refined_cls
 
@@ -508,7 +541,9 @@ class LGTDetect(Detect):
             sigma_list: list[Tensor] = []
             smax_list: list[Tensor] = []
             cls_list: list[Tensor] | None = [] if use_multiclass else None
-            for i in range(self.nl):
+            # Only need up to active_nl + 1 (for parent of highest active level)
+            needed_nl = min(self.nl, self.active_nl + (1 if self.cross_scale else 0))
+            for i in range(needed_nl):
                 mu_i, sig_i = ltrb_to_gaussian(ltrb_list[i])
                 mu_list.append(mu_i)
                 sigma_list.append(sig_i)
@@ -518,16 +553,20 @@ class LGTDetect(Detect):
                     cls_list.append(cls_detached.argmax(dim=1, keepdim=True).to(dtype=torch.float32))
 
         if self.training and self.distill_gain > 0.0:
-            self._raw_o2o_gauss = list(zip(mu_list, sigma_list))
+            self._raw_o2o_gauss = list(zip(mu_list[: self.active_nl], sigma_list[: self.active_nl]))
         else:
             self._raw_o2o_gauss = None
 
         out_ltrb: list[Tensor] = []
         out_scores: list[Tensor] = []
         for i in range(self.nl):
-            ref_ltrb, ref_cls = self._refine_level(
-                i, raw_boxes[i], raw_clses[i], mu_list, sigma_list, smax_list, cls_list
-            )
+            if i < self.active_nl:
+                ref_ltrb, ref_cls = self._refine_level(
+                    i, raw_boxes[i], raw_clses[i], mu_list, sigma_list, smax_list, cls_list
+                )
+            else:
+                ref_ltrb = ltrb_list[i].to(raw_boxes[i].dtype)
+                ref_cls = raw_clses[i]
             out_ltrb.append(ref_ltrb.view(bsz, 4, -1))
             out_scores.append(ref_cls.view(bsz, self.nc, -1))
 
@@ -563,13 +602,13 @@ class LGTDetect(Detect):
         return y if self.export else (y, preds)
 
     def get_lgt_stats(self) -> dict[str, float]:
-        """Materialize scalar LGT diagnostics across all FPN levels at epoch end."""
+        """Materialize scalar LGT diagnostics across active FPN levels at epoch end."""
         stats: dict[str, float] = {}
         beta_vals = torch.sigmoid(self.lgt_logit_beta_box).detach().cpu().tolist()
         tau_box_vals = (F.softplus(self.lgt_log_tau_box) + 0.1).detach().cpu().tolist()
         tau_cls_vals = (F.softplus(self.lgt_log_tau_cls) + 0.1).detach().cpu().tolist()
         gamma_vals = F.softplus(self.lgt_log_gamma_box).detach().cpu().tolist()
-        for idx in range(self.nl):
+        for idx in range(self.active_nl):
             lvl = f"p{idx + 2}"
             stats[f"beta_box_{lvl}"] = float(beta_vals[idx])
             stats[f"tau_box_{lvl}"] = float(tau_box_vals[idx])
@@ -611,6 +650,8 @@ class LGTDetect(Detect):
                     )
                     o2m_ltrb = self._decode_level_ltrb(o2m_raw).float()
                     o2m_prob = torch.sigmoid(o2m_scores_flat[:, :, offset : offset + count]).amax(dim=1)
+                    if self.fg_gate:
+                        o2m_prob = o2m_prob * (o2m_prob > 0.20).to(o2m_prob.dtype)
                     weight = o2m_prob.square().view(bsz, height, width)
                     mu_o2m, sig_o2m = ltrb_to_gaussian(o2m_ltrb)
                 offset += count
@@ -625,7 +666,8 @@ class LGTDetect(Detect):
 
             mean_distill = total_num / total_den
             self._last_distill_tensor = mean_distill.detach()
-            return mean_distill * (bsz * self.distill_gain)
+            eff_gain = self.distill_gain * float(self._distill_decay)
+            return mean_distill * (bsz * eff_gain)
 
 
 def find_lgt_head(model: nn.Module) -> LGTDetect | None:

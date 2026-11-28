@@ -370,10 +370,57 @@ def run_post_training_evaluation(run: Path, dataset_yaml: Path, config: Experime
             coco_test = evaluate_coco_suite(test_ann, test_pred, collapse_single_class=True)
             write_json(metrics_dir / "coco_test_suite.json", coco_test)
             print(
-                f"[auto-eval] TinyPerson TEST: all AP@0.50={tp_test['all']['AP@0.50']:.4f} | "
+                f"[auto-eval] TinyPerson TEST (Full-1280): all AP@0.50={tp_test['all']['AP@0.50']:.4f} | "
                 f"tiny AP@0.50={tp_test['tiny']['AP@0.50']:.4f} | "
                 f"tiny1 AP@0.50={tp_test['tiny1']['AP@0.50']:.4f} | "
                 f"AP@0.75={tp_test['all']['AP@0.75']:.4f} | MR@0.50={tp_test['all']['MR@0.50']:.4f}",
+                flush=True,
+            )
+
+            # Also score official TOV native-resolution Tiled Slicing (640x512, overlap=100)
+            from PIL import Image
+            from ultralytics import YOLO
+
+            from tinydet.evaluation.tiled_inference import (
+                TILE_H,
+                TILE_OVERLAP,
+                TILE_W,
+                predict_tiled_image,
+            )
+            from tinydet.models.ultralytics import register_ultralytics_modules
+
+            register_ultralytics_modules()
+            tiled_model = YOLO(str(checkpoint))
+            tiled_dev = "cuda:0" if __import__("torch").cuda.is_available() else "cpu"
+            tiled_rows: list[dict[str, Any]] = []
+            for img_p in test_imgs:
+                with Image.open(img_p) as pil_im:
+                    t_boxes, t_scores, t_clses = predict_tiled_image(
+                        tiled_model,
+                        pil_im,
+                        tile_w=TILE_W,
+                        tile_h=TILE_H,
+                        overlap=TILE_OVERLAP,
+                        conf=0.001,
+                        device=tiled_dev,
+                    )
+                tiled_rows.append({
+                    "path": str(img_p.resolve()),
+                    "boxes": t_boxes,
+                    "scores": t_scores,
+                    "classes": t_clses,
+                })
+            tiled_pred_path = metrics_dir / "test_predictions_tiled.json"
+            write_json(tiled_pred_path, {"images": tiled_rows})
+            tp_tiled = evaluate_tinyperson(test_ann, tiled_pred_path, class_mode="merge")
+            write_json(metrics_dir / "tinyperson_test_tiled.json", tp_tiled)
+            coco_tiled = evaluate_coco_suite(test_ann, tiled_pred_path, collapse_single_class=True)
+            write_json(metrics_dir / "coco_test_tiled_suite.json", coco_tiled)
+            print(
+                f"[auto-eval] TinyPerson TEST (Tiled-640x512): all AP@0.50={tp_tiled['all']['AP@0.50']:.4f} | "
+                f"tiny AP@0.50={tp_tiled['tiny']['AP@0.50']:.4f} | "
+                f"tiny1 AP@0.50={tp_tiled['tiny1']['AP@0.50']:.4f} | "
+                f"AP@0.75={tp_tiled['all']['AP@0.75']:.4f} | MR@0.50={tp_tiled['all']['MR@0.50']:.4f}",
                 flush=True,
             )
     else:

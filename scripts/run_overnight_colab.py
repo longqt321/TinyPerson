@@ -41,8 +41,15 @@ from tinydet.utils.runtime import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Ordered 3-Phase Publication Matrix: (phase, exp_yaml, seed, preferred_batch_40gb)
+# Ordered Publication Matrix: (phase, exp_yaml, seed, preferred_batch_40gb)
 CAMPAIGN_JOBS: list[tuple[str, str, int, int]] = [
+    # Phase FAST: 80-Epoch Pretrained Fair TinyPerson Paper Suite (batch=16 across all 6 jobs — ~1.3h on A100!)
+    ("FAST", "configs/experiment/paper_fast/tp80_yolo26n_lgt.yaml", 42, 16),
+    ("FAST", "configs/experiment/paper_fast/tp80_yolo26n_base.yaml", 42, 16),
+    ("FAST", "configs/experiment/paper_fast/tp80_yolo26n_nwd.yaml", 42, 16),
+    ("FAST", "configs/experiment/paper_fast/tp80_yolo11n_nms.yaml", 42, 16),
+    ("FAST", "configs/experiment/paper_fast/tp80_abl_nodwtal.yaml", 42, 16),
+    ("FAST", "configs/experiment/paper_fast/tp80_abl_nogate.yaml", 42, 16),
     # Phase A: TinyPerson Headline (seed 42) — ~2.0h on A100 (tp_yolo26n_lgt seed42 reuses colab-seed42!)
     ("A", "configs/experiment/paper/tp_yolo26n_lgt.yaml", 42, 32),
     ("A", "configs/experiment/paper/tp_yolo26n_base.yaml", 42, 32),

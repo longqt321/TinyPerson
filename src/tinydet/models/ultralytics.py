@@ -83,7 +83,26 @@ def _nwd_sim_lowmem(gt_bboxes: torch.Tensor, pd_bboxes: torch.Tensor, constant_c
     return w2_sq.add_(1e-6).sqrt_().mul_(inv_c).exp_()
 
 
-def make_wasserstein_iou_calculation(orig_iou_fn, weight: float, ref_scale_px: float = 32.0):
+def _logistic_scale_gate(
+    gt_bboxes: torch.Tensor,
+    max_weight: float,
+    tau_px: float = 20.0,
+    beta_px: float = 3.5,
+) -> torch.Tensor:
+    """Logistic scale gate routing Wasserstein treatment to tiny GTs while preserving pure CIoU for >=28px GTs."""
+    w = (gt_bboxes[..., 2] - gt_bboxes[..., 0]).clamp(min=0.0)
+    h = (gt_bboxes[..., 3] - gt_bboxes[..., 1]).clamp(min=0.0)
+    size_px = (w * h).sqrt()
+    return torch.sigmoid((float(tau_px) - size_px) / max(float(beta_px), 0.5)).mul_(float(max_weight))
+
+
+def make_wasserstein_iou_calculation(
+    orig_iou_fn,
+    weight: float,
+    ref_scale_px: float = 32.0,
+    tau_px: float | None = None,
+    beta_px: float = 3.5,
+):
     """Blend CIoU with scale-invariant Wasserstein similarity smoothly for tiny/small GTs."""
     ref_area = max(ref_scale_px * ref_scale_px, 1.0)
 
@@ -91,13 +110,66 @@ def make_wasserstein_iou_calculation(orig_iou_fn, weight: float, ref_scale_px: f
         ciou = orig_iou_fn(gt_bboxes, pd_bboxes)
         if gt_bboxes.numel() == 0:
             return ciou
-        gt_area = (gt_bboxes[..., 2] - gt_bboxes[..., 0]).clamp_(min=0.0)
-        gt_area.mul_((gt_bboxes[..., 3] - gt_bboxes[..., 1]).clamp_(min=0.0))
-        alpha = gt_area.div_(ref_area).add_(1.0).reciprocal_().mul_(float(weight)).to(dtype=ciou.dtype)
+        if tau_px is not None:
+            alpha = _logistic_scale_gate(gt_bboxes, weight, tau_px=tau_px, beta_px=beta_px).to(dtype=ciou.dtype)
+        else:
+            gt_area = (gt_bboxes[..., 2] - gt_bboxes[..., 0]).clamp_(min=0.0)
+            gt_area.mul_((gt_bboxes[..., 3] - gt_bboxes[..., 1]).clamp_(min=0.0))
+            alpha = gt_area.div_(ref_area).add_(1.0).reciprocal_().mul_(float(weight)).to(dtype=ciou.dtype)
         w_sim = _wasserstein_sim_lowmem(gt_bboxes, pd_bboxes).to(dtype=ciou.dtype)
         return ciou.add_(w_sim.sub_(ciou).mul_(alpha))
 
     return patched_iou_calculation
+
+
+def _pairwise_iou_aligned(box1: torch.Tensor, box2: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
+    """Elementwise IoU in ``[0, 1]`` for aligned ``(K, 4)`` pixel ``xyxy`` boxes."""
+    lt = torch.maximum(box1[:, :2], box2[:, :2])
+    rb = torch.minimum(box1[:, 2:], box2[:, 2:])
+    wh = (rb - lt).clamp(min=0.0)
+    inter = wh[:, 0] * wh[:, 1]
+    area1 = (box1[:, 2] - box1[:, 0]).clamp(min=0.0) * (box1[:, 3] - box1[:, 1]).clamp(min=0.0)
+    area2 = (box2[:, 2] - box2[:, 0]).clamp(min=0.0) * (box2[:, 3] - box2[:, 1]).clamp(min=0.0)
+    return inter / (area1 + area2 - inter + eps)
+
+
+def make_decoupled_tal_forward(
+    orig_fn,
+    weight: float,
+    tau_px: float = 20.0,
+    beta_px: float = 3.5,
+    tiny_calib_floor: float = 0.08,
+):
+    """Decouple Wasserstein candidate selection from BCE soft-label calibration (DW-TAL).
+
+    ``assigner.iou_calculation`` uses hybrid Wasserstein similarity so sub-stride tiny GTs
+    do not suffer positive-sample starvation when ``IoU == 0``. Immediately afterward,
+    ``target_scores`` on selected positive anchors are recalibrated against true ``IoU``
+    (with a small ``tiny_calib_floor * r_gate`` floor only when ``IoU ~ 0``) so poorly
+    localized or near-background anchors never receive inflated classification targets.
+    """
+
+    def decoupled_forward(pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs):
+        target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx = orig_fn(
+            pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt, **kwargs
+        )
+        fg_idx = fg_mask.nonzero(as_tuple=True)
+        if fg_idx[0].numel() == 0:
+            return target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx
+
+        pd_fg = pd_bboxes[fg_idx].detach().float()
+        gt_fg = target_bboxes[fg_idx].detach().float()
+        true_iou = _pairwise_iou_aligned(pd_fg, gt_fg)
+        r_gate = _logistic_scale_gate(gt_fg, 1.0, tau_px=tau_px, beta_px=beta_px)
+        calib_cap = torch.maximum(true_iou, float(tiny_calib_floor) * r_gate).unsqueeze(-1).to(target_scores.dtype)
+        w_sim = _wasserstein_sim_lowmem(gt_fg, pd_fg)
+        alpha = r_gate * float(weight)
+        blended = ((1.0 - alpha) * true_iou + alpha * w_sim).clamp(min=1e-4).unsqueeze(-1).to(target_scores.dtype)
+        ratio = (calib_cap / blended).clamp(max=1.15)
+        target_scores[fg_idx] = torch.minimum(target_scores[fg_idx] * ratio, calib_cap)
+        return target_labels, target_bboxes, target_scores, fg_mask, target_gt_idx
+
+    return decoupled_forward
 
 
 def make_nwd_iou_calculation(orig_iou_fn, weight: float = 0.50, constant_c: float = 12.8):
@@ -114,7 +186,13 @@ def make_nwd_iou_calculation(orig_iou_fn, weight: float = 0.50, constant_c: floa
     return patched_iou_calculation
 
 
-def make_wasserstein_bbox_forward(orig_bbox_forward, weight: float, ref_scale_px: float = 32.0):
+def make_wasserstein_bbox_forward(
+    orig_bbox_forward,
+    weight: float,
+    ref_scale_px: float = 32.0,
+    tau_px: float | None = None,
+    beta_px: float = 3.5,
+):
     """Augment ``BboxLoss.forward`` with bounded scale-invariant Wasserstein regression loss."""
     ref_area = max(ref_scale_px * ref_scale_px, 1.0)
 
@@ -151,7 +229,11 @@ def make_wasserstein_bbox_forward(orig_bbox_forward, weight: float, ref_scale_px
             * (fg_target[:, 3] - fg_target[:, 1]).clamp(min=0.0)
             * fg_stride.squeeze(-1).square()
         )
-        scale_gate = (float(weight) / (1.0 + gt_area_px / ref_area)).unsqueeze(-1)
+        if tau_px is not None:
+            size_px = gt_area_px.sqrt()
+            scale_gate = (float(weight) * torch.sigmoid((float(tau_px) - size_px) / max(float(beta_px), 0.5))).unsqueeze(-1)
+        else:
+            scale_gate = (float(weight) / (1.0 + gt_area_px / ref_area)).unsqueeze(-1)
         pos_weight = target_scores[fg_idx].sum(-1, keepdim=True)
         dist = scale_invariant_wasserstein_xyxy(fg_pred, fg_target).unsqueeze(-1)
         w_loss = ((dist / (1.0 + dist)) * scale_gate.to(dist.dtype) * pos_weight.to(dist.dtype)).sum()
@@ -243,8 +325,12 @@ def _install_hooks() -> None:
         beta = float(self.yaml.get("tal_beta", 6.0))
         tiny_floor = float(self.yaml.get("tal_tiny_floor", 0.0))
         tal_wasserstein = float(self.yaml.get("tal_wasserstein", 0.0))
+        tal_decoupled = bool(self.yaml.get("tal_decoupled", False))
         loss_wasserstein = float(self.yaml.get("loss_wasserstein", 0.0))
         ref_scale_px = float(self.yaml.get("wasserstein_ref_px", 32.0))
+        raw_tau = self.yaml.get("wasserstein_tau_px")
+        tau_px = float(raw_tau) if raw_tau is not None else None
+        beta_px = float(self.yaml.get("wasserstein_beta_px", 3.5))
         tal_nwd = float(self.yaml.get("tal_nwd", 0.0))
         loss_nwd = float(self.yaml.get("loss_nwd", 0.0))
         nwd_constant = float(self.yaml.get("nwd_constant", 12.8))
@@ -259,8 +345,19 @@ def _install_hooks() -> None:
                     assigner._tiny_floor_patched = True
                 if tal_wasserstein > 0.0 and not getattr(assigner, "_wasserstein_patched", False):
                     assigner.iou_calculation = make_wasserstein_iou_calculation(
-                        assigner.iou_calculation, tal_wasserstein, ref_scale_px=ref_scale_px
+                        assigner.iou_calculation,
+                        tal_wasserstein,
+                        ref_scale_px=ref_scale_px,
+                        tau_px=tau_px,
+                        beta_px=beta_px,
                     )
+                    if tal_decoupled:
+                        assigner.forward = make_decoupled_tal_forward(
+                            assigner.forward,
+                            tal_wasserstein,
+                            tau_px=tau_px if tau_px is not None else 20.0,
+                            beta_px=beta_px,
+                        )
                     assigner._wasserstein_patched = True
                 elif tal_nwd > 0.0 and not getattr(assigner, "_nwd_patched", False):
                     assigner.iou_calculation = make_nwd_iou_calculation(
@@ -271,7 +368,11 @@ def _install_hooks() -> None:
                 bbox_loss = loss.bbox_loss
                 if loss_wasserstein > 0.0 and not getattr(bbox_loss, "_wasserstein_patched", False):
                     bbox_loss.forward = make_wasserstein_bbox_forward(
-                        bbox_loss.forward, loss_wasserstein, ref_scale_px=ref_scale_px
+                        bbox_loss.forward,
+                        loss_wasserstein,
+                        ref_scale_px=ref_scale_px,
+                        tau_px=tau_px,
+                        beta_px=beta_px,
                     )
                     bbox_loss._wasserstein_patched = True
                 elif loss_nwd > 0.0 and not getattr(bbox_loss, "_nwd_patched", False):
@@ -300,6 +401,9 @@ def _install_hooks() -> None:
         head = getattr(self, "_tinydet_head", None)
         if head is None or not getattr(head, "training", True):
             return total.sum(), items
+        o2m_cur = float(getattr(self, "o2m", 0.8))
+        o2m_init = max(float(getattr(self, "o2m_copy", 0.8)), 1e-6)
+        head._distill_decay = max(0.05, min(1.0, o2m_cur / o2m_init))
         raw = preds[1] if isinstance(preds, tuple) else preds
         aux = head.aux_loss(raw, batch)
         bsz = max(raw["one2one"]["boxes"].shape[0], 1)
