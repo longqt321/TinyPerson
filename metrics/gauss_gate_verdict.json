@@ -1,0 +1,29 @@
+[
+  {
+    "epoch": 10,
+    "phase": "early",
+    "observed": {
+      "sigma2_std": 1.1920928955078125e-07,
+      "sigma2_mean": 1.4499999284744263,
+      "sigma1_mean": 0.6500000357627869,
+      "gates/alpha": 0.0,
+      "residual_share_sum": 0.0,
+      "val_map50": 0.08
+    },
+    "checks": {
+      "g_sigma2_std": false,
+      "g_alpha": false,
+      "g_residual_share": false,
+      "g_val_floor": true
+    },
+    "kill": true,
+    "thresholds": {
+      "sigma2_std_min": 0.02,
+      "alpha_min": 0.15,
+      "residual_share_min": 0.02,
+      "val_map50_floor": 0.06,
+      "early_sigma2_std_min": 0.01,
+      "early_alpha_min": 0.12
+    }
+  }
+]

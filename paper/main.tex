@@ -1,6 +1,6 @@
 \documentclass[10pt,twocolumn,letterpaper]{article}
 
-% Official WACV 2026 Style (camera-ready)
+% Official WACV Camera-Ready Style
 \usepackage{wacv}
 \usepackage{times}
 \usepackage{epsfig}
@@ -9,18 +9,17 @@
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{tabularx}
+\usepackage{placeins}
 \usepackage{microtype}
 \usepackage[breaklinks,colorlinks,citecolor=blue,linkcolor=red,urlcolor=blue]{hyperref}
 \usepackage{cite}
 \usepackage{cleveref}
-\usepackage{appendix}
 
-% Camera-ready (final) mode: disables review-only rulers, paper ID, and confidential banner
 \wacvfinalcopy
 
 \begin{document}
 
-\title{GauSS: Gaussian Scale-Space Alignment and Refinement for Nano-Scale Tiny Object Detection}
+\title{GauCon: Local Gaussian Consensus and Decoupled Wasserstein Assignment\\for NMS-Free Tiny Person Detection}
 
 \author{
   Tran Duc Long\textsuperscript{*} \quad
@@ -31,369 +30,255 @@
 }
 
 \maketitle
-% wacv.sty does not implement \@thanks, so \thanks inside \author leaks into the
-% first column of the body text instead of the page-1 footnote area. Emit the
-% footnote explicitly here, immediately after \maketitle.
 {\renewcommand\thefootnote{}\footnotetext{%
   \textsuperscript{*}Corresponding author.
   \textsuperscript{\dag}Supervisor.
 }}
 
 \begin{abstract}
-Detecting tiny targets ($2\text{--}20$ pixels) in high-resolution aerial and maritime imagery is limited by aggressive feature downsampling and by the tight compute budget of unmanned aerial vehicles. A stride-4 ($P2$) feature map restores spatial granularity, but naive concatenation amplifies sea-surface clutter and sensor noise. We propose \textbf{GauSS} (\textbf{Gau}ssian \textbf{S}cale-\textbf{S}pace Alignment and Refinement), a lightweight module that decomposes shallow $P2$ features into complementary frequency bands inspired by discrete Gaussian scale-space operators, then routes them spatially to balance high-frequency detail against structural and contextual guidance. GauSS adds $36{,}878$ parameters ($+1.47\%$) to a $2{,}515{,}976$-parameter YOLO26n-P2 baseline. On TinyPerson, under a tiled evaluation protocol with a single merged \texttt{person} class, GauSS raises $AP_{50}$ from $40.63\%$ to $41.08\%$ overall, from $36.92\%$ to $37.67\%$ on the $8$--$12$ px bin, and from $44.14\%$ to $47.59\%$ on persons above $32$ px ($+3.45$ pp); at the loose operating point $AP_{25}$ the $2$--$8$ px score rises from $39.55\%$ to $43.54\%$. Full-frame inference moves in the same direction ($35.32\% \rightarrow 35.45\%$) and runs at $60.3$ FPS on an NVIDIA A10G; the accuracy-optimal tiled mode trades throughput for precision.
+End-to-end single-stage detectors remove Non-Maximum Suppression (NMS) via one-to-one label assignment, yet their accuracy degrades on tiny crowded maritime persons ($2\text{--}20$ pixels). Three issues drive this drop: isolated single-cell regression inflates boundary variance at strict IoU thresholds, geometry-blind \texttt{one2one} classification struggles to separate adjacent swimmers from duplicate activations, and substituting Normalized Wasserstein Distance (NWD) directly into Task-Aligned Learning (TAL) inflates soft classification targets on off-center anchors. We evaluate \textbf{GauCon}, a selective $P_2/P_3$ Local Gaussian Consensus head paired with \textbf{Decoupled Wasserstein Task-Aligned Learning (DW-TAL)} on YOLO26n-P2. GauCon lifts stride-normalized box offsets into 2D diagonal Gaussians, transforms $3\times 3$ zero-FLOP unfolded spatial neighbors and the stride-$(s{+}1)$ parent cell into a local coordinate frame, and applies damped barycentric interpolation toward the local Wasserstein barycenter while modulating logits via a BatchNorm-free foreground-gated relational MLP. During training, DW-TAL gates Wasserstein candidate matching with a logistic scale gate ($\tau_{\mathrm{px}}=20$ px) and recalibrates positive target scores against true IoU, complemented by annealed dense Gaussian distillation removed at \texttt{fuse()}. Adding $714$ parameters ($+0.030\%$ fused, $2.40$M total), GauCon improves TinyPerson test $AP_{50}^{all}$ from $45.58\%$ to $48.53\%$ ($+2.95$ pp, 95\% bootstrap CI $[+1.92, +4.02]$) and $AP_{75}^{all}$ from $6.40\%$ to $7.37\%$ under native $640\times 512$ tiled evaluation ($+1.28$ pp over NWD on $AP_{75}^{all}$, CI $[+0.54, +1.88]$), while reaching $44.13\%$ full-frame $AP_{50}^{all}$ and outperforming Base + Soft-NMS ($43.37\%$). We also document trade-offs: GauCon trails NWD on \textit{tiny1} and tight-crowd recall and increases tiled background false positives over Base ($+28.7\%$).
 \end{abstract}
 
 \section{Introduction}
 \label{sec:intro}
 
-Real-time detection of tiny objects in wide-angle airborne imagery matters for maritime search and rescue (SAR), coastal defense, and disaster surveillance~\cite{yu2020tinyperson,zhu2021visdrone,wang2020aitod}. In open-sea search, a person in distress often occupies fewer than $20$ pixels of a $1280 \times 1280$ capture, and the hardest cases span only $2\text{--}8$ pixels. At that scale there is no facial or body texture to exploit: contrast against water is low, and reflective wave crests produce responses as strong as the target itself.
+Airborne maritime search and rescue (SAR) requires detecting swimmers across wide-angle coastal imagery~\cite{yu2020tinyperson,zhu2021visdrone,wang2020aitod}. On TinyPerson~\cite{yu2020tinyperson}, $64.9\%$ of positive ground-truth instances span geometric extent $s = \sqrt{wh} \le 20$ pixels and $17.0\%$ fall below $8$ pixels, where body silhouette blends into sun glint and wave crests. Two-stage detectors backed by heavy ImageNet networks ($>32\text{--}60$M parameters)~\cite{ren2015faster,lin2017focal,tian2019fcos,cai2019cascade,hong2022sspnet} achieve higher AP under different two-class protocols, whereas onboard UAV budgets motivate nano-scale architectures ($<3$M parameters)~\cite{chao2025bpdyolo}.
 
-Feature pyramids such as FPN~\cite{lin2017fpn} and PANet~\cite{liu2018panet} aggregate from stride 8 ($P3$) to stride 32 ($P5$). An object smaller than $8$ pixels shrinks to a sub-pixel footprint at stride 8, which weakens its gradient signal during training. Adding a stride-4 ($P2$) level preserves spatial granularity and is now standard in small-object YOLO variants~\cite{ultralytics2026yolo,chao2025bpdyolo}, but naive concatenation of shallow features reintroduces the problem the pyramid was meant to solve: shallow layers carry resolution without semantics, so wave texture passes straight into the detection head.
+Recent end-to-end detectors including RT-DETR~\cite{zhao2024rtdetr}, YOLOv10~\cite{wang2024yolov10}, and YOLO26~\cite{ultralytics2026yolo} eliminate heuristic NMS post-processing~\cite{neubeck2006nms,bodla2017softnms} through dual label assignment, deploying a single \texttt{one2one} branch after head fusion. Extending an FPN--PANet pyramid~\cite{lin2017fpn,liu2018panet} and dynamic head~\cite{dai2021dyhead} in an NMS-free nano detector with a stride-4 ($P_2$) level preserves spatial sampling for $4\text{--}16$ px persons, yet three structural bottlenecks appear on maritime crowds. First, whereas post-hoc Weighted Boxes Fusion (WBF)~\cite{solovyev2021wbf} averages overlapping predictions, a standalone \texttt{one2one} cell regresses its four edges independently, hurting strict localization ($AP_{75}$). Second, convolutional \texttt{one2one} classification scores local visual features without pairwise box geometry in crowded groups~\cite{sun2021onenet,hosang2017learning}. Third, because $P_2$ ($320\times 320$) contains $>98\%$ sea background cells, BatchNorm inside any gating block skews running statistics toward water clutter; meanwhile, plugging Normalized Wasserstein Distance (NWD)~\cite{wang2021nwd,xu2022nwd_isprs} directly into Task-Aligned Learning (TOOD)~\cite{feng2021tood} assigns inflated soft targets to low-IoU anchors due to NWD's uncalibrated similarity and fixed scale constant $C$~\cite{zhang2021varifocalnet}.
 
-Tiny-person detectors built on heavy ImageNet-pretrained backbones ($>32\text{--}41\text{M}$ parameters), such as Scale-Match Faster R-CNN~\cite{yu2020tinyperson} and RetinaNet~\cite{lin2017focal}, avoid this by brute force but are hard to deploy on a UAV. We therefore ask whether a nano-scale single-stage detector ($<2.6\text{M}$ parameters) can keep microscopic localization while running in real time.
-
-We introduce \textbf{GauSS}, a module that stabilizes and enriches stride-4 features. Treating pyramid levels as discrete samples of a scale space~\cite{witkin1983scale,koenderink1984structure,lindeberg1994scale}, GauSS filters the fused $P2$ representation with learnable separable Gaussians and splits it into high-, mid- and low-frequency bands. A spatial router weights the bands per location using a log-energy prior plus a learned correction, so wave clutter is suppressed where it dominates and weak target energy is kept where it appears.
+To address these design constraints jointly, we propose \textbf{GauCon} and \textbf{DW-TAL} on YOLO26n-P2. Operating selectively on $P_2$ ($s{=}4$) and $P_3$ ($s{=}8$)—while keeping $P_4, P_5$ as exact identity \texttt{one2one} heads because strides $16\text{--}32$ are too coarse for tiny targets—GauCon transforms decoded offsets into 2D diagonal Gaussians, aligns $3\times 3$ zero-FLOP unfolded spatial neighbors and the $2\times$ parent cell into a local coordinate frame, computes a variance-normalized Wasserstein discrepancy, and applies damped barycentric interpolation~\cite{agueh2011barycenters} alongside a BatchNorm-free foreground-gated relational MLP. During training, DW-TAL restricts Wasserstein matching with a logistic scale gate ($\tau_{\mathrm{px}}=20$ px) and caps positive target scores at true IoU, paired with annealed \texttt{one2many} Gaussian distillation removed at \texttt{fuse()}.
 
 Our contributions are:
 \begin{itemize}
-  \item a lightweight module that structures shallow stride-4 features into complementary frequency bands with learnable separable Gaussians and routes them spatially, for $+36{,}878$ parameters ($+1.47\%$);
-  \item a scratch-trained baseline under a sequence-isolated TinyPerson split, against which GauSS gains in the $tiny2$, $small$ and $reasonable$ bins while the $tiny3$ bin drops slightly;
-  \item an ablation over the frequency bands and the spatial router, plus a latency and VRAM profile on edge-representative hardware.
+  \item We present \textbf{GauCon} (Section~\ref{sec:method_head}), a selective $P_2/P_3$ intra-head module combining zero-FLOP coordinate alignment, scale-invariant Wasserstein discrepancy, damped barycentric interpolation, and BatchNorm-free foreground-gated logit modulation for $+714$ parameters ($+0.030\%$ fused, $+0.086$ pre-fuse GFLOPs at $1280$).
+  \item We formulate \textbf{DW-TAL} (Section~\ref{sec:method_dwtal}), decoupling logistic scale-gated Wasserstein candidate selection from true-IoU soft-target capping, supported by epoch-scheduled \texttt{one2many} Gaussian distillation removed at \texttt{fuse()}.
+  \item Under controlled $80$-epoch COCO-pretrained benchmarking on TinyPerson against Base, Base + Soft-NMS, and + NWD across tiled ($640\times 512$) and full-frame ($1280\times 1280$) protocols (Figure~\ref{fig:diagnostics_ext}, Tables~\ref{tab:main_results}--\ref{tab:diagnostics}), we analyze both improvements ($+2.95$ pp tiled $AP_{50}^{all}$, $+1.28$ pp tiled $AP_{75}^{all}$ over NWD) and remaining failure modes (\textit{tiny1} recall trade-off, tiled background false positives, and indirect large-object gains lacking component-wise ablations).
 \end{itemize}
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.99\linewidth]{figures/fig_gaucon_pipeline.pdf}
+  \caption{\textbf{Overview of GauCon and DW-TAL.} Across the YOLO26n-P2 backbone ($C_2\text{--}C_5$) and FPN--PANet neck ($136{,}000$ total grid cells at $1280\times 1280$), GauCon attaches exclusively to deployable $P_2$ ($s{=}4$) and $P_3$ ($s{=}8$) \texttt{one2one} heads ($+714$ parameters total), keeping $P_4, P_5$ as identity heads ($>28$ px). Purple dashed paths denote training-only DW-TAL, \texttt{one2many} supervision, and annealed distillation removed at \texttt{Detect.fuse()}.}
+  \label{fig:gaucon_arch}
+\end{figure*}
 
 \section{Related Work}
 \label{sec:related}
 
-\textbf{Tiny and Small Object Detection}: Tiny object detection in aerial and remote-sensing imagery~\cite{yu2020tinyperson,wang2020aitod,zhu2021visdrone} suffers from information loss and background noise. Yu~\etal~\cite{yu2020tinyperson} introduced TinyPerson with Scale Match, showing that ImageNet-pretrained representations mismatch targets below $20$ pixels. Normalized Wasserstein Distance~\cite{wang2021nwd} replaces IoU for tiny instances, receptive-field label assignment (RFLA)~\cite{chen2021rfla} adapts matching to small boxes, and SAHI~\cite{akyon2022sahi} slices images at inference. Most of these approaches rest on multi-stage backbones above $30\text{M}$ parameters; nano architectures remain less explored.
+\textbf{Tiny Person Detection and Gaussian Box Metrics.} TinyPerson~\cite{yu2020tinyperson} revealed severe scale mismatch between ImageNet/COCO pretraining and $2\text{--}20$ px maritime targets, motivating Scale Match~\cite{yu2020tinyperson}, SM+~\cite{jiang2021smplus}, FPN fusion factors~\cite{gong2021fusionfactor}, and SSPNet~\cite{hong2022sspnet}. For lightweight deployment ($<3$M parameters), YOLO11~\cite{ultralytics2024yolo11} and BPD-YOLO~\cite{chao2025bpdyolo} attach a stride-4 $P_2$ branch under greedy NMS, while SAHI~\cite{akyon2022sahi} slices frames at multi-crop latency cost. Because IoU collapses under $1\text{--}2$ px shifts on tiny boxes~\cite{wang2020aitod}, GWD~\cite{yang2021gwd}, NWD~\cite{wang2021nwd,xu2022nwd_isprs}, and RFLA~\cite{chen2021rfla} model boxes as 2D Gaussians. However, NWD relies on $\exp(-\sqrt{W_2^2}/C)$ with a fixed constant $C=12.8$ that breaks scale invariance across pyramid levels; GauCon normalizes transport discrepancy by local variance sums without a scale constant and integrates damped Wasserstein interpolation inside the head.
 
-\textbf{High-Resolution Strides and Feature Pyramids}: Multi-scale pyramids~\cite{lin2017fpn,tan2020efficientdet} aggregate representations across scales, and a stride-4 detection head is a standard remedy for small objects~\cite{ultralytics2026yolo,chao2025bpdyolo,sunkara2022spdconv}. Attention modules~\cite{woo2018cbam,hu2018senet,wang2020eca} and dynamic heads~\cite{dai2021dyhead} suppress noise but do not model frequency content explicitly.
+\textbf{End-to-End NMS-Free Detection and Local Consensus.} DETR~\cite{carion2020detr} and RT-DETR~\cite{zhao2024rtdetr} remove NMS via global query self-attention, whose quadratic cost is prohibitive on $320\times 320$ $P_2$ grids. OneNet (Sun et al., \textit{What Makes for End-to-End Object Detection?}~\cite{sun2021onenet}) proved that convolutional one-to-one detectors require classification-aware matching costs to open a score gap against duplicate neighbors, inspiring dual \texttt{one2many}/\texttt{one2one} training in YOLOv10~\cite{wang2024yolov10} and YOLO26~\cite{ultralytics2026yolo}. Yet convolutional \texttt{one2one} heads lack the multi-box averaging of WBF~\cite{solovyev2021wbf} and the relational duplicate suppression of Soft-NMS~\cite{bodla2017softnms} or GossipNet~\cite{hosang2017learning}.
 
-\textbf{Scale-Space Representation and Multi-Scale Decompositions}: Axiomatic scale-space theory~\cite{witkin1983scale,koenderink1984structure,lindeberg1994scale} guarantees that Gaussian filtering creates no new local extrema, and the Laplacian pyramid~\cite{burt1983laplacian} showed that differences of low-pass images isolate band-pass detail compactly. Deep variants learn scale explicitly~\cite{worrall2019scale,sosnovik2019scale,pintea2021resolution}. Pintea~\etal~\cite{pintea2021resolution} parameterize Gaussian derivative basis filters across classification networks; GauSS instead applies learnable separable Gaussians inside the stride-4 fusion stage, where the bands separate microscopic object boundaries from low-frequency water texture.
+\textbf{Task-Aligned Assignment and Score Calibration.} TOOD~\cite{feng2021tood} selects positive anchors via $t = s^\alpha u^\beta$ and scales binary cross-entropy targets by peak overlap. Generalized Focal Loss~\cite{li2020gfl} and VarifocalNet~\cite{zhang2021varifocalnet} showed that confidence scores rank detections reliably only when supervised by true IoU. Replacing $u$ with broad Gaussian similarity~\cite{wang2021nwd} inflates targets on low-IoU anchors~\cite{bolya2020tide}, motivating our decoupled DW-TAL formulation.
 
 \section{Methodology}
 \label{sec:method}
 
-\begin{figure*}[t]
-  \centering
-  \includegraphics[width=0.96\linewidth]{figures/fig_overall_pipeline.pdf}
-  \caption{\textbf{Overall Architecture of the YOLO26n-P2 + GauSS Detector}: GauSS sits at the junction of backbone layer 2 ($C_2$), the lateral neck ($P_3$) and contextual features ($P_4$), and refines the stride-4 representation. Its output feeds the $P_2$ head directly and, after a stride-2 convolution, is concatenated into the $P_3$ path that drives the $P_3$, $P_4$ and $P_5$ heads.}
-  \label{fig:pipeline_overview}
-\end{figure*}
-
-\subsection{Architectural Overview}
-\label{sec:arch_overview}
-As shown in Figure~\ref{fig:pipeline_overview}, the detector is a single-stage anchor-free design with four detection strides: $P_2$ (4), $P_3$ (8), $P_4$ (16), and $P_5$ (32). An input image $\mathbf{I} \in \mathbb{R}^{3 \times H \times W}$ passes through a CSPDarknet backbone~\cite{bochkovskiy2020yolov4} producing $\mathbf{C}_2,\dots,\mathbf{C}_5$; all convolutions are followed by batch normalization~\cite{ioffe2015batch} and SiLU~\cite{elfwing2018silu}, and $1\times1$ denotes a pointwise projection.
-
-A stride-4 ($P2$) level supplies the spatial sampling that tiny objects need. To stop direct lateral concatenation from swamping target activations with sea clutter, GauSS sits at the intersection of $\mathbf{C}_2$, $\mathbf{P}_3$, and $\mathbf{P}_4$ (Figure~\ref{fig:gauss_router}).
+Figure~\ref{fig:gaucon_arch} presents our architecture built on YOLO26n-P2~\cite{ultralytics2026yolo} with pyramid levels $\{P_2, P_3, P_4, P_5\}$ at strides $r_s \in \{4, 8, 16, 32\}$ and head input channels $\{32, 64, 128, 256\}$. All experiments here use direct scalar regression ($\text{reg\_max}=1$) predicting stride-normalized edge offsets $\mathbf{d}_0(u) = (l, t, r, b) \in \mathbb{R}_{\ge 0}^4$ and logits $\mathbf{s}_{\mathrm{raw}}(u) \in \mathbb{R}^C$ at cell $u = (y, x)$ (as an implementation compatibility feature, the module also supports DFL heads with $\text{reg\_max}>1$~\cite{wang2024yolov10} by taking $\mathbf{d}_0$ after linear DFL expectation).
 
 \begin{figure*}[t]
   \centering
-  \includegraphics[width=\linewidth]{figures/fig_gauss_module.pdf}
-  \caption{\textbf{Architecture of the GauSS Module}: $C_2$, $P_3$ and $P_4$ are projected to $d=32$ channels; $\mathbf{X}_0$ fuses $\mathbf{S}_2$ with a DySample-upsampled $\mathbf{S}_3$; two learnable separable Gaussians produce the high, mid and low bands; each band is refined by a sub-pixel encoder; a dilated context branch ($r \in \{1,3,5\}$) provides $\mathbf{C}_{\text{ctx}}$; a hybrid router combines a log-energy prior with a zero-initialized correction; and the output is the linear residual $\mathbf{X}_0 + \alpha\mathbf{z} + \gamma_{\text{out}}\mathbf{B}_{\text{high}}$.}
-  \label{fig:gauss_router}
+  \includegraphics[width=0.98\linewidth]{figures/fig_gaucon_head.pdf}
+  \caption{\textbf{Internal GauCon Head Mechanism at Cell $u = (y, x)$ ($s \in \{P_2, P_3\}$).} Raw box offsets lift into a 2D Gaussian, align $3\times 3$ zero-FLOP unfolded spatial neighbors and the $2\times$ parent cell from $P_{s+1}$, and branch into damped Wasserstein barycentric interpolation (top) and a BatchNorm-free foreground-gated relational MLP (bottom).}
+  \label{fig:gaucon_head}
 \end{figure*}
 
-\subsection{Discrete Gaussian Scale-Space Formulation}
-\label{sec:scalespace_formulation}
-Axiomatic scale-space theory~\cite{witkin1983scale,koenderink1984structure,lindeberg1994scale} states that multi-scale representation without spurious extrema is governed by Gaussian diffusion, $L(\mathbf{x}; \sigma) = g(\mathbf{x}; \sigma) * f(\mathbf{x})$ with $g$ a Gaussian kernel of width $\sigma$. GauSS embeds this principle in the pyramid. Inputs $\mathbf{C}_2 \in \mathbb{R}^{64 \times \frac{H}{4} \times \frac{W}{4}}$, $\mathbf{P}_3 \in \mathbb{R}^{64 \times \frac{H}{8} \times \frac{W}{8}}$, and $\mathbf{P}_4 \in \mathbb{R}^{128 \times \frac{H}{16} \times \frac{W}{16}}$ are projected by $1\times1$ convolutions to a hidden dimension $d = 32$, and the fused base feature upsamples $\mathbf{S}_3$ onto the stride-4 grid with DySample~\cite{liu2023dysample}, a content-aware point-sampling upsampler that is bilinear at initialization (zero-initialized offset head) and learns where to sample during training:
-\begin{equation}
-  \mathbf{X}_0 = \text{SiLU}\big( \text{BN}(\mathbf{S}_2 + \text{DySample}(\mathbf{S}_3)) \big).
-  \label{eq:proj_x0}
-\end{equation}
-On $\mathbf{X}_0 \in \mathbb{R}^{d \times \frac{H}{4} \times \frac{W}{4}}$, a \textit{learnable separable Gaussian filter} runs in two scale regimes per channel:
-\begin{equation}
-  \mathbf{L}_k = g_y(\sigma_{k,y}) * \big( g_x(\sigma_{k,x}) * \text{Pad}(\mathbf{X}_0) \big), \quad k \in \{1, 2\},
-  \label{eq:gaussian_filter}
-\end{equation}
-with channel-wise scales bounded by a scaled sigmoid, $\sigma_k = \sigma_{k,\min} + (\sigma_{k,\max} - \sigma_{k,\min})\,\text{Sigmoid}(\hat{\sigma}_k)$, where $\sigma_1 \in [0.4, 0.9]$ ($5\times 5$ support, initialized at $0.65$) and $\sigma_2 \in [1.1, 1.8]$ ($9\times 9$, initialized at $1.45$); on the stride-4 grid ($1$ cell $= 4$ image pixels) this corresponds to $\sigma_{1,\text{img}} \approx 2.6$ px and $\sigma_{2,\text{img}} \approx 5.8$ px. The 1D kernels are softmax-normalized Gaussians over integer offsets, $g(u; \sigma) = \text{Softmax}(-u^2/2\sigma^2)$ for $u \in \{-r_k, \dots, r_k\}$. Successive differences of $(\mathbf{X}_0, \mathbf{L}_1, \mathbf{L}_2)$ give three frequency bands,
-\begin{equation}
-  \mathbf{B}_{\text{high}} = \mathbf{X}_0 - \mathbf{L}_1, \quad
-  \mathbf{B}_{\text{mid}} = \mathbf{L}_1 - \mathbf{L}_2, \quad
-  \mathbf{B}_{\text{low}} = \mathbf{L}_2,
-  \label{eq:bands}
-\end{equation}
-covering edges and contours, band-pass structure in the $8\text{--}12$ px range, and low-pass context. Each band is refined by a sub-pixel encoder that applies $\text{PixelUnshuffle}(2)$~\cite{shi2016pixelshuffle}, depthwise separable convolutions and a residual addition, yielding $\{\mathbf{R}_{\text{high}}, \mathbf{R}_{\text{mid}}, \mathbf{R}_{\text{low}}\} \in \mathbb{R}^{d \times \frac{H}{8} \times \frac{W}{8}}$.
+\subsection{Zero-FLOP Coordinate Alignment and Scale-Invariant Metric}
+\label{sec:method_transport}
 
-\subsection{Multi-Scale Context Gating and Spatial Routing}
-\label{sec:router_attention}
-Deeper context is fused as $\mathbf{C}_0 = \text{SiLU}(\text{BN}(\mathbf{S}_3 + \text{DySample}(\mathbf{S}_4)))$. Three dilated depthwise $3\times 3$ convolutions with rates $r_i \in \{1, 3, 5\}$ produce $\mathbf{T}_i = \text{SiLU}(\text{BN}(\text{DWConv}_{r_i}(\mathbf{C}_0)))$, and a per-location softmax gate $\boldsymbol{\omega} = \text{Softmax}_{c}(\text{Conv}_{1\times 1}(\mathbf{C}_0))$ mixes them into context guidance:
+As shown in Figure~\ref{fig:gaucon_head}, $\mathbf{d}_0(u)$ maps bijectively to a 2D diagonal Gaussian $\mathcal{G}_0(u) = \mathcal{N}(\boldsymbol{\mu}_0(u), \mathrm{diag}(\boldsymbol{\sigma}_0(u)^2))$~\cite{yang2021gwd,wang2021nwd} relative to cell center $(x + 0.5, y + 0.5)$:
 \begin{equation}
-  \mathbf{C}_{\text{ctx}} = \text{SiLU}\Big(\mathbf{C}_0 + \sum_{i=1}^3 \omega_i \odot \mathbf{T}_i\Big),
-  \label{eq:context_fusion}
+  \boldsymbol{\mu}_0 = \tfrac{1}{2}\begin{bmatrix} r - l \\ b - t \end{bmatrix}, \quad
+  \boldsymbol{\sigma}_0 = \max\!\left(\tfrac{1}{2}\begin{bmatrix} l + r \\ t + b \end{bmatrix}, \epsilon_\sigma\right),
+  \label{eq:gauss_lift}
 \end{equation}
-so different regions can select different dilation rates. A hybrid router then weights the bands per location, combining a parameter-free log-energy prior on the raw bands with a zero-initialized learned correction:
-\begin{equation}
-  \mathbf{a}_{\text{bands}} = \text{Softmax}\big( \log \bar{\mathbf{e}} + \text{Conv}_{1\times 1}(\mathbf{U}) \big),
-  \label{eq:routing_gate}
-\end{equation}
-\begin{equation}
-  \mathbf{U} = \text{SiLU}(\mathbf{R}_{\text{high}} + \mathbf{R}_{\text{mid}} + \mathbf{R}_{\text{low}} + \mathbf{C}_{\text{ctx}}),
-  \label{eq:routing_u}
-\end{equation}
-where $\bar{e}_b = \text{AvgPool}_{2}\big(\tfrac{1}{d}\sum_c |\mathbf{B}_b|\big)$ is the stride-8 mean magnitude of raw band $b \in \{\text{high}, \text{mid}, \text{low}\}$. The prior is detached from the gradient graph; the zero-initialized correction makes the router start exactly at the normalized energy rule $\mathbf{a} = \bar{\mathbf{e}} / \sum_b \bar{e}_b$, and a z-loss (squared log-sum-exp of the correction logits, weight $10^{-3}$) keeps the correction bounded. The detail path reuses the band evidence through $m_{\text{gate}} = a_h + a_m$, the combined high- and mid-band share.
+with $\epsilon_\sigma = 0.05$ stride units and linear inverse $\mathcal{G}^{-1}(\boldsymbol{\mu}, \boldsymbol{\sigma}) = (\sigma_x - \mu_x, \sigma_y - \mu_y, \sigma_x + \mu_x, \sigma_y + \mu_y)$.
 
-Adaptive band synthesis is stabilized by a high-band shortcut:
-\begin{equation}
-  \mathbf{F}_{\text{band}} = a_h \mathbf{R}_{\text{high}} + a_m \mathbf{R}_{\text{mid}} + a_l \mathbf{R}_{\text{low}},
-  \label{eq:band_synthesis}
-\end{equation}
-and the detail path receives a bounded high-band term through $\gamma_{\text{in}} = 0.5 \cdot \tanh(\hat{\gamma}_{\text{in}}) \in (-0.5, 0.5)$, retaining sub-8\,px gradient energy:
+Around cell $u$, we gather $8$ spatial neighbors $\delta_k = (\Delta x_k, \Delta y_k) \in \{-1, 0, +1\}^2 \setminus \{(0,0)\}$ ($k=1,\dots,8$) and the co-located parent cell $u_p = (\lfloor y/2 \rfloor, \lfloor x/2 \rfloor)$ from level $s+1$ ($k=9$, stride ratio $\rho = r_{s+1}/r_s = 2$). Rather than executing a sparse depthwise $3\times 3$ convolution ($405$ multiply-adds per cell on $320\times 320$ $P_2$), we pad by $1$ cell and extract a sliding-window view via \texttt{unfold} at zero floating-point cost. Aligning neighbor $k$ into cell $u$'s local coordinate frame yields:
 \begin{align}
-  \mathbf{F}_{\text{route}} &= m_{\text{gate}} \cdot \text{Branch}_{3\times 3}(\mathbf{F}_{\text{band}} + \mathbf{C}_{\text{ctx}} + \gamma_{\text{in}} \mathbf{R}_{\text{high}}) \nonumber \\
-  &\quad + (1 - m_{\text{gate}}) \cdot \text{Branch}_{5\times 5}(\mathbf{R}_{\text{low}} + \mathbf{C}_{\text{ctx}}).
-  \label{eq:f_route}
+  \tilde{\boldsymbol{\mu}}_k(u) &= \boldsymbol{\mu}_0(u + \delta_k) + \delta_k, \quad \tilde{\boldsymbol{\sigma}}_k(u) = \boldsymbol{\sigma}_0(u + \delta_k), \label{eq:spatial_transport}\\
+  \tilde{\boldsymbol{\mu}}_9(u) &= \rho\,\boldsymbol{\mu}_0^{(s+1)}(u_p) + \boldsymbol{\Delta}_p(u), \; \tilde{\boldsymbol{\sigma}}_9(u) = \rho\,\boldsymbol{\sigma}_0^{(s+1)}(u_p), \label{eq:parent_transport}
 \end{align}
-The module also defines an optional saliency gate that attenuates the low band, $\mathbf{R}_{\text{low}} \odot (1 - 0.5\,\mathbf{M}_{\text{sal}})$ with $\mathbf{M}_{\text{sal}} = \text{Sigmoid}(\text{Conv}_{1\times 1}(\mathbf{C}_{\text{ctx}}))$; it is disabled in the reported configuration and examined only in the ablation of Section~\ref{sec:ablation}.
-Both paths share the same residual depthwise-separable form, differing only in kernel size $k \in \{3, 5\}$:
-\begin{equation}
-  \begin{aligned}
-    \text{Branch}_{k}(\mathbf{x}) &= \text{SiLU}\Big(\mathbf{x} + \text{BN}\big(\text{PWConv}_{1\times 1}(\mathbf{u})\big)\Big),\\
-    \mathbf{u} &= \text{SiLU}\big(\text{BN}(\text{DWConv}_{k}(\mathbf{x}))\big),
-  \end{aligned}
-  \label{eq:refine_branch}
-\end{equation}
-Both convolutions are bias-free; the $k=3$ branch costs $1{,}440$ parameters and the $k=5$ branch $1{,}952$ (Table~\ref{tab:param_breakdown}).
-Finally, features are reconstructed to stride 4. A $1\times 1$ conv expands $\mathbf{F}_{\text{route}}$ to $4d$ channels, and $\text{PixelShuffle}(2)$~\cite{shi2016pixelshuffle} returns them to $d$ channels at stride 4. With bounded gains $\alpha = 0.5 \cdot \tanh(\hat{\alpha})$ and $\gamma_{\text{out}} = 0.5 \cdot \tanh(\hat{\gamma}_{\text{out}})$, the output is a bounded linear residual plus a direct high-band term at native stride 4:
-\begin{equation}
-  \widetilde{\mathbf{F}} = \text{PixelShuffle}(2)\big(\text{BN}(\text{Conv}_{1\times 1}^{\to 4d}(\mathbf{F}_{\text{route}}))\big),
-  \label{eq:f_tilde}
-\end{equation}
-\begin{equation}
-  \mathbf{P}_2^{\text{aligned}} = \mathbf{X}_0 + \alpha \cdot \widetilde{\mathbf{F}} + \gamma_{\text{out}} \cdot \mathbf{B}_{\text{high}}.
-  \label{eq:p2_aligned}
-\end{equation}
-All three gains are zero at initialization, so the module starts as an exact identity mapping and the Gaussian scales receive gradient from the first training step.
+where $\boldsymbol{\Delta}_p(u) = \rho(u_p + 0.5) - (u + 0.5)$. When cell $u$ and neighbor $k$ predict the same physical box in image coordinates, Eqs.~\eqref{eq:spatial_transport}--\eqref{eq:parent_transport} yield $\tilde{\boldsymbol{\mu}}_k(u) = \boldsymbol{\mu}_0(u)$ and $\tilde{\boldsymbol{\sigma}}_k(u) = \boldsymbol{\sigma}_0(u)$ identically.
 
-The module stores $36{,}878$ weights, which raises the detector from $2{,}515{,}976$ to $2{,}552{,}854$ parameters ($+1.47\%$). Of those, $517$ belong to optional components that are disabled in the reported configuration (an alternative learned-router stack and the saliency gate), so the active path holds $36{,}361$ weights. A per-submodule breakdown is given in Appendix~\ref{app:param_breakdown}.
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig_gaucon_theory_curves.pdf}
+  \caption{\textbf{Properties of our formulation.} \textbf{(a)} Logistic scale gate $g(s_{\mathrm{gt}})$ ($\tau_{\mathrm{px}}{=}20$) cleanly isolates tiny targets compared to a heavy-tailed rational decay. \textbf{(b)} Under a fixed $25\%$ relative center shift, self-normalized $S_W=(1+D)^{-1}$ stays constant across box scales whereas fixed-$C$ NWD ($C{=}12.8$) decays sharply.}
+  \label{fig:theory}
+\end{figure}
 
-\subsection{Head Formulation and Regression Loss}
-\label{sec:loss_head}
-Following YOLO26's native end-to-end regression design~\cite{ultralytics2026yolo}, box regression uses $\text{reg\_max} = 1$, collapsing coordinate offsets into deterministic scalars ($\mathcal{L}_{\text{DFL}} = 0$) instead of the 16-bin DFL of GFL~\cite{li2020gfl,li2021gflv2}, which adds spatial variance on $2$--$8$ px targets. Training uses the TOOD~\cite{feng2021tood} classification objective with CIoU~\cite{zheng2020diou} and auxiliary $\ell_1$ regression,
+The squared $2$-Wasserstein distance~\cite{villani2009optimal} between two diagonal Gaussians decomposes across $a \in \{x, y\}$ via $\Delta\mu_{ka} = \tilde{\mu}_{ka}(u) - \mu_{0a}(u)$ and $\Delta\sigma_{ka} = \tilde{\sigma}_{ka}(u) - \sigma_{0a}(u)$. Instead of a dataset-tuned pixel constant $C$~\cite{wang2021nwd}, we normalize each axis by combined local variance:
 \begin{equation}
-  \mathcal{L}_{\text{total}} = \lambda_{\text{cls}} \mathcal{L}_{\text{cls}} + \lambda_{\text{box}} \mathcal{L}_{\text{CIoU}} + \lambda_{\ell_1} \mathcal{L}_{\ell_1},
-  \label{eq:total_loss}
+  D_k(u) = \sum_{a \in \{x, y\}} \frac{\Delta\mu_{ka}^2 + \Delta\sigma_{ka}^2}{\sigma_{0a}(u)^2 + \tilde{\sigma}_{ka}(u)^2 + \epsilon},
+  \label{eq:si_wasserstein}
 \end{equation}
-with $\lambda_{\text{cls}} = 0.5$, $\lambda_{\text{box}} = 7.5$, $\lambda_{\ell_1} = 1.0$. Baseline and GauSS share this formulation and identical post-processing.
+with $\epsilon = 10^{-6}$. Scaling both boxes by any $\lambda > 0$ multiplies numerator and denominator by $\lambda^2$, guaranteeing exact scale invariance $D_k(\lambda B_1, \lambda B_2) = D_k(B_1, B_2)$ (Figure~\ref{fig:theory}b). Out-of-bounds taps and cross-class neighbors ($\hat{c}_k \neq \hat{c}_0$ for $C > 1$) receive $D_k(u) \leftarrow 10^4$.
+
+\subsection{Selective \texorpdfstring{$P_2/P_3$}{P2/P3} GauCon Head}
+\label{sec:method_head}
+
+On coarse $P_4$ ($s{=}16$) and $P_5$ ($s{=}32$) grids, adjacent cells lie $16\text{--}32$ input pixels apart, so neighborhood blending risks blurring medium/large persons ($>28$ px). We therefore activate GauCon selectively on $s \in \{P_2, P_3\}$ ($\text{active\_nl}=2$, reading $P_4$ only as the parent of $P_3$) and preserve exact identity \texttt{one2one} heads on $P_4, P_5$. Neighbor tuples $(\tilde{\boldsymbol{\mu}}_k, \tilde{\boldsymbol{\sigma}}_k, s_k)$ with $s_k = \max_c \mathbf{s}_{\mathrm{raw}}(u_k)$ are detached when computing weights, and alignment runs in \texttt{float32} for mixed-precision stability.
+
+\textbf{Damped Barycentric Interpolation.} By Agueh and Carlier~\cite{agueh2011barycenters}, the Wasserstein barycenter minimizing $\sum_{k=0}^9 w_k W_2^2(\mathcal{G}, \tilde{\mathcal{G}}_k)$ over diagonal Gaussians has closed form $(\boldsymbol{\mu}^\star, \boldsymbol{\sigma}^\star) = (\sum_{k=0}^9 w_k \tilde{\boldsymbol{\mu}}_k, \sum_{k=0}^9 w_k \tilde{\boldsymbol{\sigma}}_k)$ without variance broadening. Defining self-logit $\ell_0 = \gamma_{\mathrm{box}} \log\sigma(s_0)$ and neighbor logits $\ell_k = \gamma_{\mathrm{box}} \log\sigma(s_k) - \tau_{\mathrm{box}} D_k$ with learnable per-level scalars $\gamma_{\mathrm{box}}, \tau_{\mathrm{box}} > 0$ and damping factor $\beta_{\mathrm{box}} \in (0, 1)$, softmax weights $w_k = \mathrm{softmax}(\boldsymbol{\ell})_k$ yield a damped single-step update toward the barycenter ($\boldsymbol{\mu}_{\mathrm{ref}} = \boldsymbol{\mu}_0 + \beta_{\mathrm{box}}(\boldsymbol{\mu}^\star - \boldsymbol{\mu}_0)$):
+\begin{align}
+  \boldsymbol{\mu}_{\mathrm{ref}} &= \boldsymbol{\mu}_0 + \beta_{\mathrm{box}} \sum_{k=1}^{9} w_k (\tilde{\boldsymbol{\mu}}_k - \boldsymbol{\mu}_0), \nonumber\\
+  \boldsymbol{\sigma}_{\mathrm{ref}} &= \max\!\Big(\boldsymbol{\sigma}_0 + \beta_{\mathrm{box}} \sum_{k=1}^{9} w_k (\tilde{\boldsymbol{\sigma}}_k - \boldsymbol{\sigma}_0),\, \epsilon_\sigma\Big),
+  \label{eq:barycenter}
+\end{align}
+which recovers the exact barycenter at $\beta_{\mathrm{box}} = 1$ and leaves raw predictions unchanged as $\beta_{\mathrm{box}} \to 0$. Adjacent distinct swimmers ($D_k \gg 0$) yield $w_k \approx 0$ to avoid collapsing nearby targets.
+
+\textbf{BatchNorm-Free Foreground-Gated Dominance and Consensus.} With affinity $A_k = \exp(-\tau_{\mathrm{cls}} D_k)$ and $p_k = \sigma(s_k)$ ($k=1,\dots,9$), we form a $20$-channel relational vector $\mathbf{r}_u \in \mathbb{R}^{20}$ concatenating foreground affinities $A_k p_k$ ($9$ ch), dominance margins $M_k = A_k \max(0, s_k - s_0)$ ($9$ ch), peak dominance $M_{\mathrm{dom}} = \max_k M_k$ ($1$ ch), and mean local support $M_{\mathrm{sup}} = \frac{1}{|\mathcal{V}_u|}\sum_{k \in \mathcal{V}_u} A_k p_k$ ($1$ ch). Because $>98\%$ of $P_2/P_3$ cells cover sea background, placing Batch Normalization~\cite{ioffe2015batch} inside the gate biases running statistics toward background and leaks false alarms across water clutter. We parameterize $\mathcal{M}_s: \mathbb{R}^{20} \to \mathbb{R}^C$ as a zero-initialized $1\times 1$ MLP without BatchNorm ($\text{Conv}_{1\times 1}^{20\to 16} \to \mathrm{SiLU} \to \text{Conv}_{1\times 1}^{16\to C}$) gated by cell $u$'s own foreground probability:
+\begin{equation}
+  \mathbf{s}_{\mathrm{ref}}(u) = \mathbf{s}_{\mathrm{raw}}(u) + \sigma\!\big(s_0(u)\big)\,\mathcal{M}_s(\mathbf{r}_u).
+  \label{eq:fg_gate}
+\end{equation}
+Background cells ($\sigma(s_0) \approx 0$) remain anchored to raw logits while foreground candidates suppress duplicate runners-up ($M_{\mathrm{dom}} > 0$) and boost mutually supported tiny swimmers ($M_{\mathrm{sup}} > 0$). Across $P_2$ and $P_3$, GauCon adds $2 \times (336 + 17 + 4) = 714$ parameters.
+
+\subsection{Decoupled Wasserstein TAL and Annealed Field Distillation}
+\label{sec:method_dwtal}
+
+\textbf{Logistic Scale Gate and DW-TAL.} For ground-truth input size $s_{\mathrm{gt}} = \sqrt{w_{\mathrm{gt}} h_{\mathrm{gt}}}$, we route Wasserstein matching via $g(s_{\mathrm{gt}}) = \sigma((\tau_{\mathrm{px}} - s_{\mathrm{gt}})/\beta_{\mathrm{px}})$ with $\tau_{\mathrm{px}} = 20.0$ px and $\beta_{\mathrm{px}} = 3.5$ px (Figure~\ref{fig:theory}a), giving $g(5)=0.986$ on tiny swimmers and $g(35)=0.014$ to leave CIoU~\cite{zheng2020diou} intact on larger persons. Inside TAL candidate selection~\cite{feng2021tood}, overlap blends CIoU with rational Wasserstein similarity $S_W = (1 + D)^{-1}$ via $\tilde{u} = (1 - \alpha_{\mathrm{tal}}) u_{\mathrm{CIoU}} + \alpha_{\mathrm{tal}} S_W$ ($\alpha_{\mathrm{tal}} = 0.35 g(s_{\mathrm{gt}})$), preventing zero-IoU positive starvation. Immediately afterward, DW-TAL recalibrates positive soft targets $\mathbf{t}_{\mathrm{cls}}$ on dense GPU tensors against true $\mathrm{IoU}$:
+\begin{align}
+  u_{\mathrm{cap}} &= \max\!\big(\mathrm{IoU},\, \eta\,g(s_{\mathrm{gt}})\big), \nonumber\\
+  \mathbf{t}_{\mathrm{cls}}^{\mathrm{cal}} &= \min\!\left(\mathbf{t}_{\mathrm{cls}} \cdot \mathrm{clip}\!\left(\frac{u_{\mathrm{cap}}}{u_{\mathrm{blend}}}, 0, 1.15\right),\, u_{\mathrm{cap}}\right),
+  \label{eq:dwtal}
+\end{align}
+where $u_{\mathrm{blend}} = (1 - \alpha_{\mathrm{tal}})\mathrm{IoU} + \alpha_{\mathrm{tal}} S_W + 10^{-4}$ and $\eta = 0.08$. Outlying anchors selected via $S_W$ while having $\mathrm{IoU} \approx 0$ are capped at $0.08$ instead of $0.4\text{--}0.6$, preserving Varifocal score calibration~\cite{zhang2021varifocalnet}. Box loss adds bounded $\lambda_{\mathrm{reg}} g(s_{\mathrm{gt}}) \frac{D}{1 + D}$ ($\lambda_{\mathrm{reg}}=0.25$).
+
+\textbf{Zero-Inference-Cost Annealed Distillation.} During training, dense \texttt{one2many} Gaussians distill into raw \texttt{one2one} $P_2/P_3$ Gaussians over confident foreground cells ($w_u = \hat{p}_{\mathrm{o2m}}(u)^2\,\mathbb{I}[\hat{p}_{\mathrm{o2m}}(u) > 0.20]$) with weight $\lambda_{\mathrm{dist}} \kappa(e)$ ($\lambda_{\mathrm{dist}}=0.25$), where $\kappa(e) = \mathrm{clip}(\gamma_{\mathrm{o2m}}(e)/\gamma_{\mathrm{o2m}}(0), 0.05, 1.0)$ tracks the epoch-scheduled auxiliary loss gain $\gamma_{\mathrm{o2m}}(e)$ relative to $\gamma_{\mathrm{o2m}}(0)=0.8$; auxiliary branches are removed at deployment.
 
 \section{Experimental Setup}
 \label{sec:setup}
 
-\subsection{Datasets and Evaluation Protocols}
-\textbf{TinyPerson (WACV 2020)}~\cite{yu2020tinyperson}: 1,610 maritime and coastal frames sampled at 50-frame intervals from 31 video sequences. We train on 746 frames (662 train, 84 validation, split by video prefix so no sequence appears in both) and evaluate on the official 786-frame test split; the remaining 78 frames are unused. Because adjacent video frames are nearly identical, we split by sequence even though this leaves fewer training frames. Ground truth contains 13,687 positive person boxes, 1,989 ignore and 2,832 uncertain boxes. Following the official benchmark, instances are grouped by absolute scale $s = \sqrt{w \cdot h}$ (px): $tiny1$ $[2,8)$ (2,333), $tiny2$ $[8,12)$ (2,778), $tiny3$ $[12,20]$ (3,767), $tiny$ $[2,20]$ (8,878), $small$ $(20,32]$ (2,485), $reasonable$ $(32,\infty)$ (2,324), $all$ (13,687).
+\textbf{Dataset and Protocols.} TinyPerson~\cite{yu2020tinyperson} comprises $1{,}610$ frames from $31$ video sequences; after standard dense-image filtering, we split the $746$ training frames by video prefix into $662$ \texttt{train} and $84$ \texttt{val} frames so no sequence straddles splits, and evaluate on the official $786$-frame \texttt{test} split ($13{,}687$ positive person boxes, $1{,}989$ ignore, $2{,}832$ uncertain; single merged \texttt{person} class~\cite{chao2025bpdyolo}). Scale bins follow $s = \sqrt{wh}$ on native coordinates: \textit{tiny1} $[2,8)$ ($2{,}333$), \textit{tiny2} $[8,12)$ ($2{,}778$), \textit{tiny3} $[12,20]$ ($3{,}767$), \textit{tiny} $[2,20]$ ($8{,}878$), \textit{small} $(20,32]$ ($2{,}485$), and \textit{reasonable} $(32,\infty)$ ($2{,}324$). Every checkpoint is evaluated identically under two regimes: \textbf{Native Tiled ($640\times 512$)} ($100$ px overlap, batched GPU inference, $\mathrm{IoU}=0.50$ NMS + $\mathrm{IOS}=0.85$ border-fragment suppression) and \textbf{Full-Frame ($1280\times 1280$)} (single NMS-free pass). We also report a post-hoc \textbf{Base + Soft-NMS} control (Gaussian Soft-NMS, $\sigma=0.5$) on saved Base full-frame predictions, $1{,}000$-resample paired image-level bootstrap $95\%$ CIs over the $786$ test images, TIDE~\cite{bolya2020tide} error counts ($\text{score}\ge 0.05$), and nearest-neighbor ($d_{\mathrm{NN}}$) crowd recall.
 
-
-\subsection{Standardized Inference Protocol}
-\label{sec:protocol}
-Evaluation follows the official TOV benchmarking protocol, implemented as a standalone evaluator (we did not run the pinned TinyBenchmark reference code, so absolute values should be read as protocol-faithful rather than reference-identical). High-resolution images are sliced into $640 \times 512$ tiles with $100$ px overlap ($23.4$ tiles per image on average) and sub-image predictions are mapped back to full coordinates. A global greedy NMS~\cite{neubeck2006nms} merges boxes at IoU $0.50$ with pre-NMS top-$2000$ proposals and at most $1000$ detections per image; normal targets are matched by IoU, while ignore and uncertain regions use Intersection-over-Detection ($\text{IoD} > 0.50$) to avoid penalizing valid detections in dense crowds. The detector emits a single merged \texttt{person} class and the annotations are collapsed to one category, matching the single-class convention of recent nano-scale TinyPerson work~\cite{chao2025bpdyolo}.
-
-\subsection{Training Hyperparameters}
-Both Baseline (YOLO26n-P2) and GauSS are trained from scratch without external pre-training: $150$ epochs at $1280 \times 1280$, batch size $16$, AdamW~\cite{loshchilov2017adamw} ($\text{lr}_0 = 0.002$, $\text{lrf} = 0.1$, cosine schedule~\cite{loshchilov2016sgdr}), 3-epoch warmup and FP16. Augmentation is limited to horizontal flip, small translation and scale jitter, and HSV jitter; Mosaic, MixUp and CutMix are disabled. No hyperparameter was tuned on the test frames. The GauSS configuration uses gates re-parameterized as $0.5\tanh(\cdot)$ so the module starts as an identity mapping, DySample upsampling, the hybrid log-energy router, and dilation rates $\{1,3,5\}$.
-
+\textbf{Controlled Training.} Base, + NWD ($C=12.8$, $0.5$ blend~\cite{wang2021nwd,xu2022nwd_isprs}), and + GauCon all initialize via shape-matched transfer from official COCO YOLO26n weights~\cite{lin2014coco}—where matched backbone stages inherit COCO weights while the added stride-4 $P_2$ branch and modified neck/head channels are randomly initialized identically across all three runs—and train for $80$ epochs on an NVIDIA L4 GPU at $1280\times 1280$, batch size $16$, seed $42$, AdamW~\cite{loshchilov2017adamw} ($\text{lr}_0=0.0015$, $\text{lrf}=0.05$ cosine, $3$-epoch warmup), FP16, flip ($0.5$), translation ($0.05$), scale ($0.15$), and HSV jitter, with Mosaic/MixUp disabled.
 
 \section{Results and Analysis}
 \label{sec:results}
 
 \begin{table*}[t]
 \centering
-\footnotesize
-\setlength{\tabcolsep}{4pt}
-\caption{\textbf{Main results on TinyPerson Test} (786 images, 13,687 targets) under the tiled protocol ($640 \times 512$, overlap $100$, global NMS $0.50$) with a single merged \texttt{person} class; both models trained from scratch for 150 epochs, seed 42, isolated splits. $\Delta$ is in percentage points (pp); bold marks the better model.}
-\label{tab:merge_protocol}
-\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lcccccccccc@{}}
+\scriptsize
+\setlength{\tabcolsep}{2.4pt}
+\caption{\textbf{Controlled comparison on TinyPerson Test} ($786$ images, $13{,}687$ positive targets; $80$ epochs, COCO-pretrained, batch $16$, seed $42$). Higher is better for $AP$ ($\%$); lower is better for $MR_{50}$ ($\%$). Bold indicates the best model per protocol.}
+\label{tab:main_results}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}llcccccccccc@{}}
 \toprule
- & & \multicolumn{3}{c}{$AP_{50}$} & \multicolumn{3}{c}{$MR_{50}$ ($\downarrow$)} & \multicolumn{3}{c}{$AP_{25}$ (IoU $0.25$)} \\
-\cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-11}
-\textbf{Scale Bin} & \textbf{GT} & \textbf{Base} & \textbf{GauSS} & \textbf{$\Delta$} & \textbf{Base} & \textbf{GauSS} & \textbf{$\Delta$} & \textbf{Base} & \textbf{GauSS} & \textbf{$\Delta$} \\
+\textbf{Protocol} & \textbf{Model} & $AP_{50}^{all}$ & $AP_{50}^{tiny}$ & $AP_{50}^{tiny1}$ & $AP_{50}^{tiny2}$ & $AP_{50}^{tiny3}$ & $AP_{50}^{small}$ & $AP_{50}^{reas}$ & $AP_{75}^{all}$ & $MR_{50}^{all}\downarrow$ & \textbf{$AP_{50:95}$} \\
 \midrule
-$all$ ($\ge 2$ px)          & 13,687 & 40.63 & \textbf{41.08} & $+$0.45 & \textbf{92.73} & 93.04 & $+$0.31 & 61.13 & \textbf{62.67} & $+$1.54 \\
-$tiny$ ($2$--$20$ px)       &  8,878 & \textbf{37.57} & 37.40 & $-$0.17 & \textbf{90.63} & 90.69 & $+$0.06 & 58.00 & \textbf{58.92} & $+$0.92 \\
-$tiny1$ ($2$--$8$ px)       &  2,333 & \textbf{22.30} & 22.26 & $-$0.04 & \textbf{89.16} & 89.25 & $+$0.09 & 39.55 & \textbf{43.54} & $+$3.99 \\
-$tiny2$ ($8$--$12$ px)      &  2,778 & 36.92 & \textbf{37.67} & $+$0.75 & 85.10 & \textbf{84.55} & $-$0.55 & 58.50 & \textbf{59.42} & $+$0.92 \\
-$tiny3$ ($12$--$20$ px)     &  3,767 & \textbf{48.14} & 47.05 & $-$1.09 & \textbf{80.97} & 81.55 & $+$0.58 & \textbf{70.22} & 69.00 & $-$1.22 \\
-$small$ ($20$--$32$ px)     &  2,485 & 51.63 & \textbf{52.51} & $+$0.88 & 76.31 & \textbf{75.31} & $-$1.00 & 71.66 & \textbf{73.80} & $+$2.14 \\
-$reasonable$ ($>32$ px)     &  2,324 & 44.14 & \textbf{47.59} & $+$3.45 & 80.51 & \textbf{79.90} & $-$0.61 & 65.76 & \textbf{69.52} & $+$3.76 \\
+\multirow{3}{*}{Tiled ($640{\times}512$)}
+  & YOLO26n-P2 Base         & 45.58 & 42.59 & 25.10 & 45.14 & 50.94 & 54.55 & 49.78 & 6.40 & 91.95 & 15.55 \\
+  & YOLO26n-P2 + NWD        & 48.45 & \textbf{45.31} & \textbf{27.91} & 46.73 & \textbf{54.82} & \textbf{56.83} & 53.51 & 6.09 & 90.74 & 16.51 \\
+  & \textbf{+ GauCon (Ours)} & \textbf{48.53} & 43.99 & 25.53 & \textbf{46.97} & 52.95 & 56.07 & \textbf{58.11} & \textbf{7.37} & \textbf{90.31} & \textbf{16.96} \\
+\midrule
+\multirow{3}{*}{Full ($1280{\times}1280$)}
+  & YOLO26n-P2 Base         & 43.08 & \textbf{36.28} & \textbf{18.71} & 37.48 & \textbf{46.23} & 53.07 & 58.77 & 4.44 & 91.97 & 13.51 \\
+  & YOLO26n-P2 + NWD        & 43.24 & 35.74 & 18.46 & 36.53 & 45.94 & 52.90 & 62.48 & 4.13 & 92.42 & 13.35 \\
+  & \textbf{+ GauCon (Ours)} & \textbf{44.13} & 36.06 & 18.34 & \textbf{37.90} & 45.79 & \textbf{54.32} & \textbf{63.09} & \textbf{4.78} & \textbf{91.32} & \textbf{14.00} \\
 \bottomrule
 \end{tabular*}
 \end{table*}
 
 \begin{figure*}[t]
   \centering
-  \includegraphics[width=\linewidth]{figures/19_merge_protocol_scale_bins.pdf}
-  \caption{\textbf{Scale-bin breakdown of the merge-protocol results} (tiled, 150 epochs). Solid bars: $AP_{50}$; hatched bars: $AP_{25}$. $t1$, $t2$, $t3$ abbreviate the $2$--$8$, $8$--$12$ and $12$--$20$\,px bins; $>32$ denotes $reasonable$. GauSS gains the most where the Gaussian support ($2\sigma \approx 5$--$12$ px) matches the target extent.}
-  \label{fig:merge_bins}
+  \includegraphics[width=\linewidth]{figures/fig_gaucon_scales.pdf}
+  \caption{\textbf{Scale-stratified $AP_{50}$ on TinyPerson Test across both inference regimes.} \textbf{(a)} Under native $640\times 512$ slicing, GauCon improves all seven bins over Base ($+2.95$ pp overall) while avoiding NWD's large-scale degradation on \textit{reasonable} ($+4.60$ pp over NWD). \textbf{(b)} Under NMS-free $1280\times 1280$ full-frame inference, GauCon leads overall $AP_{50}$ ($44.13\%$) over both Base ($43.08\%$) and NWD ($43.24\%$).}
+  \label{fig:scales}
 \end{figure*}
 
-\subsection{Quantitative Performance and Scale-Bin Analysis}
-\label{sec:quantitative}
+\subsection{Main Quantitative Comparison and Statistical Trade-Offs}
+\label{sec:quant_analysis}
 
-Table~\ref{tab:merge_protocol} and Figure~\ref{fig:merge_bins} report the main comparison. GauSS improves $AP_{50}^{all}$ from $40.63\%$ to $41.08\%$. The gain is not confined to the bins the module was designed for: it is largest on $reasonable$ ($+3.45$ pp), and also positive on $small$ ($+0.88$ pp) and $tiny2$ ($+0.75$ pp), while $tiny3$ drops by $1.09$ pp and $tiny1$ is flat at $AP_{50}$ ($-0.04$ pp). $MR_{50}$ drops on the three bins that gain ($-0.55$, $1.00$, $0.61$ pp).
+Table~\ref{tab:main_results} and Figure~\ref{fig:scales} compare Base, + NWD, and + GauCon across both protocols. Under native $640\times 512$ slicing, GauCon improves $AP_{50}^{all}$ by $+2.95$ pp over Base ($45.58\% \to 48.53\%$, $95\%$ paired image bootstrap CI $[+1.92, +4.02]$ pp, $P(\Delta{>}0){=}100\%$) and matches NWD overall ($+0.08$ pp, CI $[-1.06, +1.17]$, $P{=}55.7\%$), while lifting strict $AP_{75}^{all}$ to $7.37\%$ ($+0.97$ pp over Base, CI $[+0.51, +1.62]$; $+1.28$ pp over NWD, CI $[+0.54, +1.88]$) and COCO $AP_{50:95}$ to $16.96\%$. Crucially, NWD remains higher on \textit{tiny1} ($27.91\%$ vs.\ $25.53\%$) and \textit{tiny3} ($54.82\%$ vs.\ $52.95\%$), but NWD degrades $AP_{75}^{all}$ below Base ($6.40\% \to 6.09\%$) and trails GauCon by $4.60$ pp on \textit{reasonable} ($53.51\%$ vs.\ $58.11\%$).
 
-\textbf{Where the gain concentrates.} The extent of targets in the $8$--$12$ px bin is close to the effective support of the learned scales on the stride-4 grid ($\sigma_{1,\text{img}} \approx 2.6$ px, $\sigma_{2,\text{img}} \approx 5.8$ px, i.e.\ structures of $2\sigma \approx 5$--$12$ px), so the band-pass signal $\mathbf{B}_{\text{mid}}$ can separate their boundaries from low-frequency water gradients. The largest $AP_{50}$ gain, however, lands on $reasonable$ rather than $tiny2$; we read this as suppression of wave-texture false positives on larger, better-resolved targets, but a scale-resolved error analysis would be needed to confirm it.
+Under NMS-free $1280\times 1280$ full-frame inference, NWD lowers validation $mAP_{50}$ below Base ($39.96\% \to 39.67\%$) and drops test $AP_{75}^{all}$ ($4.44\% \to 4.13\%$) and $AP_{50:95}$ ($13.51\% \to 13.35\%$). GauCon raises validation $mAP_{50}$ to $42.24\%$ ($+2.28$ pp over Base) and leads full-frame $AP_{50}^{all}$ at $44.13\%$ ($+1.05$ pp over Base, CI $[+0.01, +2.16]$, $P{=}97.7\%$; $+0.89$ pp over NWD, CI $[-0.12, +1.90]$, $P{=}95.6\%$), $AP_{75}^{all}$ ($4.78\%$, CI $[+0.13, +1.31]$ vs.\ NWD), and $MR_{50}^{all}$ ($91.32\%$). Applying Gaussian Soft-NMS ($\sigma{=}0.5$) post hoc to Base full-frame outputs lifts $AP_{50}^{all}$ only slightly to $43.37\%$ ($+0.29$ pp) while leaving $AP_{75}^{all}$ unchanged at $4.44\%$ ($MR_{50}=91.93\%$). However, on \textit{tiny1} ($2\text{--}8$ px), GauCon remains below NWD in both modes and $0.37$ pp below Base full-frame ($18.34\%$ vs.\ $18.71\%$), where $3\times$ downscaling leaves only one $4\times 4$ $P_2$ cell with sparse adjacent foreground support.
 
-\textbf{GauSS finds more targets but does not tighten boxes.} At $AP_{25}$ GauSS wins every bin except $tiny3$, including $+3.99$ pp on $tiny1$, where its $AP_{50}$ is flat. A module that finds more $2$--$8$ px targets but localizes them slightly worse shows this signature, consistent with the design intent: the scale-space decomposition detects weak target energy against clutter, and the direct high-band shortcut ($\gamma_{\text{out}}\mathbf{B}_{\text{high}}$, Eq.~\ref{eq:p2_aligned}) keeps boundary information rather than sharpening it.
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.95\linewidth]{figures/fig_gaucon_iou_curve.pdf}
+  \caption{\textbf{Validation AP across IoU thresholds ($0.50\text{--}0.85$).} GauCon dominates across strict thresholds, whereas NWD drops below Base for $\mathrm{IoU} \ge 0.60$.}
+  \label{fig:iou_curve}
+\end{figure}
 
-\textbf{Ablation.}\label{sec:ablation} Table~\ref{tab:ablation} removes one GauSS component at a time and scores \texttt{sea\_person} $AP_{50}^{all}$, the category the module targets. Every removal costs accuracy, and the two largest drops are the mid band ($-4.66$ pp) and the optional saliency gate ($-4.22$ pp), followed by the router ($-3.20$ pp). That ordering matches the band-pass interpretation of Section~\ref{sec:scalespace_formulation}: the $8$--$12$ px band and its routing carry the maritime targets, while the low band contributes least ($-1.22$ pp).
-
-\begin{table}[t]
-\centering
-\footnotesize
-\setlength{\tabcolsep}{3.5pt}
-\caption{\textbf{Component ablation} (\texttt{sea\_person} $AP_{50}^{all}$, tiled). Each row removes one GauSS component. The ablation campaign is a separate configuration of the same module, trained for 150 epochs and scored per-class on the two-category annotations. These scores are therefore not comparable to the single-class numbers of Table~\ref{tab:merge_protocol}, and the table reads as directional evidence of component contribution rather than as a parameter-matched controlled comparison.}
-\label{tab:ablation}
-\begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lc@{}}
-\toprule
-\textbf{Variant} & \textbf{\texttt{sea\_person} $AP_{50}^{all}$} \\
-\midrule
-Full GauSS (150e)     & \textbf{29.63} \\
-\midrule
-w/o mid band (150e)    & 24.96 \\
-w/o saliency (150e)    & 25.41 \\
-w/o router (150e)      & 26.43 \\
-w/o high band (150e)   & 27.86 \\
-w/o low band (150e)    & 28.41 \\
-\bottomrule
-\end{tabular*}
-\end{table}
-
-\subsection{Comparative Reference on TinyPerson Benchmarks}
-\label{sec:intl_reference}
-
-Table~\ref{tab:intl_comparison} places our setting alongside published TinyPerson results, grouped by protocol. Crop-rescaling schedules, training resolutions, augmentations and evaluation rules differ across studies, so cross-group deltas indicate context rather than a controlled comparison.
-
-Group (a) is the original benchmark~\cite{yu2020tinyperson}: ImageNet-pretrained Faster R-CNN, RetinaNet and FCOS ($>32$--$41$M parameters) reach $43.55\%$, $30.82\%$ and $16.90\%$ $AP_{50}^{tiny}$. Group (b) collects the two-stage zoo of Hong~\etal~\cite{hong2022sspnet}, where identical detector names move by several points between protocols (FCOS $16.90\%$ vs.~$17.90\%$; Faster R-CNN $43.55\%$ vs.~$47.35\%$ once an FPN is added). Group (c) is closest to ours: nano-scale YOLO variants with a merged single class~\cite{chao2025bpdyolo} land in the high-$30$s $mAP_{50}$, but with $1024$ px inputs, Mosaic/MixUp and $300$ epochs. Our setting is deliberately harsher (from scratch, $746$ frames, $150$ epochs, no Mosaic/MixUp), so the controlled comparison remains the within-protocol baseline of Table~\ref{tab:merge_protocol}.
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.88\linewidth]{figures/fig_gaucon_diagnostics.pdf}
+  \caption{\textbf{Full-Frame ($1280\times 1280$) TIDE error counts and crowd-density recall.} \textbf{(a)} GauCon cuts localization errors by $731$ boxes ($8{,}408$ vs.\ $9{,}139$) and duplicates by $22.2\%$ ($799$), while background FPs exceed Base ($8{,}683$ vs.\ $7{,}341$) yet remain below NWD ($9{,}021$). \textbf{(b)} Recall at $\mathrm{IoU}=0.50$ stratified by nearest-neighbor distance $d_{\mathrm{NN}}$: GauCon improves crowded ($<10$ px) recall over Base ($+2.87$ pp) yet trails NWD ($38.06\%$ vs.\ $38.71\%$).}
+  \label{fig:diagnostics}
+\end{figure*}
 
 \begin{table}[t]
 \centering
 \scriptsize
-\setlength{\tabcolsep}{2.5pt}
-\caption{\textbf{Reference comparison on TinyPerson Test}, grouped by protocol family. (a) Original benchmark~\cite{yu2020tinyperson}; (b) two-stage zoo from Hong~\etal~\cite{hong2022sspnet} (selected entries); (c) nano-scale YOLO family~\cite{chao2025bpdyolo} ($1024$ px, Mosaic/MixUp, $300$ epochs, merged single class; $mAP_{50}$ over the merged class). Values are taken from the cited works; protocols and schedules differ across groups, so cross-group deltas are indicative only.}
-\label{tab:intl_comparison}
-\begin{tabular}{lcccc}
+\setlength{\tabcolsep}{1.9pt}
+\caption{\textbf{TIDE error counts ($\text{score}\ge 0.05$) and crowded ($d_{\mathrm{NN}}{<}10$ px) recall} on TinyPerson Test.}
+\label{tab:diagnostics}
+\begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lcccccc@{}}
 \toprule
-\textbf{Model} & \textbf{Pretrain} & \textbf{Params} & \textbf{$AP_{50}^{tiny}$} & \textbf{$AP_{50}^{tiny1}$} \\
+\textbf{Model / Mode} & \textbf{TP}$\uparrow$ & \textbf{Loc}$\downarrow$ & \textbf{Dupe}$\downarrow$ & \textbf{Bkg}$\downarrow$ & \textbf{Miss}$\downarrow$ & \textbf{R@50$_{<10}$}$\uparrow$ \\
 \midrule
-\multicolumn{5}{l}{\textit{(a) Original benchmark~\cite{yu2020tinyperson}}}\\
-Faster R-CNN~\cite{ren2015faster} & ImageNet & $\sim 41$M & 43.55\% & 29.21\% \\
-RetinaNet~\cite{lin2017focal}    & ImageNet & $\sim 34$M & 30.82\% & 11.47\% \\
-FCOS~\cite{tian2019fcos}         & ImageNet & $\sim 32$M & 16.90\% & 3.39\% \\
+Base (Full)   & 7,871 & 9,139 & 1,027 & \textbf{7,341} & 5,816 & 35.19\% \\
++ NWD (Full)  & \textbf{8,004} & 9,137 & 858 & 9,021 & \textbf{5,683} & \textbf{38.71\%} \\
+\textbf{+ GauCon} & 8,003 & \textbf{8,408} & \textbf{799} & 8,683 & 5,684 & 38.06\% \\
 \midrule
-\multicolumn{5}{l}{\textit{(b) Two-stage zoo~\cite{hong2022sspnet}}}\\
-Faster R-CNN-FPN~\cite{lin2017fpn,ren2015faster} & ImageNet & $\sim 41$M & 47.35\% & 30.25\% \\
-Faster R-CNN-FPN-MSM~\cite{yu2020tinyperson}     & ImageNet & $\sim 41$M & 50.89\% & 33.79\% \\
-Faster R-CNN-FPN-MSM+~\cite{jiang2021smplus}& ImageNet & $\sim 41$M & 52.61\% & 34.20\% \\
-Cascade R-CNN~\cite{cai2019cascade}         & ImageNet & $> 60$M & 57.19\% & 45.21\% \\
-Faster R-CNN+SSPNet~\cite{hong2022sspnet}   & ImageNet & $> 41$M    & 59.13\% & 47.56\% \\
-\midrule
-\multicolumn{5}{l}{\textit{(c) Nano-scale regime~\cite{chao2025bpdyolo} (1024px, Mosaic/MixUp, 300e, 1 class)}}\\
-YOLOv8n+P2~\cite{chao2025bpdyolo}           & From scratch & 2.93M & 38.0\% & -- \\
-YOLOv8n+P2+BiFPN~\cite{chao2025bpdyolo}     & From scratch & 2.34M & 38.4\% & -- \\
-YOLOv8n+P2+AFPN~\cite{chao2025bpdyolo}      & From scratch & 6.05M & 39.2\% & -- \\
-BPD-YOLO~\cite{chao2025bpdyolo}             & From scratch & 1.50M & 39.1\% & -- \\
+Base (Tiled)  & 8,702 & 9,656 & 937 & \textbf{16,422} & 4,985 & 53.12\% \\
++ NWD (Tiled) & \textbf{9,149} & 10,444 & 922 & 22,658 & \textbf{4,538} & \textbf{57.92\%} \\
+\textbf{+ GauCon} & 8,963 & \textbf{9,188} & \textbf{895} & 21,130 & 4,724 & 55.13\% \\
 \bottomrule
-\end{tabular}
+\end{tabular*}
 \end{table}
 
-\subsection{Qualitative Analysis and Feature Interpretability}
-\label{sec:qualitative_analysis}
-Figure~\ref{fig:qualitative_detections} compares detections from the 150-epoch checkpoints at a confidence threshold of $0.20$. In an offshore swimmer cluster with 6 tiny ground-truth instances, the baseline keeps 2 detections and GauSS keeps 10, so GauSS covers more of the cluster; frame-level totals are 12 vs.~21. More detections is not by itself better, but on this frame the extra predictions fall on swimmers rather than on open water. On a wave crest containing no ground truth, the baseline emits one $0.60$-confidence false alarm and GauSS none, with frame-level detections dropping from 95 to 71. These are illustrative frames rather than aggregate statistics.
+\subsection{Error Diagnostics, Large-Scale Effect Analysis, and Hardware Profile}
+\label{sec:ablation}
+
+Table~\ref{tab:diagnostics} and Figure~\ref{fig:diagnostics} expose both gains and trade-offs. Full-frame NWD and GauCon match the same true positives ($8{,}004$ vs.\ $8{,}003$), yet NWD leaves localization errors unchanged ($9{,}137$ full; $+788$ worse than Base tiled) whereas GauCon reduces \texttt{FP\_Loc} to $8{,}408$ full and $9{,}188$ tiled and attains the lowest duplicate count in both regimes ($799$ full, $-22.2\%$ vs.\ Base). Conversely, background false alarms increase over Base in both full ($7{,}341 \to 8{,}683$) and especially tiled mode ($16{,}422 \to 21{,}130$, $+28.7\%$), staying lower than NWD ($22{,}658$), and GauCon trails NWD in $<10$ px crowded recall ($38.06\%$ vs.\ $38.71\%$ full; $55.13\%$ vs.\ $57.92\%$ tiled).
 
 \begin{figure*}[t]
   \centering
-  \includegraphics[width=0.92\textwidth]{figures/12_qualitative_tiny_detections.pdf}
-  \caption{\textbf{Qualitative comparison in an offshore swimmer cluster}: both models use the tiled protocol with an identical confidence threshold ($\ge 0.20$) and every prediction above threshold is drawn. In this $280 \times 280$~px zoom with 6 tiny ground-truth swimmers, the baseline keeps 2 detections ($0.32$--$0.34$) and GauSS keeps 10 ($0.31$--$0.44$); frame-level totals are 12 vs.~21.}
-  \label{fig:qualitative_detections}
+  \includegraphics[width=0.90\linewidth]{figures/fig_gaucon_diagnostics_ext.pdf}
+  \caption{\textbf{Diagnostic breakdown on TinyPerson Test without additional GPU training.} \textbf{(a)} Sub-bin decomposition of \textit{reasonable} ($>32$ px) under Tiled ($640\times 512$) and comparison with post-hoc Base + Soft-NMS ($\sigma=0.5$) on Full-1280. \textbf{(b)} Paired $1{,}000$-resample image-level bootstrap $95\%$ CIs and $P(\Delta{>}0)$ across protocols and IoU thresholds.}
+  \label{fig:diagnostics_ext}
 \end{figure*}
 
-\subsection{Hardware Profiling and Throughput Analysis}
-\label{sec:hardware_profile}
+Figure~\ref{fig:diagnostics_ext}a investigates why \textit{reasonable} ($>32$ px) jumps by $+8.33$ pp tiled and $+4.32$ pp full despite $P_4/P_5$ remaining unmodified \texttt{one2one} heads and $g(s_{\mathrm{gt}})$ decaying below $0.02$ above $35$ px. Partitioning \textit{reasonable} into $32\text{--}48$ ($1{,}293$ GT), $48\text{--}64$ ($557$ GT), and $>64$ px ($474$ GT) reveals that gains are actually largest on $>48$ px targets ($+9.84$ pp on $48\text{--}64$ and $+10.68$ pp on $>64$ px tiled; $+7.47$ pp on $>64$ px full, where + NWD also gains $+6.00$ pp). Because GauCon leaves $P_4/P_5$ unmodified at inference, this gain cannot stem from local $P_2/P_3$ barycenters directly; rather, shared backbone/neck representation changes under DW-TAL/\texttt{one2many} distillation and cross-level score calibration during top-$K$/tiled NMS shift large-object precision indirectly—an effect requiring component ablations to isolate.
 
-Table~\ref{tab:hardware_bench} and Figure~\ref{fig:hardware} profile both models on an NVIDIA A10G (FP16, batch size 1, 25 warmup and 100 timed iterations). GauSS adds $0.51$ GFLOPs ($+6.7\%$) per tile and $2.02$ GFLOPs ($+6.3\%$) full-frame, with single-tile latency of $15.19$ ms ($65.8$ FPS) against $11.28$ ms ($88.6$ FPS) for the baseline. Latency grows faster than FLOPs ($+34.7\%$ tiled, $+39.9\%$ full-frame), which is consistent with the depthwise convolutions, the multi-branch router and the sub-pixel reorganizations being latency-bound at batch size 1; we did not profile memory traffic, so fusing the band encoders into a single dispatch is a hypothesis to test rather than a measured conclusion.
-
-End-to-end throughput depends on how the capture is sliced. Test images have diverse native resolutions (median $3840 \times 2160$), so tiling yields $23.4$ crops and sequential inference costs $\sim355$ ms per capture ($\sim2.8$ FPS), or $\sim137$ ms ($\sim7.3$ FPS) for a $1280 \times 1280$ capture. Full-frame inference at $1280 \times 1280$ runs in $16.58$ ms ($60.3$ FPS), an $8.3\times$ speedup over the 9-tile pipeline, and still improves on the baseline ($+0.13$ pp $AP_{50}^{all}$); tiled slicing remains the accuracy-optimal mode ($41.08\%$ vs.~$35.45\%$). Peak VRAM is $122.1$ MB tiled and $367.2$ MB full-frame for GauSS ($91.5$ and $244.7$ MB for the baseline).
-
-\begin{table*}[t]
+\begin{table}[t]
 \centering
-\small
-\setlength{\tabcolsep}{6pt}
-\caption{\textbf{Hardware and accuracy trade-off: tiled ($640 \times 512$) vs. full-frame ($1280 \times 1280$)} on an NVIDIA A10G (FP16, batch size 1). Accuracy uses the merge protocol of Table~\ref{tab:merge_protocol} so that both modes remain comparable.}
-\label{tab:hardware_bench}
-\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}llccccc@{}}
+\scriptsize
+\setlength{\tabcolsep}{1.2pt}
+\caption{\textbf{Complexity and single-session L4 latency} ($1280{\times}1280$, FP16, batch $1$; pre-fuse FLOPs reflect actual MLP cost).}
+\label{tab:hardware}
+\begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lccccc@{}}
 \toprule
-\textbf{Mode} & \textbf{Model} & \textbf{Params} & \textbf{Latency / FPS} & \textbf{End-to-End FPS} & \textbf{$AP_{50}^{all}$} & \textbf{$AP_{25}^{all}$} \\
+\textbf{Model} & \textbf{Params} & \textbf{Pre / Post GFLOPs} & \textbf{VRAM} & \textbf{FPS} & \textbf{Val $mAP_{50}$} \\
 \midrule
-\multirow{2}{*}{Tiled ($640 \times 512$)}     & Baseline & 2.52M & 11.28 ms / 88.6 & 3.8 -- 9.8 FPS & 40.63\% & 61.13\% \\
-                                              & GauSS    & 2.55M & 15.19 ms / 65.8 & 2.8 -- 7.3 FPS & \textbf{41.08\%} & \textbf{62.67\%} \\
-\midrule
-\multirow{2}{*}{Full-Frame ($1280 \times 1280$)} & Baseline & 2.52M & 11.85 ms / 84.4 & 84.4 FPS & 35.32\% & 60.96\% \\
-                                              & GauSS    & 2.55M & 16.58 ms / 60.3 & \textbf{60.3 FPS} & \textbf{35.45\%} & \textbf{61.08\%} \\
+Base  & 2,401,660 & 31.948 / 27.683 & \textbf{166.8M} & 69.5 & 39.96 \\
++ NWD & 2,401,660 & 31.948 / 27.683 & \textbf{166.8M} & \textbf{74.4} & 39.67 \\
+\textbf{+ GauCon} & 2,402,374 & 32.034 / 27.683$^\dagger$ & 186.2M & 74.0 & \textbf{42.24} \\
 \bottomrule
 \end{tabular*}
-\vspace{1pt}
-\raggedright \footnotesize End-to-end FPS is sequential, without pipeline parallelization: $\sim 2.8$ FPS on median $3840 \times 2160$ captures ($23.4$ tiles) up to $\sim 7.3$ FPS on $1280 \times 1280$ images (9 tiles).
-\end{table*}
+\end{table}
 
-\begin{figure}[t]
+Figure~\ref{fig:iou_curve} and Table~\ref{tab:hardware} summarize validation IoU curves and complexity. GauCon adds $714$ fused parameters ($+0.030\%$) and $+0.086$ pre-fuse GFLOPs at $1280$ ($+0.022$ at $640$; $\sim 43$M MACs from the $1\times 1$ MLPs), i.e., $\sim +0.31\%$ relative to the $27.683$ GFLOPs fused baseline ($^\dagger$the default Ultralytics FLOP profiler omits the decoupled $1\times 1$ gate MLP after head fusion, printing $27.683$ for both). Peak VRAM increases by $19.5$ MB. Single-session L4 timing records $13.52$ ms ($73.95$ FPS) for GauCon versus $14.39$ ms ($69.51$ FPS) for Base; because GauCon adds layers onto Base, Base appearing $0.86$ ms slower reflects single-run GPU clock variance rather than an actual speedup, so repeated multi-run mean$\pm$std profiling remains needed. By epoch $80$, learned scalars converge to $\tau_{\mathrm{box}}=(1.52, 1.60)$, $\tau_{\mathrm{cls}}=(1.49, 1.37)$, and conservative $\beta_{\mathrm{box}}=(0.041, 0.046)$ ($\approx 4\%$ barycentric interpolation step). Figure~\ref{fig:qualitative} shows a qualitative example at $\text{conf}\ge 0.25$.
+
+\begin{figure*}[t]
   \centering
-  \includegraphics[width=\linewidth]{figures/04_hardware_efficiency.pdf}
-  \caption{\textbf{Hardware profile on NVIDIA A10G}: $15.19$ ms ($65.8$ FPS) per tile for GauSS vs. $11.28$ ms ($88.6$ FPS) for the baseline; peak tiled VRAM is $122.1$ MB vs. $91.5$ MB.}
-  \label{fig:hardware}
-\end{figure}
+  \includegraphics[width=0.90\linewidth]{figures/fig_gaucon_qualitative.pdf}
+  \caption{\textbf{Qualitative illustration on TinyPerson Test} (tiled crop at $\text{conf} \ge 0.25$). In this single selected low-contrast scene with $5$ GT swimmers (green), Base detects $2/5$ and NWD $0/5$, whereas GauCon recovers $5/5$; denser beach scenes still exhibit background FPs.}
+  \label{fig:qualitative}
+\end{figure*}
 
-\section{Limitations}
-\label{sec:limitations}
-Three limitations remain.
-
-\textbf{Ablation design.} The ablation variants were scored per-class on the two-category annotations, against a full-module reference from the same campaign, so the ordering in Table~\ref{tab:ablation} is directional rather than a controlled comparison. A parameter-matched convolution control and a single-class, epoch-matched reference would make that ordering conclusive; both are small extensions of the released training scripts.
-
-\textbf{Sub-pixel localization headroom.} Strict-threshold precision remains low for both models: tiled $AP_{75}^{all}$ is $5.20\%$ for GauSS against $4.99\%$ for the baseline, and $0.85\%$ against $1.99\%$ on $tiny1$. Targets of $2$--$8$ px contain few unambiguous boundary pixels, so a 1--2 px offset already pushes IoU below $0.75$; a dedicated sub-pixel offset head is the natural next step, and the $AP_{25}$ gains indicate that the detector already localizes the right regions for such a head to refine.
-
-\textbf{Single-seed variance.} Models were evaluated from single scratch runs per configuration. Bin-level differences under $1$ pp should be read together with the multi-bin pattern rather than in isolation; multi-seed bootstrap confidence intervals across video sequences are the planned follow-up.
-
-\section{Ethical Considerations}
-\label{sec:ethics}
-Aerial tiny-person detection serves maritime search and rescue, but the same capability is dual-use for unauthorized surveillance. Deployment should therefore follow privacy safeguards and the applicable regulatory framework.
-
-\section{Conclusion}
+\section{Limitations and Conclusion}
 \label{sec:conclusion}
-We presented \textbf{GauSS}, a scale-space-inspired module that refines stride-4 features in nano-scale tiny object detection. With $+36{,}878$ parameters ($+1.47\%$), GauSS raises TinyPerson $AP_{50}^{all}$ from $40.63\%$ to $41.08\%$ under the tiled protocol, with the largest per-bin gains on the $small$ and $reasonable$ bins, and reaches $60.3$ FPS in full-frame inference on an NVIDIA A10G. The ablation points to the mid band and the spatial router as the components the gain depends on most. Extending this work, an epoch-matched ablation with a parameter-matched convolution control and multi-seed variance analysis would firm up the attribution of the gain.
 
+Five methodological and empirical limitations bound our findings: (1) \textbf{Missing component ablations:} without disabling the Wasserstein barycenter ($\beta_{\mathrm{box}}{=}0$), FG-Gate, DW-TAL, and distillation individually, gains cannot be attributed to one component—especially as $\beta_{\mathrm{box}}$ converges to $\approx 0.04$ while \textit{reasonable} gains ($+8.33$ pp) likely stem indirectly from shared training dynamics; (2) \textbf{Single training seed ($42$):} while $1{,}000$-resample test bootstrap separates GauCon from Base ($+2.95$ pp tiled $AP_{50}$, CI $[+1.92, +4.02]$) and NWD on $AP_{75}^{all}$, full-frame $AP_{50}$ over NWD ($+0.89$ pp, CI $[-0.12, +1.90]$) spans zero and multi-seed variance remains unmeasured; (3) \textbf{Small-object trade-offs:} GauCon beats Base and Base + Soft-NMS ($44.13\%$ vs.\ $43.37\%$), yet trails NWD on \textit{tiny1} and crowded recall while raising tiled \texttt{FP\_Bkg} by $+28.7\%$ over Base; (4) \textbf{Single-session latency noise:} multi-run confidence intervals are needed for FPS; and (5) \textbf{Cross-paper comparability:} prior literature~\cite{yu2020tinyperson,chao2025bpdyolo} uses distinct protocols, scratch $300$-epoch schedules, or two-class splits, and multi-class VisDrone~\cite{zhu2021visdrone} plus RFLA/retrained BPD-YOLO controls remain future work. Within these bounds, GauCon + DW-TAL adds $+714$ parameters and $+0.086$ GFLOPs to advance overall TinyPerson $AP_{50}^{all}$ and strict $AP_{75}^{all}$ across tiled and full-frame evaluation.
+
+\FloatBarrier
 {\small
 \bibliographystyle{ieee}
 \bibliography{references}
 }
-
-\begin{appendices}
-\section{Parameter Breakdown}
-\label{app:param_breakdown}
-Table~\ref{tab:param_breakdown} decomposes the $36{,}878$ trainable weights of the GauSS module by submodule. The last row lists the optional components that are disabled in the reported configuration.
-
-\begin{table}[h]
-\centering
-\footnotesize
-\caption{\textbf{Trainable Parameter Breakdown of GauSS} ($d=32$). The module stores $36{,}878$ weights; the last row lists optional components that are disabled in the reported configuration.}
-\label{tab:param_breakdown}
-\begin{tabularx}{\linewidth}{lXr}
-\toprule
-\textbf{Submodule} & \textbf{Component Layers / Tensors} & \textbf{Params} \\
-\midrule
-Channel Projections & $\text{Conv}_{1\times 1}$ on $C_2, P_3, P_4$ ($8{,}192$) + BN2 ($64$) & 8,256 \\
-Gaussian Filtering & Learnable 1D parameters ($\sigma_{1x,1y}, \sigma_{2x,2y}$) & 128 \\
-Band Encoders & 3 branches ($\text{PixelUnshuffle} + \text{DW} + \text{PW} + \text{BN}$) ($16{,}800$) + BN3 ($64$) & 16,864 \\
-Dilated Context & 3 DWConv branches ($r \in \{1,3,5\}$) ($1{,}056$) + Gate ($99$) & 1,155 \\
-Upsamplers & 2 DySample offset heads ($2 \times 1{,}056$) & 2,112 \\
-Router Correction & $\text{Conv}_{1\times 1}$ $32 \to 3$ with bias & 99 \\
-Dual Refinement & $3\times 3$ detail ($1{,}440$) + $5\times 5$ structural ($1{,}952$) & 3,392 \\
-Reconstruction & Conv $1\times 1$ $\to 4d$ ($4{,}096$) + BN ($256$) & 4,352 \\
-Gain Scalars & $\alpha$, $\gamma_{\text{in}}$, $\gamma_{\text{out}}$ & 3 \\
-\midrule
-\textbf{Active Path} & & \textbf{36,361} \\
-\midrule
-Optional (disabled) & Alternative learned router ($484$) + saliency gate ($33$) & 517 \\
-\midrule
-\textbf{Total Module} & & \textbf{36,878} \\
-\bottomrule
-\end{tabularx}
-\end{table}
-\end{appendices}
 
 \end{document}

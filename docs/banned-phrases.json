@@ -10,6 +10,16 @@
       "phrase": "tự implement",
       "reason": "L-019: phải grep codebase + thư viện đã cài trước khi viết bất kỳ helper nào.",
       "replacement": "dùng lại hàm có sẵn (nêu rõ đường dẫn)"
+    },
+    {
+      "phrase": "hạt nhân ngẫu nhiên",
+      "reason": "L-047: dịch word-by-word sai nghĩa từ 'random seed'; phải dùng đúng thuật ngữ chuẩn ngành.",
+      "replacement": "random seed (hoặc seed)"
+    },
+    {
+      "phrase": "nhánh một-một",
+      "reason": "L-047: dịch word-by-word từ one-to-one tối nghĩa trong văn phong học thuật.",
+      "replacement": "nhánh gán nhãn đơn mục tiêu (H_{1:1})"
     }
   ]
 }
