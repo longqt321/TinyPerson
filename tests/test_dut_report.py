@@ -53,6 +53,11 @@ def test_parser_rejects_invalid_table_separator() -> None:
         parse_md(markdown)
 
 
+def test_parser_rejects_table_separator_column_mismatch() -> None:
+    markdown = "| A | B |\n| --- | --- | --- |\n| x | y |"
+    with pytest.raises(ValueError, match="Invalid Markdown table separator"):
+        parse_md(markdown)
+
 def test_parser_rejects_unclosed_code_blocks() -> None:
     with pytest.raises(ValueError, match="Unclosed fenced code block"):
         parse_md("```python\nprint('incomplete')")
