@@ -1041,7 +1041,7 @@ def split_md_table_row(line: str) -> list[str]:
 
 def is_md_block_start(line: str) -> bool:
     return (
-        line.startswith(("```", "$", "|", "!["))
+        line.startswith(("```", "$$", "|", "!["))
         or line == "---"
         or line.startswith(":::::")
         or bool(re.match(r"^#{1,4}\s+", line))
