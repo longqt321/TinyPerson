@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""Build the official DUT QĐ 209/QĐ-ĐHBK course report (.docx + .pdf) from course_report_vi.md.
+"""Build the DUT course report in DOCX and PDF formats from its Markdown source.
 
-Adapted directly from the project's canonical DUT builder (`build_report_docx.py`), upgraded with:
-1. Native Word OMML (`m:oMath`) equation rendering via Pandoc for both `$$...$$` display equations
-   (3-column borderless table: 15%--70%--15% with right-aligned `(N.M)` numbering per DUT standard)
-   and `$...$` inline math: ZERO screenshot/PNG equations (`![EQ]`) and ZERO raw LaTeX leaks.
-2. DUT cover page using only verified project metadata; unverified student IDs and class codes are not fabricated.
-3. Roman front matter (`i, ii, ...`: MỤC LỤC, DANH MỤC HÌNH VẼ, DANH MỤC BẢNG BIỂU,
-   DANH MỤC KÝ HIỆU VÀ CHỮ VIẾT TẮT) and Arabic body (`1, 2, ...`: TÓM TẮT, Chương 1–3,
-   KẾT LUẬN VÀ HƯỚNG PHÁT TRIỂN, TÀI LIỆU THAM KHẢO, PHỤ LỤC) with running header/footer.
-4. Automatic two-pass LibreOffice Writer PDF conversion and exact page-number backfilling for
-   TOC, List of Figures, and List of Tables.
+The builder applies the document typography, renders equations as native Word
+math, and generates the table of contents and lists of figures and tables.
 """
 
 from __future__ import annotations
