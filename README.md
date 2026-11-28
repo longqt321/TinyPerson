@@ -45,18 +45,28 @@ GauCon thêm 714 tham số, đưa tổng số tham số sau hợp nhất lên 2.
 
 ---
 
-## 4. Các Lệnh Thực thi Chính
+## 4. Tạo báo cáo đồ án
+
+Cần có Pandoc, LibreOffice, `pdfinfo`, Times New Roman và các thư viện Python `python-docx`, `lxml`.
+
+```bash
+uv run --with python-docx --with lxml python scripts/build_dut_report.py
+```
+
+Lệnh tạo `docs/report/course_report_vi.docx` và `docs/report/course_report_vi.pdf` từ Markdown, đồng thời cập nhật số trang mục lục và danh mục hình/bảng qua hai lượt dựng.
+
+## 5. Các Lệnh Thực thi Chính
 
 ### Chạy 1 lệnh trên Google Colab / Kaggle (tự cài `uv` + PyTorch CUDA, tự tải dataset từ Hugging Face, preflight, W&B sync & resume)
 1. Thêm secret `WANDB_API_KEY` trong **Colab Secrets** (hoặc **Kaggle Add-ons → Secrets**; thêm `HF_TOKEN` nếu chuyển dataset repo sang private).
 2. Chạy đúng 1 lệnh sau khi `git clone`:
 ```bash
-git clone <repo-url> && cd thigiacmaytinh
+git clone <repo-url> && cd TinyPerson
 bash scripts/run_gpu.sh --config configs/experiment/paper_fast/tp80_yolo26n_lgt.yaml
 ```
 - **Tự động hoàn toàn**: cài `uv`, `uv sync --extra gpu --frozen` (Python 3.14 + `torch+cu128` theo `uv.lock`), phát hiện môi trường (`colab`/`kaggle`), tự tìm dataset local hoặc **tự tải `tinyperson-yolo-v2.tar.gz` từ Hugging Face (`longqt321/tinyperson-yolo`) + xác minh SHA-256 + giải nén vào SSD local**, chạy `audit_dataset` + model preflight, đăng nhập W&B từ Secrets với tag `host:colab`/`host:kaggle` và deterministic run ID (`resume="allow"`) đồng bộ hoàn toàn với Modal, lưu checkpoint bền vững (Google Drive / `/kaggle/working/runs`), và gọi `finalize()`.
 - Chạy lại đúng lệnh trên sau khi bị ngắt session sẽ **tự động resume** từ `last.pt`.
-- Truyền thêm cờ tùy chọn nếu cần: `--hf-dataset <owner/repo>`, `--data <path>`, `--output-root <dir>`, `--wandb-group <group>`, `--batch 8`, `--epochs 150`.
+- Truyền thêm cờ tùy chọn nếu cần: `--hf-dataset <owner/repo>`, `--data <path>`, `--output-root <dir>`, `--wandb-group <group>`, `--batch 8`, `--epochs 80`.
 
 ### Kiểm tra nhanh trên CPU (lint & dry-run)
 ```bash
