@@ -1041,12 +1041,12 @@ def split_md_table_row(line: str) -> list[str]:
 
 def is_md_block_start(line: str) -> bool:
     return (
-        line.startswith(("\\`\\`\\`", "$$", "|", "!["))
+        line.startswith(("```", "$", "|", "!["))
         or line == "---"
         or line.startswith(":::::")
-        or bool(re.match(r"^#{1,4}\\s+", line))
+        or bool(re.match(r"^#{1,4}\s+", line))
         or line.startswith(("- ", "* ", "+ ", "**Bảng", "Bảng"))
-        or bool(re.match(r"^\\d+\\.\\s+", line))
+        or bool(re.match(r"^\d+\.\s+", line))
         or bool(CAP_FIG_RE.match(line))
         or bool(CAP_TAB_RE.match(line))
     )
@@ -1074,7 +1074,7 @@ def parse_md(md_text: str) -> list[tuple]:
             if index == len(raw_lines):
                 raise ValueError(f"Unclosed fenced code block at line {index + 1}")
             index += 1
-            blocks.append(("algorithm" if language == "algorithm" else "code", "\\n".join(code_lines)))
+            blocks.append(("algorithm" if language == "algorithm" else "code", "\n".join(code_lines)))
             continue
 
         if stripped.startswith("$$"):
@@ -1088,7 +1088,7 @@ def parse_md(md_text: str) -> list[tuple]:
             equation_number = ""
             while index < len(raw_lines):
                 line = raw_lines[index].strip()
-                end_match = re.match(r"^(.*)\\$\\$[ \\t]*(\\([\\d.]+\\))?[ \\t]*$", line)
+                end_match = re.match(r"^(.*)\$\$[ \t]*(\([\d.]+\))?[ \t]*$", line)
                 if end_match:
                     equation_lines.append(end_match.group(1))
                     equation_number = end_match.group(2) or ""
@@ -1099,14 +1099,14 @@ def parse_md(md_text: str) -> list[tuple]:
             else:
                 raise ValueError("Unclosed display-math block")
             expression = " ".join(part for part in equation_lines if part).strip()
-            tag_match = re.search(r"\\\\tag\\{([^}]*)\\}", expression)
+            tag_match = re.search(r"\\tag\{([^}]*)\}", expression)
             if tag_match and not equation_number:
                 equation_number = f"({tag_match.group(1)})"
-                expression = re.sub(r"\\\\tag\\{[^}]*\\}", "", expression).strip()
+                expression = re.sub(r"\\tag\{[^}]*\}", "", expression).strip()
             blocks.append(("eq", expression, equation_number))
             continue
 
-        heading_match = re.match(r"^(#{1,4})\\s+(.*)$", stripped)
+        heading_match = re.match(r"^(#{1,4})\s+(.*)$", stripped)
         if heading_match:
             blocks.append(("h", len(heading_match.group(1)), heading_match.group(2).strip()))
             index += 1
@@ -1210,11 +1210,11 @@ def find_heading_pages(
                 page_map[entry] = pg
         for num, _ in fig_caps:
             key = f"Hình {num}."
-            if key not in fig_map and re.search(rf"^\\s*{re.escape(key)}\\s+", txt, re.MULTILINE):
+            if key not in fig_map and re.search(rf"^\s*{re.escape(key)}\s+", txt, re.MULTILINE):
                 fig_map[key] = pg
         for num, _ in tab_caps:
             key = f"Bảng {num}."
-            if key not in tab_map and re.search(rf"^\\s*{re.escape(key)}\\s+", txt, re.MULTILINE):
+            if key not in tab_map and re.search(rf"^\s*{re.escape(key)}\s+", txt, re.MULTILINE):
                 tab_map[key] = pg
 
     offset = (body_start or 2) - 1
