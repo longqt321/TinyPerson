@@ -27,4 +27,6 @@ jobs:
       - name: Install CPU environment
         run: uv sync --extra cpu --group dev
       - name: Lint
-        run: uv run --extra cpu ruff check src/tinydet scripts modal
+        run: uv run --extra cpu ruff check src/tinydet scripts modal tests/test_dut_report.py
+      - name: Test report builder
+        run: uv run --extra cpu --group dev --with python-docx --with lxml pytest -q tests/test_dut_report.py
