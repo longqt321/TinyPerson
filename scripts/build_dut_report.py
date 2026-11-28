@@ -756,8 +756,8 @@ def build_abbreviations(doc) -> None:
 # Markdown block parser (supports native $$...$$ equations, tables, figures, code)
 # ---------------------------------------------------------------------------
 
-CAP_FIG_RE = re.compile(r"^\*\*Hình\s+(\d+\.\d+)\s*[:—–.-]\s*(.+)$", re.MULTILINE)
-CAP_TAB_RE = re.compile(r"^\*\*Bảng\s+(\d+\.\d+)\s*[:—–.-]\s*(.+)$", re.MULTILINE)
+CAP_FIG_RE = re.compile(r"^\*{0,2}Hình\s+(\d+\.\d+)\s*[:—–.-]\s*(.+?)\*{0,2}$", re.MULTILINE)
+CAP_TAB_RE = re.compile(r"^\*{0,2}Bảng\s+(\d+\.\d+)\s*[:—–.-]\s*(.+?)\*{0,2}$", re.MULTILINE)
 IMG_RE = re.compile(r"^!\[[^\]]*\]\(([^)]+)\)$")
 DISP_EQ_RE = re.compile(r"^\$\$(.+?)\$\$(?:\s*(\([\d.]+\)))?\s*$")
 
@@ -824,7 +824,7 @@ def parse_md(md_text: str) -> list[tuple]:
             blocks.append(("h", len(m_h.group(1)), m_h.group(2).strip()))
             i += 1
             continue
-        if stripped.startswith("**Bảng"):
+        if stripped.startswith(("**Bảng", "Bảng")):
             pending_tab_caption = stripped
             i += 1
             continue
