@@ -99,7 +99,7 @@ Bảng 1.1 đối chiếu các nhóm giải pháp hiện có theo năm tiêu ch�
 
 Bảng 1.1: Đối chiếu đặc trưng kỹ thuật giữa các hướng tiếp cận hiện có và giải pháp đề xuất
 
-| Hướng tiếp cận / Mô hình | Quy mô tham số | Suy luận không cần NMS | Đồng thuận hộp cục bộ trong Head | Bất biến tỉ lệ không cần hằng số $C$ | Hiệu chuẩn mục tiêu mềm theo IoU thực |
+| Hướng tiếp cận / Mô hình | Quy mô tham số | Suy luận không cần NMS | Đồng thuận hộp cục bộ trong Head | Gần bất biến theo tỉ lệ, không cần hằng số $C$ | Hiệu chuẩn mục tiêu mềm theo IoU thực |
 |---|---|---|---|---|---|
 | Hai giai đoạn + Scale Match / SSPNet [1, 4] | 32–60+ M | Không | Không (RoI 2 tầng) | Không | Không |
 | YOLO cỡ nano có $P_2$ + NMS (BPD-YOLO [5]) | 1,5–2,9 M | Không | Không (NMS ngoài) | Không | Có (TAL gốc) |
@@ -128,7 +128,7 @@ Bảng 1.2: Tổng hợp kết quả tham khảo đã công bố trên tập ki�
 
 *Ghi chú: Bảng 1.2 chỉ mang tính tham chiếu bối cảnh từ các công bố trước vì mỗi nhóm khác nhau về số lớp (2 lớp so với 1 lớp), độ phân giải ảnh, bộ dữ liệu khởi tạo (ImageNet so với COCO hoặc huấn luyện từ đầu 300 epoch) và bộ tiêu chí chấm điểm. Dấu (*) ở nhóm (c) thể hiện bài báo gốc [5] báo cáo $mAP_{50}$ tổng hợp trên một lớp person ở 300 epoch từ đầu.*
 
-Từ hai bảng đối chiếu trên cho thấy khoảng trống kỹ thuật cần giải quyết: chưa có đầu phát hiện siêu nhẹ nào tích hợp trực tiếp phép đồng thuận trọng tâm Wasserstein cục bộ và cổng quan hệ hình học vào nhánh $\mathcal{H}_{1:1}$ không dùng NMS, đồng thời tách rời bước chọn mẫu dựa trên Wasserstein khỏi bước hiệu chuẩn mục tiêu phân loại theo $\mathrm{IoU}$ thực. Thao tác trực tiếp trên không gian hộp bao đã giải mã ở $P_2, P_3$ giúp tận dụng cấu trúc hình học lân cận mà không phải thêm hàng chục nghìn tham số tích chập vào Neck.
+Từ các công trình được khảo sát, báo cáo tập trung vào một hướng kết hợp còn ít được phân tích: chưa có đầu phát hiện siêu nhẹ nào tích hợp trực tiếp phép đồng thuận trọng tâm Wasserstein cục bộ và cổng quan hệ hình học vào nhánh $\mathcal{H}_{1:1}$ không dùng NMS, đồng thời tách rời bước chọn mẫu dựa trên Wasserstein khỏi bước hiệu chuẩn mục tiêu phân loại theo $\mathrm{IoU}$ thực. Thao tác trực tiếp trên không gian hộp bao đã giải mã ở $P_2, P_3$ giúp tận dụng cấu trúc hình học lân cận mà không phải thêm hàng chục nghìn tham số tích chập vào Neck.
 
 ### 1.4. Mục tiêu, đối tượng và phạm vi nghiên cứu
 
@@ -201,7 +201,7 @@ Về khởi tạo trọng số (Base, + NWD, + GauCon cùng nạp từ trọng s
 
 Hình 2.2: Vi cấu trúc xử lý bên trong đầu phát hiện GauCon tại một ô lưới hoạt động $u = (y, x)$
 
-Hình 2.2 phóng lớn luồng tính toán nội bộ của GauCon ở mỗi tầng hoạt động $s \in \{P_2, P_3\}$, gồm khối quy đổi hệ tọa độ lân cận $0$ FLOP, phép đo khoảng cách chuẩn hóa theo phương sai cục bộ $D_k$, nhánh tinh chỉnh hộp bằng trọng tâm Wasserstein cục bộ và nhánh hiệu chỉnh logit qua cổng tiền cảnh FG-Gate không dùng chuẩn hóa theo batch.
+Hình 2.2 phóng lớn luồng tính toán nội bộ của GauCon ở mỗi tầng hoạt động $s \in \{P_2, P_3\}$, gồm khối quy đổi hệ tọa độ lân cận phép lấy mẫu theo chỉ số, phép đo khoảng cách chuẩn hóa theo phương sai cục bộ $D_k$, nhánh tinh chỉnh hộp bằng trọng tâm Wasserstein cục bộ và nhánh hiệu chỉnh logit qua cổng tiền cảnh FG-Gate không dùng chuẩn hóa theo batch.
 
 ### 2.3. Chi tiết toán học các thành phần của đầu phát hiện GauCon
 
@@ -213,7 +213,7 @@ Trong đó: $\boldsymbol{\mu}_0(u) = (\mu_{0x}, \mu_{0y})^\top$ là độ lệch
 $$\mathbf{d}_{\mathrm{ref}} = \big(\sigma_{\mathrm{ref},x} - \mu_{\mathrm{ref},x},\; \sigma_{\mathrm{ref},y} - \mu_{\mathrm{ref},y},\; \sigma_{\mathrm{ref},x} + \mu_{\mathrm{ref},x},\; \sigma_{\mathrm{ref},y} + \mu_{\mathrm{ref},y}\big)$$ (2.6)
 Trong đó: $\mathbf{d}_{\mathrm{ref}}$ là bộ khoảng cách biên tại ô $u$ sau khi cập nhật bởi trọng tâm Wasserstein.
 
-Quanh ô $u$, GauCon thu thập 9 ứng viên lân cận: 8 ô xung quanh trong cửa sổ $3 \times 3$ tương ứng với $\delta_k = (\Delta x_k, \Delta y_k) \in \{-1, 0, +1\}^2,\; \delta_k \neq (0, 0)$ ($k = 1, \dots, 8$) và 1 ô cha đồng vị trí $u_p = (\lfloor y/2 \rfloor, \lfloor x/2 \rfloor)$ nội suy láng giềng gần nhất từ mức $s + 1$ ($k = 9$, tỉ số bước lưới $\rho = r_{s+1}/r_s = 2$: $P_2$ lấy cha từ $P_3$, $P_3$ lấy cha từ $P_4$). Thay vì dùng tích chập tách chiều sâu $\mathrm{DWConv}_{3\times 3}$ với hạt nhân cố định toàn số 0 (tốn phép nhân-cộng dư thừa trên lưới $320 \times 320$), mô hình trượt trực tiếp cửa sổ chỉ số lân cận $3 \times 3$ sau khi đệm biên 1 ô với $0$ FLOP.
+Quanh ô $u$, GauCon thu thập 9 ứng viên lân cận: 8 ô xung quanh trong cửa sổ $3 \times 3$ tương ứng với $\delta_k = (\Delta x_k, \Delta y_k) \in \{-1, 0, +1\}^2,\; \delta_k \neq (0, 0)$ ($k = 1, \dots, 8$) và 1 ô cha đồng vị trí $u_p = (\lfloor y/2 \rfloor, \lfloor x/2 \rfloor)$ nội suy láng giềng gần nhất từ mức $s + 1$ ($k = 9$, tỉ số bước lưới $\rho = r_{s+1}/r_s = 2$: $P_2$ lấy cha từ $P_3$, $P_3$ lấy cha từ $P_4$). Thay vì dùng tích chập tách chiều sâu $\mathrm{DWConv}_{3\times 3}$ với hạt nhân cố định toàn số 0 (tốn phép nhân-cộng dư thừa trên lưới $320 \times 320$), mô hình trượt trực tiếp cửa sổ chỉ số lân cận $3 \times 3$ sau khi đệm biên 1 ô bằng phép lấy mẫu theo chỉ số.
 
 Vì tâm hộp $\boldsymbol{\mu}_0(u + \delta_k)$ của hàng xóm ban đầu quy chiếu về tâm ô $u + \delta_k$, ta phải cộng bù độ dời tâm ô để đưa toàn bộ 9 ứng viên về chung hệ tọa độ cục bộ của ô $u$:
 $$\tilde{\boldsymbol{\mu}}_k(u) = \boldsymbol{\mu}_0(u + \delta_k) + \delta_k, \qquad \tilde{\boldsymbol{\sigma}}_k(u) = \boldsymbol{\sigma}_0(u + \delta_k), \qquad k \in \{1, \dots, 8\}$$ (2.7)
@@ -224,7 +224,7 @@ Trong đó: $\boldsymbol{\Delta}_p(u) = \rho(u_p + 0{,}5) - (u + 0{,}5) \in \{-0
 
 Hình 2.3: Minh họa hình học cơ chế hoạt động của GauCon và DW-TAL: *(a)* Quy đổi tọa độ lân cận $3\times 3$ và ô cha $P_3$ trên lưới $P_2$ phân tách người đứng sát nhau ($D_k \gg 1 \implies w_k \approx 0$); *(b)* Trọng tâm Wasserstein giữ nguyên bề rộng hộp $\sigma^\star$ so với phép trộn mật độ gây giãn hộp; *(c)* Tác dụng giới hạn mục tiêu mềm của DW-TAL theo $\mathrm{IoU}$ thực tại ô lệch tâm trên vật 4 px ($\mathrm{IoU} \approx 0$)
 
-#### 2.3.2. Khoảng cách Wasserstein chuẩn hóa theo phương sai (gần bất biến theo tỉ lệ)
+#### 2.3.2. Khoảng cách Wasserstein chuẩn hóa theo phương sai cục bộ
 
 Từ phương trình (2.2), để loại bỏ hằng số $C$ phụ thuộc bộ dữ liệu của NWD [13], GauCon chuẩn hóa sai lệch trên từng trục $a \in \{x, y\}$ bằng tổng phương sai cục bộ của chính cặp phân phối đang xét:
 $$D_k(u) = \sum_{a \in \{x, y\}} \frac{\big(\tilde{\mu}_{ka}(u) - \mu_{0a}(u)\big)^2 + \big(\tilde{\sigma}_{ka}(u) - \sigma_{0a}(u)\big)^2}{\sigma_{0a}(u)^2 + \tilde{\sigma}_{ka}(u)^2 + \epsilon}$$ (2.9)
@@ -232,9 +232,9 @@ Trong đó: $D_k(u) \ge 0$ là khoảng cách Wasserstein chuẩn hóa không đ
 
 ![](docs/report/figures/fig_gaucon_theory_curves.png)
 
-Hình 2.4: Đặc tính giải tích của cổng kích thước logistic và phép đo bất biến tỉ lệ: *(a)* Cổng logistic $g(s_{\mathrm{gt}})$ ($\tau_{\mathrm{px}} = 20$ px) so với hàm suy giảm đuôi nặng Cauchy; *(b)* Độ tương đồng $S_W = (1 + D)^{-1}$ giữ giá trị hằng $0{,}80$ qua mọi tỉ lệ hộp $s$ khi độ lệch tâm bằng 25% chiều rộng, trong khi NWD ($C = 12{,}8$ px) suy giảm từ 0,895 xuống 0,171
+Hình 2.4: Đặc tính của cổng kích thước logistic và phép đo chuẩn hóa theo phương sai: *(a)* Cổng logistic $g(s_{\mathrm{gt}})$ ($\tau_{\mathrm{px}} = 20$ px) so với hàm suy giảm đuôi nặng Cauchy; *(b)* Độ tương đồng $S_W = (1 + D)^{-1}$ gần như giữ nguyên giá trị $0{,}80$ qua các tỉ lệ hộp $s$ khi độ lệch tâm bằng 25% chiều rộng, trong khi NWD ($C = 12{,}8$ px) suy giảm từ 0,895 xuống 0,171
 
-Hình 2.4(b) cho thấy khi phóng đại hay thu nhỏ cả hai hộp bởi bất kỳ hệ số $\lambda > 0$ nào, cả tử số lẫn mẫu số trong (2.9) đều nhân với $\lambda^2$ và giản ước, cho $D_k$ gần như không đổi khi cả hai hộp được co giãn cùng tỷ lệ. Hằng số ổn định số học $\epsilon$ khiến tính bất biến không tuyệt đối ở các thang cực nhỏ.
+Hình 2.4(b) minh họa tính ổn định theo tỉ lệ của khoảng cách (2.9). Khi $\epsilon$ đủ nhỏ so với các thành phần phương sai, việc co giãn đồng thời hai hộp làm tử số và phần phương sai ở mẫu số thay đổi theo cùng bình phương hệ số co giãn. Vì vậy, $D_k$ gần như giữ nguyên trong miền kích thước được khảo sát. Ở các thang cực nhỏ, hằng số $\epsilon$ có thể tạo sai khác.
 
 #### 2.3.3. Tinh chỉnh hộp bằng Trọng tâm Wasserstein cục bộ
 
